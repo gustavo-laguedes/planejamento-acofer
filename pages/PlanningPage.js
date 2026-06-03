@@ -1,5 +1,5 @@
-import { api } from '../api.js';
-import { CalendarTimeline } from '../components/CalendarTimeline.js';
+import { api } from '../shared/api.js';
+import { CalendarTimeline } from '../shared/CalendarTimeline.js';
 
 export function PlanningPage() {
   const page = document.createElement('section');

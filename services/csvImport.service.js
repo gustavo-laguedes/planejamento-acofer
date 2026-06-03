@@ -1,5 +1,5 @@
 import { parse } from 'csv-parse/sync';
-import { requireDb } from '../db.js';
+import { requireDb } from '../server/db.js';
 
 const COLUMN_MAP = {
   'Estabelecimento': 'establishment',

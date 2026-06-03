@@ -12,11 +12,12 @@ const expectedTables = [
   'production_plans',
   'productivity_matrix',
   'stock_adjustments',
+  'stock_location_adjustments',
   'stock_snapshot'
 ];
 
 if (!process.env.DATABASE_URL) {
-  console.error('DATABASE_URL nao configurada. Preencha backend/.env ou defina a variavel no ambiente.');
+  console.error('DATABASE_URL nao configurada. Preencha .env ou defina a variavel no ambiente.');
   process.exit(1);
 }
 

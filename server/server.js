@@ -19,7 +19,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
 const port = Number(process.env.PORT || 3000);
-const frontendDir = path.resolve(__dirname, '../frontend');
+const frontendDir = path.resolve(__dirname, '..');
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(morgan('dev'));

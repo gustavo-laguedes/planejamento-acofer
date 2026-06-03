@@ -1,8 +1,8 @@
-import { api } from '../api.js';
-import { DataTable } from '../components/DataTable.js';
-import { InternalTabs } from '../components/InternalTabs.js';
-import { CodeChipsInput } from '../components/CodeChipsInput.js';
-import { MultiMaterialSelector } from '../components/MultiMaterialSelector.js';
+import { api } from '../shared/api.js';
+import { DataTable } from '../shared/DataTable.js';
+import { InternalTabs } from '../shared/InternalTabs.js';
+import { CodeChipsInput } from '../shared/CodeChipsInput.js';
+import { MultiMaterialSelector } from '../shared/MultiMaterialSelector.js';
 
 const registrationTabs = [
   { id: 'locations', label: 'Locais' },

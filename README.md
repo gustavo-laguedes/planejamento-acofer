@@ -1,31 +1,30 @@
 # Planejamento Aco-Fer
 
-Sistema web interno para planejamento de producao, importacao de estoque via CSV, matriz de produtividade e acompanhamento de programado x realizado.
+Sistema web interno para planejamento de producao, importacao de estoque via CSV, matriz de produtividade, cadastros e acompanhamento de programado x realizado.
 
 ## Estrutura
 
 ```text
-backend/
+assets/
+database/
+docs/
+pages/
+server/
   server.js
   db.js
   routes/
-  services/
-  package.json
-  .env.example
-frontend/
-  index.html
-  src/
-    main.js
-    api.js
-    styles.css
-    pages/
-    components/
-  assets/
-database/
-  001_schema.sql
-  002_indexes.sql
-  003_seed_optional.sql
+  scripts/
+services/
+shared/
+index.html
+app.js
+style.css
+package.json
+.env.example
+README.md
 ```
+
+O `index.html` fica na raiz para o GitHub Pages carregar a aplicacao diretamente, sem cair no `README.md`. O servidor Node tambem serve essa mesma raiz em `http://localhost:3000`.
 
 ## Requisitos
 
@@ -37,25 +36,24 @@ database/
 
 1. Crie um projeto no Neon.
 2. Copie a connection string do banco.
-3. Execute os SQLs nesta ordem:
-
-```sql
--- database/001_schema.sql
--- database/002_indexes.sql
--- database/003_seed_optional.sql opcional
-```
-
-O arquivo `003_seed_optional.sql` cria apenas um registro de produtividade de exemplo para testar a simulacao.
-
-## Configurar backend
+3. Configure o `.env` sem versionar credenciais.
+4. Rode as migrations idempotentes:
 
 ```bash
-cd backend
+npm run db:schema
+npm run db:validate
+```
+
+Os arquivos SQL ficam em `database/`. A migration `006_stock_location_adjustments.sql` cria os ajustes manuais de estoque por material e local sem apagar dados existentes.
+
+## Configurar ambiente
+
+```bash
 npm install
 copy .env.example .env
 ```
 
-Preencha `backend/.env`:
+Preencha `.env`:
 
 ```env
 PORT=3000
@@ -70,7 +68,6 @@ Em producao, prefira usar `ADMIN_PASSWORD_HASH` com bcrypt e remova `ADMIN_PASSW
 ## Rodar
 
 ```bash
-cd backend
 npm run dev
 ```
 
@@ -80,7 +77,11 @@ Acesse:
 http://localhost:3000
 ```
 
-O backend serve o frontend estatico automaticamente.
+## Estoque
+
+A aba Estoque lista uma linha por material cadastrado em `Cadastros > Materiais`. O saldo Nasajon vem do ultimo CSV importado e e vinculado pelos codigos atrelados do material. Os locais cadastrados em `Cadastros > Locais` geram colunas dinamicas de saldo, erro de inventario e inventario fisico preparado para evolucao futura.
+
+Se nao houver CSV importado, os materiais aparecem com saldo `0`. O campo `Erro de inventario` e editavel direto na tabela e fica salvo em `stock_location_adjustments`.
 
 ## Login
 
@@ -98,35 +99,14 @@ A senha nao fica no frontend. O login chama `/api/auth/login`, recebe um token J
 2. Clique em `Importar CSV` na topbar.
 3. Selecione o CSV exportado do Redash/Nasajon.
 
-Durante a importacao o sistema:
-
-1. Cria um registro em `import_history` com status `processing`.
-2. Substitui os dados atuais de `stock_snapshot` dentro de transacao.
-3. Insere as linhas novas em lotes.
-4. Atualiza o historico com status `success`, total de linhas e data.
-5. Em caso de erro, salva status `error` e a mensagem.
-
-## Funcionalidades iniciais
-
-- Login simples via backend.
-- Topbar azul petroleo com area para logo.
-- Abas horizontais.
-- Importacao de CSV com historico.
-- Estoque com filtros, resumo, saldo ajustado e correcao manual.
-- Matriz de produtividade com criar, editar e inativar.
-- Planejamento com simulacao, salvamento e PDF.
-- Acompanhamento de programado x realizado.
+Durante a importacao o sistema substitui o conteudo de `stock_snapshot` dentro de transacao e registra o historico em `import_history`. Nenhuma migration apaga dados do Neon.
 
 ## Logo
 
 Coloque a imagem em:
 
 ```text
-frontend/assets/logo-acofer.png
+assets/logo-acofer.png
 ```
 
 Se o arquivo nao existir, o sistema mostra um fallback textual `Aco-Fer`.
-
-## Publicacao futura
-
-Para publicar em `acofer.catrion.com.br`, configure um servidor Node para rodar o backend e aponte o dominio para ele. Mantenha `DATABASE_URL`, `JWT_SECRET` e senha/hash apenas em variaveis de ambiente no servidor.

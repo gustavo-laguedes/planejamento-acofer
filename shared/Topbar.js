@@ -1,4 +1,4 @@
-import { clearToken } from '../api.js';
+import { clearToken } from './api.js';
 import { UploadCsvButton } from './UploadCsvButton.js';
 
 export function Topbar({ onImported }) {

@@ -1,4 +1,4 @@
-import { login } from '../api.js';
+import { login } from '../shared/api.js';
 
 export function LoginPage() {
   const page = document.createElement('main');

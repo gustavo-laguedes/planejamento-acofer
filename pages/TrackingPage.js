@@ -1,5 +1,5 @@
-import { api } from '../api.js';
-import { DataTable } from '../components/DataTable.js';
+import { api } from '../shared/api.js';
+import { DataTable } from '../shared/DataTable.js';
 
 export function TrackingPage() {
   const page = document.createElement('section');

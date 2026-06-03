@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireDb } from '../db.js';
-import { buildPlan } from '../services/planning.service.js';
-import { createPlanningPdf } from '../services/pdf.service.js';
+import { buildPlan } from '../../services/planning.service.js';
+import { createPlanningPdf } from '../../services/pdf.service.js';
 
 const router = Router();
 

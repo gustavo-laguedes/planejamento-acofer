@@ -1,5 +1,5 @@
-import { Topbar } from '../components/Topbar.js';
-import { Tabs } from '../components/Tabs.js';
+import { Topbar } from '../shared/Topbar.js';
+import { Tabs } from '../shared/Tabs.js';
 import { PlanningPage } from './PlanningPage.js';
 import { RegistrationsPage } from './RegistrationsPage.js';
 import { ProductivityMatrixPage } from './ProductivityMatrixPage.js';

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { requireDb } from '../db.js';
-import { importStockCsv } from '../services/csvImport.service.js';
+import { importStockCsv } from '../../services/csvImport.service.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });

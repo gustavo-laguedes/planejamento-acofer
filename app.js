@@ -1,4 +1,4 @@
-import { getToken } from './api.js';
+import { getToken } from './shared/api.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { AppShell } from './pages/AppShell.js';
 

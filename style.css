@@ -450,6 +450,11 @@ select:focus {
   font-size: 22px;
 }
 
+.metric-card small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .table-wrap {
   overflow: auto;
   max-height: 60vh;
@@ -479,6 +484,101 @@ th {
   background: #f2f6f8;
   color: var(--petroleum-dark);
   z-index: 1;
+}
+
+thead tr:first-child th {
+  top: 0;
+  z-index: 3;
+}
+
+thead tr:nth-child(2) th {
+  top: 39px;
+  z-index: 2;
+}
+
+.stock-summary {
+  grid-template-columns: minmax(240px, 420px);
+}
+
+.stock-filters {
+  grid-template-columns: minmax(220px, 420px) 120px;
+}
+
+.stock-table-wrap {
+  max-height: 66vh;
+}
+
+.stock-overview-table {
+  min-width: 1320px;
+}
+
+.stock-overview-table th {
+  white-space: nowrap;
+}
+
+.stock-overview-table td {
+  min-width: 112px;
+}
+
+.stock-overview-table .code-cell,
+.stock-overview-table .material-name {
+  min-width: 180px;
+}
+
+.group-material {
+  background: #f7f9fb;
+}
+
+.group-nasajon {
+  background: #eef7f5;
+}
+
+.group-inventory {
+  background: #f6f2e8;
+}
+
+.group-totals {
+  background: #eef2f8;
+}
+
+.numeric-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.total-estimated {
+  font-weight: 800;
+  color: var(--petroleum-dark);
+}
+
+.inline-number-input {
+  min-width: 96px;
+  max-width: 112px;
+  padding: 7px 8px;
+  text-align: right;
+}
+
+.code-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.code-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--petroleum-dark);
+}
+
+.muted-text {
+  color: var(--muted);
 }
 
 .link-button {
