@@ -30,9 +30,9 @@ export function StockPage() {
       </div>
     </div>
     <div class="summary-grid stock-summary"></div>
-    <div class="panel">
+    <div class="panel stock-panel">
       <form class="filters stock-filters">
-        <input name="search" placeholder="Buscar material ou codigo" />
+        <input name="search" type="search" placeholder="Buscar material ou codigo" />
         <button class="secondary-button" type="submit">Filtrar</button>
       </form>
       <div class="stock-table-target"></div>

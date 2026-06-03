@@ -236,9 +236,9 @@ select:focus {
 }
 
 .page {
-  width: min(1440px, 100%);
+  width: min(1360px, 100%);
   margin: 0 auto;
-  padding: 28px;
+  padding: 32px;
 }
 
 .stack {
@@ -497,32 +497,70 @@ thead tr:nth-child(2) th {
 }
 
 .stock-summary {
-  grid-template-columns: minmax(240px, 420px);
+  grid-template-columns: minmax(260px, 440px);
 }
 
 .stock-filters {
-  grid-template-columns: minmax(220px, 420px) 120px;
+  grid-template-columns: minmax(260px, 420px) 112px;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.stock-filters input,
+.stock-filters button {
+  height: 40px;
+}
+
+.stock-panel {
+  padding: 22px;
 }
 
 .stock-table-wrap {
-  max-height: 66vh;
+  max-height: 68vh;
+  overflow-x: auto;
+  overflow-y: auto;
+  border-color: #d8e2e8;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 .stock-overview-table {
-  min-width: 1320px;
+  min-width: 1180px;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  background: #ffffff;
 }
 
 .stock-overview-table th {
   white-space: nowrap;
+  height: 42px;
+  padding: 9px 12px;
+  border-right: 1px solid rgba(15, 76, 92, 0.08);
+  border-bottom-color: #d4dee5;
+  font-size: 11.5px;
+  line-height: 1.15;
+  text-align: center;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0;
 }
 
 .stock-overview-table td {
-  min-width: 112px;
+  min-width: 96px;
+  height: 54px;
+  padding: 8px 12px;
+  border-right: 1px solid rgba(15, 76, 92, 0.06);
+  color: #243443;
+  font-size: 12.5px;
+  line-height: 1.2;
+  vertical-align: middle;
 }
 
 .stock-overview-table .code-cell,
 .stock-overview-table .material-name {
-  min-width: 180px;
+  min-width: 168px;
+  width: 168px;
 }
 
 .group-material {
@@ -530,20 +568,21 @@ thead tr:nth-child(2) th {
 }
 
 .group-nasajon {
-  background: #eef7f5;
+  background: #eef7f4;
 }
 
 .group-inventory {
-  background: #f6f2e8;
+  background: #f7f3e9;
 }
 
 .group-totals {
-  background: #eef2f8;
+  background: #eef3f8;
 }
 
 .numeric-cell {
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .total-estimated {
@@ -552,16 +591,40 @@ thead tr:nth-child(2) th {
 }
 
 .inline-number-input {
-  min-width: 96px;
-  max-width: 112px;
-  padding: 7px 8px;
-  text-align: right;
+  width: 76px;
+  min-width: 76px;
+  max-width: 76px;
+  height: 32px;
+  margin: 0 auto;
+  padding: 0 8px;
+  text-align: center;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .code-cell {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.adjustment-cell,
+.stock-overview-table .group-inventory {
+  text-align: center;
+}
+
+.stock-overview-table thead tr:first-child th {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.stock-overview-table tbody tr:nth-child(even) td {
+  filter: brightness(0.992);
+}
+
+.stock-overview-table tbody tr:hover td {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.34));
 }
 
 .code-pill {
@@ -703,5 +766,9 @@ thead tr:nth-child(2) th {
   .section-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .stock-panel {
+    padding: 16px;
   }
 }
