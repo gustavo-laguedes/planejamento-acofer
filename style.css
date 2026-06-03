@@ -241,6 +241,13 @@ select:focus {
   padding: 32px;
 }
 
+.page:has(.stock-page) {
+  width: min(1800px, calc(100vw - 64px));
+  max-width: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
 .stack {
   display: grid;
   gap: 20px;
@@ -500,6 +507,12 @@ thead tr:nth-child(2) th {
   grid-template-columns: minmax(260px, 440px);
 }
 
+.stock-page,
+.stock-page > *,
+.stock-table-target {
+  min-width: 0;
+}
+
 .stock-filters {
   grid-template-columns: minmax(260px, 420px) 112px;
   align-items: center;
@@ -513,7 +526,10 @@ thead tr:nth-child(2) th {
 }
 
 .stock-panel {
-  padding: 22px;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 24px;
 }
 
 .stock-table-wrap {
@@ -522,24 +538,57 @@ thead tr:nth-child(2) th {
   overflow-y: auto;
   border-color: #d8e2e8;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  width: 100%;
 }
 
 .stock-overview-table {
-  min-width: 1180px;
+  width: 100%;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
   background: #ffffff;
 }
 
+.stock-overview-table .col-codes {
+  width: 170px;
+}
+
+.stock-overview-table .col-material {
+  width: 230px;
+}
+
+.stock-overview-table .col-nasajon {
+  width: 126px;
+}
+
+.stock-overview-table .col-adjustment {
+  width: 110px;
+}
+
+.stock-overview-table .col-inventory {
+  width: 124px;
+}
+
+.stock-overview-table .col-total {
+  width: 124px;
+}
+
+.stock-overview-table .col-total-estimated {
+  width: 144px;
+}
+
+.stock-overview-table .col-empty {
+  width: 150px;
+}
+
 .stock-overview-table th {
   white-space: nowrap;
-  height: 42px;
-  padding: 9px 12px;
+  height: 44px;
+  padding: 10px 12px;
   border-right: 1px solid rgba(15, 76, 92, 0.08);
   border-bottom-color: #d4dee5;
-  font-size: 11.5px;
-  line-height: 1.15;
+  font-size: 12px;
+  line-height: 1.2;
   text-align: center;
   vertical-align: middle;
   text-transform: uppercase;
@@ -547,20 +596,18 @@ thead tr:nth-child(2) th {
 }
 
 .stock-overview-table td {
-  min-width: 96px;
-  height: 54px;
-  padding: 8px 12px;
+  height: 58px;
+  padding: 9px 12px;
   border-right: 1px solid rgba(15, 76, 92, 0.06);
   color: #243443;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.2;
   vertical-align: middle;
 }
 
-.stock-overview-table .code-cell,
 .stock-overview-table .material-name {
-  min-width: 168px;
-  width: 168px;
+  font-weight: 700;
+  color: var(--ink);
 }
 
 .group-material {
@@ -591,14 +638,14 @@ thead tr:nth-child(2) th {
 }
 
 .inline-number-input {
-  width: 76px;
-  min-width: 76px;
-  max-width: 76px;
-  height: 32px;
+  width: 78px;
+  min-width: 78px;
+  max-width: 78px;
+  height: 34px;
   margin: 0 auto;
   padding: 0 8px;
   text-align: center;
-  font-size: 12.5px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -615,7 +662,8 @@ thead tr:nth-child(2) th {
 }
 
 .stock-overview-table thead tr:first-child th {
-  font-size: 12px;
+  height: 40px;
+  font-size: 12.5px;
   font-weight: 800;
 }
 

@@ -19,6 +19,14 @@ function locationCell(row, location, field) {
   return row.stockByLocation?.[String(location.id)]?.[field] ?? 0;
 }
 
+function tableMinWidth(locations) {
+  const materialWidth = 400;
+  const nasajonWidth = locations.length ? locations.length * 236 : 150;
+  const inventoryWidth = locations.length ? locations.length * 124 : 150;
+  const totalsWidth = 640;
+  return materialWidth + nasajonWidth + inventoryWidth + totalsWidth;
+}
+
 export function StockPage() {
   const page = document.createElement('section');
   page.className = 'stack stock-page';
@@ -76,10 +84,27 @@ export function StockPage() {
       <th class="group-nasajon">Erro ${location.name}</th>
     `).join('');
     const inventoryHeaders = locations.map(location => `<th class="group-inventory">Inventario ${location.name}</th>`).join('');
+    const nasajonCols = locations.length
+      ? locations.map(() => '<col class="col-nasajon" /><col class="col-adjustment" />').join('')
+      : '<col class="col-empty" />';
+    const inventoryCols = locations.length
+      ? locations.map(() => '<col class="col-inventory" />').join('')
+      : '<col class="col-empty" />';
 
     tableTarget.innerHTML = `
       <div class="table-wrap stock-table-wrap">
-        <table class="stock-overview-table">
+        <table class="stock-overview-table" style="min-width: ${tableMinWidth(locations)}px">
+          <colgroup>
+            <col class="col-codes" />
+            <col class="col-material" />
+            ${nasajonCols}
+            ${inventoryCols}
+            <col class="col-total" />
+            <col class="col-total" />
+            <col class="col-total" />
+            <col class="col-total" />
+            <col class="col-total-estimated" />
+          </colgroup>
           <thead>
             <tr>
               <th class="group-material" colspan="2">Material</th>
