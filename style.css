@@ -242,7 +242,7 @@ select:focus {
 }
 
 .page:has(.stock-page) {
-  width: min(1800px, calc(100vw - 64px));
+  width: calc(100vw - 48px);
   max-width: none;
   padding-left: 0;
   padding-right: 0;
@@ -529,7 +529,7 @@ thead tr:nth-child(2) th {
   width: 100%;
   max-width: 100%;
   overflow: hidden;
-  padding: 24px;
+  padding: 16px;
 }
 
 .stock-table-wrap {
@@ -545,36 +545,35 @@ thead tr:nth-child(2) th {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  table-layout: fixed;
   background: #ffffff;
 }
 
 .stock-overview-table .col-codes {
-  width: 170px;
+  width: 145px;
 }
 
 .stock-overview-table .col-material {
-  width: 230px;
+  width: 190px;
 }
 
 .stock-overview-table .col-nasajon {
-  width: 126px;
+  width: 112px;
 }
 
 .stock-overview-table .col-adjustment {
-  width: 110px;
+  width: 98px;
 }
 
 .stock-overview-table .col-inventory {
-  width: 124px;
+  width: 108px;
 }
 
 .stock-overview-table .col-total {
-  width: 124px;
+  width: 104px;
 }
 
 .stock-overview-table .col-total-estimated {
-  width: 144px;
+  width: 120px;
 }
 
 .stock-overview-table .col-empty {
@@ -582,13 +581,16 @@ thead tr:nth-child(2) th {
 }
 
 .stock-overview-table th {
-  white-space: nowrap;
-  height: 44px;
-  padding: 10px 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  height: auto;
+  min-height: 48px;
+  padding: 10px 8px;
   border-right: 1px solid rgba(15, 76, 92, 0.08);
   border-bottom-color: #d4dee5;
-  font-size: 12px;
-  line-height: 1.2;
+  font-size: 11.5px;
+  line-height: 1.25;
   text-align: center;
   vertical-align: middle;
   text-transform: uppercase;
@@ -596,8 +598,8 @@ thead tr:nth-child(2) th {
 }
 
 .stock-overview-table td {
-  height: 58px;
-  padding: 9px 12px;
+  height: 56px;
+  padding: 8px 10px;
   border-right: 1px solid rgba(15, 76, 92, 0.06);
   color: #243443;
   font-size: 13px;
@@ -627,7 +629,7 @@ thead tr:nth-child(2) th {
 }
 
 .numeric-cell {
-  text-align: right;
+  text-align: center;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -644,6 +646,7 @@ thead tr:nth-child(2) th {
   height: 34px;
   margin: 0 auto;
   padding: 0 8px;
+  box-sizing: border-box;
   text-align: center;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -662,7 +665,7 @@ thead tr:nth-child(2) th {
 }
 
 .stock-overview-table thead tr:first-child th {
-  height: 40px;
+  min-height: 42px;
   font-size: 12.5px;
   font-weight: 800;
 }

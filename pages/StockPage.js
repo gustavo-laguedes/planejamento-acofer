@@ -20,10 +20,10 @@ function locationCell(row, location, field) {
 }
 
 function tableMinWidth(locations) {
-  const materialWidth = 400;
-  const nasajonWidth = locations.length ? locations.length * 236 : 150;
-  const inventoryWidth = locations.length ? locations.length * 124 : 150;
-  const totalsWidth = 640;
+  const materialWidth = 335;
+  const nasajonWidth = locations.length ? locations.length * 210 : 150;
+  const inventoryWidth = locations.length ? locations.length * 108 : 150;
+  const totalsWidth = 536;
   return materialWidth + nasajonWidth + inventoryWidth + totalsWidth;
 }
 
