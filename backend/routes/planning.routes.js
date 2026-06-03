@@ -11,6 +11,7 @@ async function findMatrixEntry(db, payload) {
     FROM productivity_matrix
     WHERE active = true
       AND material_name ILIKE ${payload.materialName}
+      AND (${payload.materialCode || ''} = '' OR material_code = ${payload.materialCode || ''} OR ${payload.materialCode || ''} = ANY(material_codes))
       AND machine_name = ${payload.machineName}
       AND people_count = ${Number(payload.peopleCount)}
     ORDER BY updated_at DESC

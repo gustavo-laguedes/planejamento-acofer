@@ -8,7 +8,8 @@ INSERT INTO productivity_matrix (
   time_minutes,
   notes,
   active
-) VALUES (
+)
+SELECT
   'Material de exemplo',
   'EXEMPLO',
   'MT200',
@@ -18,5 +19,10 @@ INSERT INTO productivity_matrix (
   60,
   'Registro opcional para testar a simulacao inicial.',
   true
-)
-ON CONFLICT DO NOTHING;
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM productivity_matrix
+  WHERE material_name = 'Material de exemplo'
+    AND material_code = 'EXEMPLO'
+    AND machine_name = 'MT200'
+);

@@ -6,6 +6,7 @@ CREATE INDEX IF NOT EXISTS idx_stock_adjustments_product_establishment ON stock_
 
 CREATE INDEX IF NOT EXISTS idx_productivity_matrix_material_name ON productivity_matrix (material_name);
 CREATE INDEX IF NOT EXISTS idx_productivity_matrix_material_code ON productivity_matrix (material_code);
+CREATE INDEX IF NOT EXISTS idx_productivity_matrix_material_codes ON productivity_matrix USING gin (material_codes);
 CREATE INDEX IF NOT EXISTS idx_productivity_matrix_machine_people ON productivity_matrix (machine_name, people_count);
 
 CREATE INDEX IF NOT EXISTS idx_production_plans_material_name ON production_plans (material_name);

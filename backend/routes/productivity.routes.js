@@ -3,6 +3,21 @@ import { requireDb } from '../db.js';
 
 const router = Router();
 
+function normalizeCodes(item) {
+  const codes = Array.isArray(item.materialCodes)
+    ? item.materialCodes
+    : String(item.materialCodes || item.materialCode || '').split(',');
+
+  return codes
+    .map(code => String(code).trim())
+    .filter(Boolean);
+}
+
+function normalizeSeconds(item) {
+  if (item.timeSeconds) return Number(item.timeSeconds);
+  return Number(item.timeMinutes || 0) * 60;
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const db = requireDb();
@@ -10,7 +25,11 @@ router.get('/', async (req, res, next) => {
     const rows = await db`
       SELECT *
       FROM productivity_matrix
-      WHERE (${req.query.search || ''} = '' OR material_name ILIKE ${search} OR machine_name ILIKE ${search} OR material_code ILIKE ${search})
+      WHERE (${req.query.search || ''} = ''
+        OR material_name ILIKE ${search}
+        OR machine_name ILIKE ${search}
+        OR material_code ILIKE ${search}
+        OR array_to_string(COALESCE(material_codes, ARRAY[]::text[]), ', ') ILIKE ${search})
       ORDER BY active DESC, material_name, machine_name, people_count
     `;
     res.json(rows);
@@ -23,9 +42,12 @@ router.post('/', async (req, res, next) => {
   try {
     const db = requireDb();
     const item = req.body;
+    const materialCodes = normalizeCodes(item);
+    const primaryCode = materialCodes[0] || null;
+    const timeSeconds = normalizeSeconds(item);
     const [row] = await db`
-      INSERT INTO productivity_matrix (material_name, material_code, machine_name, people_count, output_qty, output_unit, time_minutes, notes, active)
-      VALUES (${item.materialName}, ${item.materialCode || null}, ${item.machineName}, ${Number(item.peopleCount)}, ${Number(item.outputQty)}, ${item.outputUnit || 'un'}, ${Number(item.timeMinutes)}, ${item.notes || null}, ${item.active !== false})
+      INSERT INTO productivity_matrix (material_name, material_code, material_codes, machine_name, people_count, output_qty, output_unit, time_minutes, time_seconds, notes, active)
+      VALUES (${item.materialName}, ${primaryCode}, ${materialCodes}, ${item.machineName}, ${Number(item.peopleCount)}, ${Number(item.outputQty)}, ${item.outputUnit || 'un'}, ${timeSeconds / 60}, ${timeSeconds}, ${item.notes || null}, ${item.active !== false})
       RETURNING *
     `;
     res.status(201).json(row);
@@ -38,15 +60,20 @@ router.put('/:id', async (req, res, next) => {
   try {
     const db = requireDb();
     const item = req.body;
+    const materialCodes = normalizeCodes(item);
+    const primaryCode = materialCodes[0] || null;
+    const timeSeconds = normalizeSeconds(item);
     const [row] = await db`
       UPDATE productivity_matrix
       SET material_name = ${item.materialName},
-          material_code = ${item.materialCode || null},
+          material_code = ${primaryCode},
+          material_codes = ${materialCodes},
           machine_name = ${item.machineName},
           people_count = ${Number(item.peopleCount)},
           output_qty = ${Number(item.outputQty)},
           output_unit = ${item.outputUnit || 'un'},
-          time_minutes = ${Number(item.timeMinutes)},
+          time_minutes = ${timeSeconds / 60},
+          time_seconds = ${timeSeconds},
           notes = ${item.notes || null},
           active = ${item.active !== false},
           updated_at = now()

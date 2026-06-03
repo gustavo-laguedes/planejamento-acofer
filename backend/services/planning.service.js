@@ -14,7 +14,7 @@ export function buildPlan({ materialName, materialCode, machineName, peopleCount
   const dailyMinutes = Math.max(Number(hoursPerDay || 8) * 60, 1);
   const qty = Number(plannedQty || 0);
   const outputQty = Number(matrixEntry.output_qty || 1);
-  const timeMinutes = Number(matrixEntry.time_minutes || 1);
+  const timeMinutes = Number(matrixEntry.time_seconds || Number(matrixEntry.time_minutes || 1) * 60) / 60;
   const minutesPerUnit = timeMinutes / outputQty;
   const totalMinutes = Math.ceil(qty * minutesPerUnit);
   const daysNeeded = Math.max(Math.ceil(totalMinutes / dailyMinutes), 1);
@@ -45,7 +45,7 @@ export function buildPlan({ materialName, materialCode, machineName, peopleCount
       peopleCount: Number(peopleCount),
       plannedQty: qty,
       plannedUnit: plannedUnit || matrixEntry.output_unit || 'un',
-      productivityUsed: `${matrixEntry.output_qty} ${matrixEntry.output_unit} / ${matrixEntry.time_minutes} min`,
+      productivityUsed: `${matrixEntry.output_qty} ${matrixEntry.output_unit} / ${Math.round(timeMinutes * 60)} seg`,
       totalMinutes,
       daysNeeded,
       startDate,
