@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS locations (
   id BIGSERIAL PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ DEFAULT now(),
@@ -36,6 +37,24 @@ CREATE TABLE IF NOT EXISTS material_inputs (
   CONSTRAINT material_inputs_unique UNIQUE (material_id, input_material_id)
 );
 
+ALTER TABLE locations
+  ADD COLUMN IF NOT EXISTS code TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'locations_code_required'
+      AND conrelid = 'locations'::regclass
+  ) THEN
+    ALTER TABLE locations
+      ADD CONSTRAINT locations_code_required CHECK (code IS NOT NULL) NOT VALID;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_code_unique ON locations (code) WHERE code IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_locations_code ON locations (code);
 CREATE INDEX IF NOT EXISTS idx_locations_name ON locations (name);
 CREATE INDEX IF NOT EXISTS idx_machines_name ON machines (name);
 CREATE INDEX IF NOT EXISTS idx_machines_location_id ON machines (location_id);

@@ -7,6 +7,10 @@ function normalizeName(value) {
   return String(value || '').trim();
 }
 
+function normalizeCode(value) {
+  return String(value || '').trim();
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const db = requireDb();
@@ -14,8 +18,8 @@ router.get('/', async (req, res, next) => {
     const rows = await db`
       SELECT *
       FROM locations
-      WHERE (${req.query.search || ''} = '' OR name ILIKE ${search})
-      ORDER BY active DESC, name
+      WHERE (${req.query.search || ''} = '' OR code ILIKE ${search} OR name ILIKE ${search})
+      ORDER BY active DESC, code NULLS LAST, name
     `;
     res.json(rows);
   } catch (error) {
@@ -25,13 +29,18 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
+    const code = normalizeCode(req.body.code);
     const name = normalizeName(req.body.name);
+    if (!code) return res.status(400).json({ error: 'Codigo do local e obrigatorio.' });
     if (!name) return res.status(400).json({ error: 'Nome do local e obrigatorio.' });
 
     const db = requireDb();
+    const [existing] = await db`SELECT id FROM locations WHERE code = ${code}`;
+    if (existing) return res.status(400).json({ error: 'Ja existe um local com este codigo.' });
+
     const [row] = await db`
-      INSERT INTO locations (name, active)
-      VALUES (${name}, ${req.body.active !== false})
+      INSERT INTO locations (code, name, active)
+      VALUES (${code}, ${name}, ${req.body.active !== false})
       RETURNING *
     `;
     res.status(201).json(row);
@@ -42,13 +51,19 @@ router.post('/', async (req, res, next) => {
 
 router.put('/:id', async (req, res, next) => {
   try {
+    const code = normalizeCode(req.body.code);
     const name = normalizeName(req.body.name);
+    if (!code) return res.status(400).json({ error: 'Codigo do local e obrigatorio.' });
     if (!name) return res.status(400).json({ error: 'Nome do local e obrigatorio.' });
 
     const db = requireDb();
+    const [existing] = await db`SELECT id FROM locations WHERE code = ${code} AND id <> ${req.params.id}`;
+    if (existing) return res.status(400).json({ error: 'Ja existe um local com este codigo.' });
+
     const [row] = await db`
       UPDATE locations
-      SET name = ${name},
+      SET code = ${code},
+          name = ${name},
           active = ${req.body.active !== false},
           updated_at = now()
       WHERE id = ${req.params.id}

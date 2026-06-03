@@ -59,7 +59,7 @@ export function RegistrationsPage() {
   }
 
   async function renderLocations() {
-    target.innerHTML = sectionShell('Locais', 'Cadastrar local', 'Buscar por local');
+    target.innerHTML = sectionShell('Locais', 'Cadastrar local', 'Buscar por codigo ou local');
     const search = target.querySelector('.search');
     const tableTarget = target.querySelector('.table-target');
     let rows = [];
@@ -69,6 +69,7 @@ export function RegistrationsPage() {
       tableTarget.innerHTML = '';
       tableTarget.appendChild(DataTable({
         columns: [
+          { label: 'Codigo', key: 'code' },
           { label: 'Nome do local', key: 'name' },
           { label: 'Status', render: row => row.active ? 'Ativo' : 'Inativo' },
           { label: 'Acoes', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
@@ -80,6 +81,7 @@ export function RegistrationsPage() {
     function openModal(row = null) {
       const modal = createModal(row ? 'Editar local' : 'Cadastrar local', `
         <form class="grid-form registration-form">
+          <label>Codigo do local<input name="code" required /></label>
           <label>Nome do local<input name="name" required /></label>
           <div class="form-actions">
             <button class="primary-button" type="submit">Salvar</button>
@@ -88,15 +90,16 @@ export function RegistrationsPage() {
         </form>
       `);
       const form = modal.querySelector('form');
+      form.elements.code.value = row?.code || '';
       form.elements.name.value = row?.name || '';
       form.addEventListener('submit', async event => {
         event.preventDefault();
-        const body = { name: form.elements.name.value, active: true };
+        const body = { code: form.elements.code.value, name: form.elements.name.value, active: true };
         await api(row ? `/locations/${row.id}` : '/locations', { method: row ? 'PUT' : 'POST', body });
         closeModal(modal);
         await load();
       });
-      form.elements.name.focus();
+      form.elements.code.focus();
     }
 
     bindListEvents(target, () => rows, openModal);
