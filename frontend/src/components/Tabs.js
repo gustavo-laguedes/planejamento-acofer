@@ -1,5 +1,6 @@
 export const TABS = [
   { id: 'planning', label: 'Planejamento' },
+  { id: 'registrations', label: 'Cadastros' },
   { id: 'productivity', label: 'Matriz de Produtividade' },
   { id: 'stock', label: 'Estoque' },
   { id: 'history', label: 'Historico de Importacoes' },

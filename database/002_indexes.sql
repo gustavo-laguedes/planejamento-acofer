@@ -4,6 +4,14 @@ CREATE INDEX IF NOT EXISTS idx_stock_snapshot_import_id ON stock_snapshot (impor
 CREATE INDEX IF NOT EXISTS idx_stock_snapshot_specification ON stock_snapshot USING gin (to_tsvector('portuguese', COALESCE(specification, '')));
 CREATE INDEX IF NOT EXISTS idx_stock_adjustments_product_establishment ON stock_adjustments (product_code, establishment);
 
+CREATE INDEX IF NOT EXISTS idx_locations_name ON locations (name);
+CREATE INDEX IF NOT EXISTS idx_machines_name ON machines (name);
+CREATE INDEX IF NOT EXISTS idx_machines_location_id ON machines (location_id);
+CREATE INDEX IF NOT EXISTS idx_materials_name ON materials (name);
+CREATE INDEX IF NOT EXISTS idx_materials_codes ON materials USING gin (codes);
+CREATE INDEX IF NOT EXISTS idx_material_inputs_material_id ON material_inputs (material_id);
+CREATE INDEX IF NOT EXISTS idx_material_inputs_input_material_id ON material_inputs (input_material_id);
+
 CREATE INDEX IF NOT EXISTS idx_productivity_matrix_material_name ON productivity_matrix (material_name);
 CREATE INDEX IF NOT EXISTS idx_productivity_matrix_material_code ON productivity_matrix (material_code);
 CREATE INDEX IF NOT EXISTS idx_productivity_matrix_material_codes ON productivity_matrix USING gin (material_codes);

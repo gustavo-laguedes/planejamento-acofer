@@ -1,6 +1,7 @@
 import { Topbar } from '../components/Topbar.js';
 import { Tabs } from '../components/Tabs.js';
 import { PlanningPage } from './PlanningPage.js';
+import { RegistrationsPage } from './RegistrationsPage.js';
 import { ProductivityMatrixPage } from './ProductivityMatrixPage.js';
 import { StockPage } from './StockPage.js';
 import { ImportHistoryPage } from './ImportHistoryPage.js';
@@ -8,6 +9,7 @@ import { TrackingPage } from './TrackingPage.js';
 
 const pages = {
   planning: PlanningPage,
+  registrations: RegistrationsPage,
   productivity: ProductivityMatrixPage,
   stock: StockPage,
   history: ImportHistoryPage,

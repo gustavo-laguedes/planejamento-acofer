@@ -10,6 +10,9 @@ import stockRoutes from './routes/stock.routes.js';
 import productivityRoutes from './routes/productivity.routes.js';
 import planningRoutes from './routes/planning.routes.js';
 import actualsRoutes from './routes/actuals.routes.js';
+import locationsRoutes from './routes/locations.routes.js';
+import machinesRoutes from './routes/machines.routes.js';
+import materialsRoutes from './routes/materials.routes.js';
 import { requireAuth } from './routes/middleware.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -32,6 +35,9 @@ app.use('/api/stock', requireAuth, stockRoutes);
 app.use('/api/productivity', requireAuth, productivityRoutes);
 app.use('/api/planning', requireAuth, planningRoutes);
 app.use('/api/actuals', requireAuth, actualsRoutes);
+app.use('/api/locations', requireAuth, locationsRoutes);
+app.use('/api/machines', requireAuth, machinesRoutes);
+app.use('/api/materials', requireAuth, materialsRoutes);
 
 app.use(express.static(frontendDir));
 app.get('*', (req, res) => {
