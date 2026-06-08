@@ -1,4 +1,5 @@
 import { api } from '../shared/api.js';
+import { nextSortDirection, sortTableRows } from '../shared/DataTable.js';
 
 function formatNumber(value) {
   return new Intl.NumberFormat('pt-BR', {
@@ -51,6 +52,7 @@ export function StockPage() {
   const tableTarget = page.querySelector('.stock-table-target');
   const filters = page.querySelector('.stock-filters');
   let overview = { locations: [], rows: [], lastImport: null };
+  let sortState = { index: null, direction: null };
 
   function filteredRows() {
     const search = String(filters.elements.search.value || '').trim().toLowerCase();
@@ -73,17 +75,18 @@ export function StockPage() {
 
   function renderTable() {
     const locations = overview.locations || [];
-    const rows = filteredRows();
+    const stockColumns = buildStockColumns(locations);
+    const rows = sortTableRows(filteredRows(), stockColumns, sortState);
     if (!rows.length) {
       tableTarget.innerHTML = '<div class="empty-state">Nenhum material cadastrado encontrado.</div>';
       return;
     }
 
     const nasajonHeaders = locations.map(location => `
-      <th class="group-nasajon">Nasajon ${location.name}</th>
-      <th class="group-nasajon">Erro ${location.name}</th>
+      ${sortableStockHeader(`Nasajon ${location.name}`, stockColumns, 'group-nasajon', sortState)}
+      ${sortableStockHeader(`Erro ${location.name}`, stockColumns, 'group-nasajon', sortState)}
     `).join('');
-    const inventoryHeaders = locations.map(location => `<th class="group-inventory">Inventário ${location.name}</th>`).join('');
+    const inventoryHeaders = locations.map(location => sortableStockHeader(`Inventário ${location.name}`, stockColumns, 'group-inventory', sortState)).join('');
     const nasajonCols = locations.length
       ? locations.map(() => '<col class="col-nasajon" /><col class="col-adjustment" />').join('')
       : '<col class="col-empty" />';
@@ -113,15 +116,15 @@ export function StockPage() {
               <th class="group-totals" colspan="5">Totais e movimentação</th>
             </tr>
             <tr>
-              <th class="group-material">Códigos atrelados</th>
-              <th class="group-material">Nome do material</th>
+              ${sortableStockHeader('Códigos atrelados', stockColumns, 'group-material', sortState)}
+              ${sortableStockHeader('Nome do material', stockColumns, 'group-material', sortState)}
               ${locations.length ? nasajonHeaders : '<th class="group-nasajon">Sem locais cadastrados</th>'}
               ${locations.length ? inventoryHeaders : '<th class="group-inventory">Sem locais cadastrados</th>'}
-              <th class="group-totals">Qtd. total locais</th>
-              <th class="group-totals">Pedidos</th>
-              <th class="group-totals">Vendas</th>
-              <th class="group-totals">Vendas/dia</th>
-              <th class="group-totals">Total estimado</th>
+              ${sortableStockHeader('Qtd. total locais', stockColumns, 'group-totals', sortState)}
+              ${sortableStockHeader('Pedidos', stockColumns, 'group-totals', sortState)}
+              ${sortableStockHeader('Vendas', stockColumns, 'group-totals', sortState)}
+              ${sortableStockHeader('Vendas/dia', stockColumns, 'group-totals', sortState)}
+              ${sortableStockHeader('Total estimado', stockColumns, 'group-totals', sortState)}
             </tr>
           </thead>
           <tbody>
@@ -191,6 +194,47 @@ export function StockPage() {
     }
   });
 
+  tableTarget.addEventListener('click', event => {
+    const button = event.target.closest('.sortable-header');
+    if (!button) return;
+    const index = Number(button.dataset.sortIndex);
+    const currentDirection = sortState.index === index ? sortState.direction : null;
+    sortState = { index, direction: nextSortDirection(currentDirection) };
+    if (!sortState.direction) sortState.index = null;
+    renderTable();
+  });
+
   load().catch(error => window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message })));
   return page;
+}
+
+function buildStockColumns(locations) {
+  return [
+    { label: 'Códigos atrelados', sortValue: row => (row.codes || []).join(', ') },
+    { label: 'Nome do material', sortValue: row => row.material?.name || '' },
+    ...locations.flatMap(location => [
+      { label: `Nasajon ${location.name}`, sortValue: row => locationCell(row, location, 'nasajonQty') },
+      { label: `Erro ${location.name}`, sortValue: row => locationCell(row, location, 'errorQty') }
+    ]),
+    ...locations.map(location => ({ label: `Inventário ${location.name}`, sortValue: row => row.inventoryByLocation?.[String(location.id)] ?? '' })),
+    { label: 'Qtd. total locais', sortValue: row => row.totalLocationsQty },
+    { label: 'Pedidos', sortValue: row => row.ordersQty },
+    { label: 'Vendas', sortValue: row => row.salesQty },
+    { label: 'Vendas/dia', sortValue: row => row.salesPerDayQty },
+    { label: 'Total estimado', sortValue: row => row.totalEstimatedQty }
+  ];
+}
+
+function sortableStockHeader(label, columns, className, sortState) {
+  const index = columns.findIndex(column => column.label === label);
+  const active = sortState.index === index && sortState.direction;
+  const indicator = active ? sortState.direction === 'asc' ? '↑' : '↓' : '↕';
+  return `
+    <th class="${className}">
+      <button class="sortable-header ${active ? 'active' : ''}" type="button" data-sort-index="${index}" aria-label="Ordenar por ${label}">
+        <span>${label}</span>
+        <span class="sort-indicator" aria-hidden="true">${indicator}</span>
+      </button>
+    </th>
+  `;
 }

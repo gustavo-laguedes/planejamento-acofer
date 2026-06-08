@@ -245,7 +245,7 @@ export function PlanningPage() {
           { label: 'Código do planejamento', key: 'code' },
           { label: 'Material', key: 'material_name' },
           { label: 'Quantidade', render: row => `${row.planned_qty} ${row.planned_unit}` },
-          { label: 'Data de criação', render: row => formatDate(row.created_at) },
+          { label: 'Data de criação', render: row => formatDate(row.created_at), sortValue: row => row.created_at },
           { label: 'Status', key: 'status' },
           { label: 'Ações', render: row => `
             <button class="link-button" data-view="${row.id}">Visualizar</button>

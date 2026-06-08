@@ -71,8 +71,8 @@ export function ImportHistoryPage() {
     const rows = await api('/imports');
     target.querySelector('.table-target').appendChild(DataTable({
       columns: [
-        { label: 'Data', render: row => row.created_at ? new Date(row.created_at).toLocaleDateString('pt-BR') : '' },
-        { label: 'Hora', render: row => row.created_at ? new Date(row.created_at).toLocaleTimeString('pt-BR') : '' },
+        { label: 'Data', render: row => row.created_at ? new Date(row.created_at).toLocaleDateString('pt-BR') : '', sortValue: row => row.created_at },
+        { label: 'Hora', render: row => row.created_at ? new Date(row.created_at).toLocaleTimeString('pt-BR') : '', sortValue: row => row.created_at },
         { label: 'Arquivo', key: 'filename' },
         { label: 'Registros', key: 'total_rows' },
         { label: 'Usuário', render: row => row.user_id || '-' },
@@ -96,7 +96,7 @@ export function ImportHistoryPage() {
     const rows = await api('/stock/inventory/counts');
     target.querySelector('.table-target').appendChild(DataTable({
       columns: [
-        { label: 'Data/hora', render: row => formatDate(row.created_at) },
+        { label: 'Data/hora', render: row => formatDate(row.created_at), sortValue: row => row.created_at },
         { label: 'Observação', key: 'notes' },
         { label: 'Usuário', render: row => row.user_id || '-' },
         { label: 'Itens', key: 'item_count' }
@@ -221,7 +221,7 @@ export function ImportHistoryPage() {
     const rows = await api('/actuals/launches');
     target.querySelector('.table-target').appendChild(DataTable({
       columns: [
-        { label: 'Data', key: 'production_date' },
+        { label: 'Data', key: 'production_date', sortValue: row => row.production_date },
         { label: 'Material', key: 'material_name' },
         { label: 'Quantidade', render: row => `${row.quantity} ${row.primary_unit}` },
         { label: 'Unidade secundária', render: row => `${row.secondary_qty} ${row.secondary_unit}` },

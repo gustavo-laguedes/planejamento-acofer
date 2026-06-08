@@ -688,6 +688,31 @@ th {
   z-index: 1;
 }
 
+.sortable-header {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+}
+
+.sortable-header.active {
+  color: var(--petroleum);
+}
+
+.sort-indicator {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
 thead tr:first-child th {
   top: 0;
   z-index: 3;

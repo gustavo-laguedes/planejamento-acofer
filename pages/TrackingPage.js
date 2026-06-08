@@ -32,7 +32,7 @@ export function TrackingPage() {
     { label: 'Código do planejamento', key: 'planning_code' },
     { label: 'Material', key: 'material_name' },
     { label: 'Quantidade planejada', key: 'planned_qty' },
-    { label: 'Período planejado', render: row => `${row.start_date} até ${row.end_date}` },
+    { label: 'Período planejado', render: row => `${row.start_date} até ${row.end_date}`, sortValue: row => row.start_date },
     { label: 'Quantidade produzida', key: 'actual_qty' },
     { label: 'Percentual', render: row => `${row.percent_done || 0}%` },
     { label: 'Status', key: 'status' }
