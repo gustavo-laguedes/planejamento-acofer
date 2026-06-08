@@ -76,6 +76,32 @@ function summarizeMaterial(material, locations, stockRows, adjustmentRows, produ
   };
 }
 
+async function buildInventoryTemplate(db) {
+  const [materials, locations, stockRows, adjustmentRows] = await Promise.all([
+    db`SELECT id, name, codes, active FROM materials WHERE active = true ORDER BY name`,
+    db`SELECT id, code, name, active FROM locations WHERE active = true ORDER BY code NULLS LAST, name`,
+    db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, orders_unit, sales_unit FROM stock_snapshot`,
+    db`
+      SELECT DISTINCT ON (material_id, location_id)
+             material_id, location_id, adjustment_qty, notes, updated_at
+      FROM stock_location_adjustments
+      ORDER BY material_id, location_id, updated_at DESC, id DESC
+    `
+  ]);
+
+  const adjustmentsByMaterial = new Map();
+  for (const adjustment of adjustmentRows) {
+    const key = String(adjustment.material_id);
+    if (!adjustmentsByMaterial.has(key)) adjustmentsByMaterial.set(key, []);
+    adjustmentsByMaterial.get(key).push(adjustment);
+  }
+
+  return {
+    locations,
+    rows: materials.map(material => summarizeMaterial(material, locations, stockRows, adjustmentsByMaterial.get(String(material.id)) || []))
+  };
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const db = requireDb();
@@ -214,27 +240,7 @@ router.get('/materials-overview', async (req, res, next) => {
 router.get('/inventory/template', async (req, res, next) => {
   try {
     const db = requireDb();
-    const [materials, locations, stockRows, adjustmentRows] = await Promise.all([
-      db`SELECT id, name, codes, active FROM materials WHERE active = true ORDER BY name`,
-      db`SELECT id, code, name, active FROM locations WHERE active = true ORDER BY code NULLS LAST, name`,
-      db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, orders_unit, sales_unit FROM stock_snapshot`,
-      db`
-        SELECT DISTINCT ON (material_id, location_id)
-               material_id, location_id, adjustment_qty, notes, updated_at
-        FROM stock_location_adjustments
-        ORDER BY material_id, location_id, updated_at DESC, id DESC
-      `
-    ]);
-    const adjustmentsByMaterial = new Map();
-    for (const adjustment of adjustmentRows) {
-      const key = String(adjustment.material_id);
-      if (!adjustmentsByMaterial.has(key)) adjustmentsByMaterial.set(key, []);
-      adjustmentsByMaterial.get(key).push(adjustment);
-    }
-    res.json({
-      locations,
-      rows: materials.map(material => summarizeMaterial(material, locations, stockRows, adjustmentsByMaterial.get(String(material.id)) || []))
-    });
+    res.json(await buildInventoryTemplate(db));
   } catch (error) {
     next(error);
   }

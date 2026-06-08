@@ -106,7 +106,15 @@ export function ImportHistoryPage() {
   }
 
   async function openInventoryModal() {
-    const template = await api('/stock/inventory/template');
+    let template = null;
+    try {
+      template = await api('/stock/inventory/template');
+    } catch (error) {
+      window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: 'Não foi possível carregar os dados do inventário. Verifique se o servidor foi atualizado.' }));
+      return;
+    }
+
+    const hasInventoryBase = template?.rows?.length && template?.locations?.length;
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
     backdrop.innerHTML = `
@@ -115,34 +123,41 @@ export function ImportHistoryPage() {
           <h2>Realizar inventário</h2>
           <button class="link-button close-modal" type="button">Fechar</button>
         </div>
-        <label class="wide-field">Observação<input name="notes" /></label>
-        <div class="inventory-grid">
-          ${template.rows.map(row => `
-            <article class="inventory-material">
-              <h3>${row.material.name}</h3>
-              <p>${(row.codes || []).join(', ') || 'Sem códigos'}</p>
-              ${template.locations.map(location => {
-                const current = row.inventoryByLocation?.[String(location.id)] ?? row.stockByLocation?.[String(location.id)]?.nasajonQty ?? 0;
-                return `
-                  <label>${location.name}
-                    <span>Saldo atual: ${current}</span>
-                    <input type="number" step="0.001" placeholder="Saldo atualizado" data-material-id="${row.material.id}" data-location-id="${location.id}" data-current="${current}" />
-                  </label>
-                `;
-              }).join('')}
-            </article>
-          `).join('')}
-        </div>
-        <div class="form-actions">
-          <button class="primary-button save-inventory" type="button">Salvar inventário</button>
-          <button class="secondary-button close-modal" type="button">Cancelar</button>
-        </div>
+        ${hasInventoryBase ? `
+          <label class="wide-field">Observação<input name="notes" /></label>
+          <div class="inventory-grid">
+            ${template.rows.map(row => `
+              <article class="inventory-material">
+                <h3>${row.material.name}</h3>
+                <p>${(row.codes || []).join(', ') || 'Sem códigos'}</p>
+                ${template.locations.map(location => {
+                  const current = row.inventoryByLocation?.[String(location.id)] ?? row.stockByLocation?.[String(location.id)]?.nasajonQty ?? 0;
+                  return `
+                    <label>${location.name}
+                      <span>Saldo atual: ${current}</span>
+                      <input type="number" step="0.001" placeholder="Saldo atualizado" data-material-id="${row.material.id}" data-location-id="${location.id}" data-current="${current}" />
+                    </label>
+                  `;
+                }).join('')}
+              </article>
+            `).join('')}
+          </div>
+          <div class="form-actions">
+            <button class="primary-button save-inventory" type="button">Salvar inventário</button>
+            <button class="secondary-button close-modal" type="button">Cancelar</button>
+          </div>
+        ` : `
+          <div class="empty-state">Cadastre materiais e locais antes de realizar o inventário.</div>
+          <div class="form-actions">
+            <button class="secondary-button close-modal" type="button">Fechar</button>
+          </div>
+        `}
       </div>
     `;
     backdrop.addEventListener('click', event => {
       if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
     });
-    backdrop.querySelector('.save-inventory').addEventListener('click', async () => {
+    backdrop.querySelector('.save-inventory')?.addEventListener('click', async () => {
       const items = [...backdrop.querySelectorAll('.inventory-grid input[data-material-id]')].map(input => ({
         materialId: Number(input.dataset.materialId),
         locationId: Number(input.dataset.locationId),
