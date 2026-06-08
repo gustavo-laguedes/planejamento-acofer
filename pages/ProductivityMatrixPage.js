@@ -45,7 +45,7 @@ export function ProductivityMatrixPage() {
             <span>Unidade que produz</span>
             <div class="output-unit readonly-chip-list"></div>
           </div>
-          <label>Segundos<input name="timeSeconds" type="number" step="1" min="1" required /></label>
+          <label>Segundos<input name="timeSeconds" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" required /></label>
           <div class="form-actions">
             <button class="primary-button" type="submit">Salvar</button>
             <button class="secondary-button close-modal" type="button">Cancelar</button>
@@ -90,8 +90,28 @@ export function ProductivityMatrixPage() {
     return codes.join(', ');
   }
 
+  function parsePtBrDecimal(value) {
+    const rawValue = String(value || '').trim();
+    const normalizedValue = rawValue.includes(',')
+      ? rawValue.replace(/\./g, '').replace(',', '.')
+      : rawValue;
+    const number = Number(normalizedValue);
+    return Number.isFinite(number) ? number : NaN;
+  }
+
+  function formatPtBrDecimal(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number <= 0) return '';
+    const hasDecimals = !Number.isInteger(number);
+    return number.toLocaleString('pt-BR', {
+      minimumFractionDigits: hasDecimals ? 2 : 0,
+      maximumFractionDigits: 3
+    });
+  }
+
   function formatSeconds(row) {
-    return row.time_seconds || Math.round(Number(row.time_minutes || 0) * 60) || '';
+    const seconds = row.time_seconds ?? (Number(row.time_minutes || 0) * 60);
+    return formatPtBrDecimal(seconds);
   }
 
   function selectedMaterial() {
@@ -149,6 +169,13 @@ export function ProductivityMatrixPage() {
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const material = selectedMaterial();
+    const timeSeconds = parsePtBrDecimal(form.elements.timeSeconds.value);
+    form.elements.timeSeconds.setCustomValidity('');
+    if (!Number.isFinite(timeSeconds) || timeSeconds <= 0) {
+      form.elements.timeSeconds.setCustomValidity('Informe os segundos com valor maior que zero.');
+      form.reportValidity();
+      return;
+    }
     const data = {
       active: true,
       materialId: Number(form.elements.materialId.value),
@@ -158,13 +185,14 @@ export function ProductivityMatrixPage() {
       peopleCount: Number(form.elements.peopleCount.value),
       outputQty: Number(form.elements.outputQty.value),
       outputUnit: material?.primary_unit || 'un',
-      timeSeconds: Number(form.elements.timeSeconds.value)
+      timeSeconds
     };
     const id = form.elements.id.value;
     await api(id ? `/productivity/${id}` : '/productivity', { method: id ? 'PUT' : 'POST', body: data });
     closeModal();
     await load();
   });
+  form.elements.timeSeconds.addEventListener('input', () => form.elements.timeSeconds.setCustomValidity(''));
 
   tableTarget.addEventListener('click', async event => {
     const editId = event.target.dataset.edit;

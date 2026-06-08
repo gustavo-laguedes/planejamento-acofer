@@ -14,7 +14,13 @@ function normalizeCodes(item) {
 }
 
 function normalizeSeconds(item) {
-  if (item.timeSeconds) return Number(item.timeSeconds);
+  const rawSeconds = item.timeSeconds ?? null;
+  if (rawSeconds !== null && rawSeconds !== '') {
+    const normalizedSeconds = String(rawSeconds).includes(',')
+      ? String(rawSeconds).replace(/\./g, '').replace(',', '.')
+      : rawSeconds;
+    return Number(normalizedSeconds);
+  }
   return Number(item.timeMinutes || 0) * 60;
 }
 
