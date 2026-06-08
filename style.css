@@ -258,6 +258,11 @@ select:disabled {
   padding-right: 0;
 }
 
+.page:has(.planning-page) {
+  width: calc(100vw - 48px);
+  max-width: 1760px;
+}
+
 .stack {
   display: grid;
   gap: 20px;
@@ -631,6 +636,11 @@ select:disabled {
   gap: 14px;
 }
 
+.compact-summary {
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  gap: 10px;
+}
+
 .tracking-summary {
   margin-bottom: 26px;
 }
@@ -639,6 +649,12 @@ select:disabled {
   padding: 18px;
   display: grid;
   gap: 8px;
+}
+
+.metric-card.compact {
+  min-height: 86px;
+  padding: 12px;
+  gap: 5px;
 }
 
 .metric-card span {
@@ -650,6 +666,12 @@ select:disabled {
 
 .metric-card strong {
   font-size: 22px;
+}
+
+.metric-card.compact strong {
+  font-size: 16px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .metric-card small {
@@ -933,33 +955,144 @@ thead tr:nth-child(2) th {
   text-align: center;
 }
 
-.calendar {
+.planning-results {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 12px;
-  margin-top: 14px;
+  gap: 16px;
 }
 
-.calendar-day {
-  min-height: 220px;
+.planning-results[hidden] {
+  display: none;
+}
+
+.operation-config-target {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+.operation-config-card,
+.engineering-node {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfd;
-  overflow: hidden;
+  padding: 12px;
+}
+
+.operation-config-card {
+  display: grid;
+  gap: 10px;
+}
+
+.operation-config-card strong,
+.engineering-node strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.operation-config-card span,
+.operation-meta,
+.engineering-node span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.operation-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.engineering-tree {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.engineering-level {
+  min-width: 230px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.engineering-level:not(:last-child)::after {
+  content: ">";
+  color: var(--petroleum);
+  font-weight: 900;
+  text-align: center;
+}
+
+.engineering-level-label {
+  color: var(--petroleum-dark);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.engineering-level-items {
+  display: grid;
+  gap: 8px;
+}
+
+.calendar-gantt {
+  margin-top: 4px;
+}
+
+.calendar-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.calendar-grid {
+  min-width: max(100%, calc(var(--calendar-days) * 210px));
+  display: grid;
+  grid-template-columns: repeat(var(--calendar-days), minmax(190px, 1fr));
+}
+
+.calendar-column {
+  min-height: 300px;
+  border-right: 1px solid var(--line);
+  background: #fbfcfd;
+}
+
+.calendar-column:last-child {
+  border-right: 0;
 }
 
 .calendar-date {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 58px;
+  display: grid;
+  gap: 2px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
   background: #eef5f7;
   color: var(--petroleum-dark);
-  font-weight: 800;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
 }
 
-.calendar-list {
+.calendar-date span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.calendar-events {
   display: grid;
-  gap: 10px;
+  align-content: start;
+  gap: 8px;
   padding: 10px;
+}
+
+.calendar-empty-day {
+  min-height: 54px;
+  border: 1px dashed #d7e1e7;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.58);
 }
 
 .production-card {
@@ -975,6 +1108,11 @@ thead tr:nth-child(2) th {
 .production-card span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.production-card small {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .toast {
@@ -999,7 +1137,8 @@ thead tr:nth-child(2) th {
 @media (max-width: 1040px) {
   .grid-form,
   .filters,
-  .summary-grid {
+  .summary-grid,
+  .compact-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1020,6 +1159,7 @@ thead tr:nth-child(2) th {
   .grid-form,
   .filters,
   .summary-grid,
+  .compact-summary,
   .multi-material-selector,
   .material-selector-list,
   .material-usage-row,

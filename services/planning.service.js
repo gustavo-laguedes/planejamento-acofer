@@ -17,11 +17,25 @@ function toNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
-function codeForPlan(materialCode, quantity, date = new Date()) {
+function cleanCodePart(value) {
+  return String(value || 'SEM-CODIGO')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/gi, '')
+    .toUpperCase() || 'SEM-CODIGO';
+}
+
+function formatCodeQuantity(quantity) {
+  const number = toNumber(quantity);
+  return Number.isInteger(number)
+    ? String(number)
+    : String(Number(number.toFixed(3)));
+}
+
+function codeForPlan(materialName, quantity, date = new Date()) {
   const pad = value => String(value).padStart(2, '0');
   const stamp = `${pad(date.getDate())}${pad(date.getMonth() + 1)}${String(date.getFullYear()).slice(-2)}${pad(date.getHours())}${pad(date.getMinutes())}`;
-  const code = String(materialCode || 'SEM-CODIGO').replace(/[^a-z0-9]/gi, '').toUpperCase();
-  return `${stamp}${code}${toNumber(quantity)}`;
+  return `${stamp}${cleanCodePart(materialName)}${formatCodeQuantity(quantity)}`;
 }
 
 function materialCode(material) {
@@ -38,12 +52,42 @@ function machineOptions(material, matrixRows) {
   });
 }
 
+function matrixSecondsPerUnit(row) {
+  const timeSeconds = toNumber(row.time_seconds || toNumber(row.time_minutes) * 60);
+  return timeSeconds / Math.max(toNumber(row.output_qty), 1);
+}
+
 function resolveMatrix(material, matrixRows, requestedMachine, requestedPeople) {
   const options = machineOptions(material, matrixRows);
-  return options.find(row =>
-    (!requestedMachine || row.machine_name === requestedMachine)
-    && (!requestedPeople || Number(row.people_count) === Number(requestedPeople))
-  ) || options[0] || null;
+  if (requestedMachine || requestedPeople) {
+    const requested = options.find(row =>
+      (!requestedMachine || row.machine_name === requestedMachine)
+      && (!requestedPeople || Number(row.people_count) === Number(requestedPeople))
+    );
+    if (requested) return requested;
+  }
+  return options.sort((left, right) => matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right))[0] || null;
+}
+
+function productivityOptions(material, matrixRows) {
+  return machineOptions(material, matrixRows)
+    .map(row => ({
+      machineName: row.machine_name,
+      peopleCount: Number(row.people_count),
+      outputQty: toNumber(row.output_qty),
+      outputUnit: row.output_unit || material.primary_unit || 'un',
+      timeSeconds: toNumber(row.time_seconds || toNumber(row.time_minutes) * 60),
+      secondsPerUnit: matrixSecondsPerUnit(row)
+    }))
+    .sort((left, right) => left.secondsPerUnit - right.secondsPerUnit);
+}
+
+function overrideForMaterial(overrides = {}, material) {
+  const keys = [material.id, String(material.id), material.name, materialCode(material)].filter(Boolean);
+  for (const key of keys) {
+    if (overrides[key]) return overrides[key];
+  }
+  return null;
 }
 
 function stockForMaterial(material, stockRows, inventoryRows, productionRows) {
@@ -62,10 +106,11 @@ function stockForMaterial(material, stockRows, inventoryRows, productionRows) {
   return (inventory > 0 ? inventory : nasajon) + produced;
 }
 
-function buildRequirementTree({ material, quantity, materialsById, inputsByMaterialId, stockRows, inventoryRows, productionRows, matrixRows, requestedMachine, requestedPeople }, stack = []) {
+function buildRequirementTree({ material, quantity, materialsById, inputsByMaterialId, stockRows, inventoryRows, productionRows, matrixRows, requestedMachine, requestedPeople, operationOverrides = {} }, stack = []) {
   const stockQty = stockForMaterial(material, stockRows, inventoryRows, productionRows);
   const produceQty = Math.max(toNumber(quantity) - stockQty, 0);
-  const matrix = resolveMatrix(material, matrixRows, requestedMachine, requestedPeople);
+  const override = overrideForMaterial(operationOverrides, material);
+  const matrix = resolveMatrix(material, matrixRows, override?.machineName || requestedMachine, override?.peopleCount || requestedPeople);
   const node = {
     materialId: material.id,
     materialName: material.name,
@@ -78,6 +123,7 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
     isInitialRawMaterial: material.is_initial_raw_material === true,
     machineName: matrix?.machine_name || null,
     peopleCount: matrix?.people_count || null,
+    productivityOptions: productivityOptions(material, matrixRows),
     children: []
   };
 
@@ -97,7 +143,8 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
       stockRows,
       inventoryRows,
       productionRows,
-      matrixRows
+      matrixRows,
+      operationOverrides
     }, [...stack, String(material.id)]);
   }).filter(Boolean);
   return node;
@@ -113,9 +160,8 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
   const normalizedHoursPerDay = Math.max(toNumber(hoursPerDay || 8), 1 / 60);
   const dailyMinutes = normalizedHoursPerDay * 60;
   const scheduled = [];
-  const forward = dateMode !== 'end';
   let cursor = selectedDate;
-  const source = forward ? operations : [...operations].reverse();
+  const source = [...operations].reverse();
 
   for (const operation of source) {
     const matrix = resolveMatrix(
@@ -129,25 +175,35 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       error.status = 404;
       throw error;
     }
-    const timeMinutes = toNumber(matrix.time_seconds || toNumber(matrix.time_minutes) * 60) / 60;
+    const timeSeconds = toNumber(matrix.time_seconds || toNumber(matrix.time_minutes) * 60);
+    const timeMinutes = timeSeconds / 60;
     const minutesPerUnit = timeMinutes / Math.max(toNumber(matrix.output_qty), 1);
     const totalMinutes = Math.ceil(operation.produceQty * minutesPerUnit);
     const daysNeeded = Math.max(Math.ceil(totalMinutes / dailyMinutes), 1);
-    const startDate = forward ? cursor : addDays(cursor, -(daysNeeded - 1));
-    const endDate = forward ? addDays(cursor, daysNeeded - 1) : cursor;
+    const isFinalOperation = scheduled.length === 0;
+    const startDate = dateMode === 'start' && isFinalOperation
+      ? cursor
+      : addDays(cursor, -(daysNeeded - 1));
+    const endDate = dateMode === 'start' && isFinalOperation
+      ? addDays(cursor, daysNeeded - 1)
+      : cursor;
     scheduled.push({
       ...operation,
       machineName: matrix.machine_name,
       peopleCount: Number(matrix.people_count),
+      outputQty: toNumber(matrix.output_qty),
+      outputUnit: matrix.output_unit || operation.unit || 'un',
+      timeSeconds,
+      minutesPerUnit,
       totalMinutes,
       daysNeeded,
       startDate,
       endDate
     });
-    cursor = forward ? addDays(endDate, 1) : addDays(startDate, -1);
+    cursor = addDays(startDate, -1);
   }
 
-  return forward ? scheduled : scheduled.reverse();
+  return scheduled.reverse();
 }
 
 function buildDays(operations, plannedUnit) {
@@ -160,7 +216,9 @@ function buildDays(operations, plannedUnit) {
       machine_name: operation.machineName,
       people_count: operation.peopleCount,
       planned_qty: Number(qtyPerDay.toFixed(3)),
-      planned_unit: plannedUnit || operation.unit || 'un'
+      planned_unit: operation.unit || plannedUnit || 'un',
+      total_minutes: operation.totalMinutes,
+      daily_minutes: Math.ceil(operation.totalMinutes / operation.daysNeeded)
     }));
   });
 }
@@ -183,7 +241,8 @@ export function buildPlan(payload, context) {
     productionRows: context.productionRows,
     matrixRows: context.matrixRows,
     requestedMachine: payload.machineName,
-    requestedPeople: payload.peopleCount
+    requestedPeople: payload.peopleCount,
+    operationOverrides: payload.operationOverrides || {}
   });
   const operations = scheduleOperations(flattenOperations(tree), context.matrixRows, {
     dateMode: payload.dateMode,
@@ -194,18 +253,20 @@ export function buildPlan(payload, context) {
   const hoursPerDay = Math.max(toNumber(payload.hoursPerDay || 8), 1 / 60);
   const startDate = operations.length ? operations[0].startDate : payload.selectedDate || payload.startDate;
   const endDate = operations.length ? operations[operations.length - 1].endDate : payload.selectedDate || payload.startDate;
+  const finalOperation = operations[operations.length - 1];
 
   return {
-    code: codeForPlan(materialCode(material), payload.plannedQty),
+    code: codeForPlan(material.name, payload.plannedQty),
     summary: {
       materialId: material.id,
       materialName: material.name,
       materialCode: materialCode(material),
       plannedQty: toNumber(payload.plannedQty),
       plannedUnit: material.primary_unit,
-      machineName: operations[0]?.machineName || payload.machineName || null,
-      peopleCount: operations[0]?.peopleCount || Number(payload.peopleCount || 0) || null,
+      machineName: finalOperation?.machineName || payload.machineName || null,
+      peopleCount: finalOperation?.peopleCount || Number(payload.peopleCount || 0) || null,
       dateMode: payload.dateMode || 'start',
+      selectedDate: payload.selectedDate || payload.startDate,
       hoursPerDay,
       startDate,
       endDate,
