@@ -3,7 +3,7 @@ export const TABS = [
   { id: 'registrations', label: 'Cadastros' },
   { id: 'productivity', label: 'Matriz de Produtividade' },
   { id: 'stock', label: 'Estoque' },
-  { id: 'history', label: 'Historico de Importacoes' },
+  { id: 'history', label: 'Lançamentos' },
   { id: 'tracking', label: 'Produtividade / Acompanhamento' }
 ];
 

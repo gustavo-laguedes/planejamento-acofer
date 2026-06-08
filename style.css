@@ -111,6 +111,16 @@ select:focus {
   border-color: var(--petroleum);
 }
 
+select[data-locked="true"] {
+  background: #eef3f8;
+  color: var(--muted);
+}
+
+select:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+}
+
 .primary-button,
 .secondary-button,
 .ghost-button {
@@ -302,6 +312,58 @@ select:focus {
   grid-column: 1 / -1;
 }
 
+.readonly-field {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.readonly-chip-list {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 1px solid #cfd8df;
+  border-radius: 6px;
+  background: #f8fbfc;
+  padding: 7px 10px;
+}
+
+.date-mode-field {
+  min-height: 70px;
+  border: 1px solid #cfd8df;
+  border-radius: 6px;
+  padding: 8px 10px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.date-mode-field legend {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+.choice-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.choice-pill input {
+  width: auto;
+}
+
 .chip-entry {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 44px;
@@ -358,6 +420,76 @@ select:focus {
   overflow: auto;
 }
 
+.material-usage-list {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.material-selector-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 8px 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.consumed-selector-block {
+  display: grid;
+  gap: 10px;
+}
+
+.consumed-selector-block h3 {
+  margin: 4px 0 0;
+  font-size: 15px;
+}
+
+.consumed-material-header,
+.consumed-material-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 220px);
+  gap: 12px;
+  align-items: center;
+}
+
+.consumed-material-header {
+  color: var(--petroleum-dark);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.consumed-material-row {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.muted-block {
+  opacity: 0.55;
+}
+
+.material-usage-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 220px);
+  gap: 12px;
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.material-usage-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
 .material-option {
   color: var(--ink);
   font-weight: 600;
@@ -391,6 +523,10 @@ select:focus {
   border-radius: 8px;
   box-shadow: 0 24px 64px rgba(16, 24, 40, 0.24);
   padding: 20px;
+}
+
+.wide-modal {
+  width: min(1180px, 100%);
 }
 
 .modal-header {
@@ -434,10 +570,69 @@ select:focus {
   flex-wrap: wrap;
 }
 
+.production-tree,
+.production-tree ul {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding-left: 20px;
+}
+
+.production-tree li {
+  line-height: 1.45;
+}
+
+.production-tree span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.inventory-material {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcfd;
+  display: grid;
+  gap: 10px;
+}
+
+.inventory-material h3,
+.inventory-material p {
+  margin: 0;
+}
+
+.inventory-material p,
+.inventory-material span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.plan-json {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr));
   gap: 14px;
+}
+
+.tracking-summary {
+  margin-bottom: 26px;
 }
 
 .metric-card {
@@ -800,7 +995,12 @@ thead tr:nth-child(2) th {
   .grid-form,
   .filters,
   .summary-grid,
-  .multi-material-selector {
+  .multi-material-selector,
+  .material-selector-list,
+  .material-usage-row,
+  .consumed-material-header,
+  .consumed-material-row,
+  .inventory-grid {
     grid-template-columns: 1fr;
   }
 

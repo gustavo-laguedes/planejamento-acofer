@@ -26,7 +26,7 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, name: 'Planejamento Aco-Fer' });
+  res.json({ ok: true, name: 'Planejamento Aço-Fer' });
 });
 
 app.use('/api/auth', authRoutes);
@@ -52,5 +52,5 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(port, () => {
-  console.log(`Planejamento Aco-Fer rodando em http://localhost:${port}`);
+  console.log(`Planejamento Aço-Fer rodando em http://localhost:${port}`);
 });

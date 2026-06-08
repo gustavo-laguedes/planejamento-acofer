@@ -10,8 +10,18 @@ function normalizeCodes(value) {
 }
 
 function normalizeInputs(value, materialId = null) {
-  const ids = Array.isArray(value) ? value : [];
-  return [...new Set(ids.map(id => Number(id)).filter(id => id && String(id) !== String(materialId)))];
+  const items = Array.isArray(value) ? value : [];
+  const byId = new Map();
+  for (const item of items) {
+    const inputMaterialId = Number(typeof item === 'object' ? item.inputMaterialId || item.id : item);
+    const qtyPerOutput = Number(typeof item === 'object' ? item.qtyPerOutput : 1);
+    if (!inputMaterialId || String(inputMaterialId) === String(materialId)) continue;
+    byId.set(inputMaterialId, {
+      inputMaterialId,
+      qtyPerOutput: qtyPerOutput > 0 ? qtyPerOutput : 1
+    });
+  }
+  return [...byId.values()];
 }
 
 function validateMaterial(body) {
@@ -35,7 +45,7 @@ router.get('/', async (req, res, next) => {
     const rows = await db`
       SELECT m.*,
              COALESCE(
-               json_agg(json_build_object('id', i.id, 'name', i.name) ORDER BY i.name)
+               json_agg(json_build_object('id', i.id, 'name', i.name, 'qtyPerOutput', mi.qty_per_output) ORDER BY i.name)
                FILTER (WHERE i.id IS NOT NULL),
                '[]'::json
              ) AS input_materials
@@ -61,18 +71,19 @@ router.post('/', async (req, res, next) => {
 
     const db = requireDb();
     const codes = normalizeCodes(req.body.codes);
-    const inputIds = normalizeInputs(req.body.inputMaterialIds);
+    const inputItems = normalizeInputs(req.body.inputMaterials || req.body.inputMaterialIds);
     const row = await db.begin(async tx => {
       const [created] = await tx`
-        INSERT INTO materials (name, codes, primary_unit, secondary_unit, primary_to_secondary_factor, active)
-        VALUES (${valid.name}, ${codes}, ${valid.primaryUnit}, ${valid.secondaryUnit}, ${valid.factor}, ${req.body.active !== false})
+        INSERT INTO materials (name, codes, primary_unit, secondary_unit, primary_to_secondary_factor, is_initial_raw_material, active)
+        VALUES (${valid.name}, ${codes}, ${valid.primaryUnit}, ${valid.secondaryUnit}, ${valid.factor}, ${req.body.isInitialRawMaterial === true}, ${req.body.active !== false})
         RETURNING *
       `;
-      for (const inputId of inputIds) {
+      for (const input of inputItems) {
         await tx`
-          INSERT INTO material_inputs (material_id, input_material_id)
-          VALUES (${created.id}, ${inputId})
-          ON CONFLICT DO NOTHING
+          INSERT INTO material_inputs (material_id, input_material_id, qty_per_output)
+          VALUES (${created.id}, ${input.inputMaterialId}, ${input.qtyPerOutput})
+          ON CONFLICT (material_id, input_material_id)
+          DO UPDATE SET qty_per_output = EXCLUDED.qty_per_output
         `;
       }
       return created;
@@ -90,7 +101,7 @@ router.put('/:id', async (req, res, next) => {
 
     const db = requireDb();
     const codes = normalizeCodes(req.body.codes);
-    const inputIds = normalizeInputs(req.body.inputMaterialIds, req.params.id);
+    const inputItems = normalizeInputs(req.body.inputMaterials || req.body.inputMaterialIds, req.params.id);
     const row = await db.begin(async tx => {
       const [updated] = await tx`
         UPDATE materials
@@ -99,6 +110,7 @@ router.put('/:id', async (req, res, next) => {
             primary_unit = ${valid.primaryUnit},
             secondary_unit = ${valid.secondaryUnit},
             primary_to_secondary_factor = ${valid.factor},
+            is_initial_raw_material = ${req.body.isInitialRawMaterial === true},
             active = ${req.body.active !== false},
             updated_at = now()
         WHERE id = ${req.params.id}
@@ -107,11 +119,12 @@ router.put('/:id', async (req, res, next) => {
       if (!updated) return null;
 
       await tx`DELETE FROM material_inputs WHERE material_id = ${req.params.id}`;
-      for (const inputId of inputIds) {
+      for (const input of inputItems) {
         await tx`
-          INSERT INTO material_inputs (material_id, input_material_id)
-          VALUES (${req.params.id}, ${inputId})
-          ON CONFLICT DO NOTHING
+          INSERT INTO material_inputs (material_id, input_material_id, qty_per_output)
+          VALUES (${req.params.id}, ${input.inputMaterialId}, ${input.qtyPerOutput})
+          ON CONFLICT (material_id, input_material_id)
+          DO UPDATE SET qty_per_output = EXCLUDED.qty_per_output
         `;
       }
       return updated;

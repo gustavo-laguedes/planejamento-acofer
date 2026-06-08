@@ -11,7 +11,7 @@ function formatDate(value) {
 }
 
 function renderCodes(codes) {
-  if (!codes?.length) return '<span class="muted-text">Sem codigos</span>';
+  if (!codes?.length) return '<span class="muted-text">Sem códigos</span>';
   return codes.map(code => `<span class="code-pill">${code}</span>`).join('');
 }
 
@@ -34,13 +34,13 @@ export function StockPage() {
     <div class="page-header">
       <div>
         <h1>Estoque</h1>
-        <p>Saldo por material cadastrado, cruzando codigos atrelados com o ultimo CSV importado.</p>
+        <p>Saldo por material cadastrado, cruzando códigos atrelados com o último CSV importado.</p>
       </div>
     </div>
     <div class="summary-grid stock-summary"></div>
     <div class="panel stock-panel">
       <form class="filters stock-filters">
-        <input name="search" type="search" placeholder="Buscar material ou codigo" />
+        <input name="search" type="search" placeholder="Buscar material ou código" />
         <button class="secondary-button" type="submit">Filtrar</button>
       </form>
       <div class="stock-table-target"></div>
@@ -65,9 +65,9 @@ export function StockPage() {
   function renderSummary() {
     const last = overview.lastImport
       ? `${overview.lastImport.status} - ${overview.lastImport.filename || ''}`
-      : 'Sem importacao';
+      : 'Sem importação';
     summaryGrid.innerHTML = `
-      <article class="metric-card"><span>Ultima importacao</span><strong>${last}</strong><small>${formatDate(overview.lastImport?.finished_at || overview.lastImport?.created_at)}</small></article>
+      <article class="metric-card"><span>Última importação</span><strong>${last}</strong><small>${formatDate(overview.lastImport?.finished_at || overview.lastImport?.created_at)}</small></article>
     `;
   }
 
@@ -83,7 +83,7 @@ export function StockPage() {
       <th class="group-nasajon">Nasajon ${location.name}</th>
       <th class="group-nasajon">Erro ${location.name}</th>
     `).join('');
-    const inventoryHeaders = locations.map(location => `<th class="group-inventory">Inventario ${location.name}</th>`).join('');
+    const inventoryHeaders = locations.map(location => `<th class="group-inventory">Inventário ${location.name}</th>`).join('');
     const nasajonCols = locations.length
       ? locations.map(() => '<col class="col-nasajon" /><col class="col-adjustment" />').join('')
       : '<col class="col-empty" />';
@@ -109,11 +109,11 @@ export function StockPage() {
             <tr>
               <th class="group-material" colspan="2">Material</th>
               <th class="group-nasajon" colspan="${Math.max(locations.length * 2, 1)}">Estoque Nasajon por local</th>
-              <th class="group-inventory" colspan="${Math.max(locations.length, 1)}">Inventario fisico</th>
-              <th class="group-totals" colspan="5">Totais e movimentacao</th>
+              <th class="group-inventory" colspan="${Math.max(locations.length, 1)}">Inventário físico</th>
+              <th class="group-totals" colspan="5">Totais e movimentação</th>
             </tr>
             <tr>
-              <th class="group-material">Codigos atrelados</th>
+              <th class="group-material">Códigos atrelados</th>
               <th class="group-material">Nome do material</th>
               ${locations.length ? nasajonHeaders : '<th class="group-nasajon">Sem locais cadastrados</th>'}
               ${locations.length ? inventoryHeaders : '<th class="group-inventory">Sem locais cadastrados</th>'}
@@ -139,7 +139,7 @@ export function StockPage() {
                       value="${locationCell(row, location, 'errorQty')}"
                       data-material-id="${row.material.id}"
                       data-location-id="${location.id}"
-                      aria-label="Erro de inventario ${row.material.name} em ${location.name}"
+                      aria-label="Erro de inventário ${row.material.name} em ${location.name}"
                     />
                   </td>
                 `).join('') : '<td class="group-nasajon muted-text">0</td>'}

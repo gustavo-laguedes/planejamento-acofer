@@ -4,10 +4,13 @@ import postgres from 'postgres';
 const expectedTables = [
   'import_history',
   'locations',
+  'inventory_count_items',
+  'inventory_counts',
   'machines',
   'material_inputs',
   'materials',
   'production_actuals',
+  'production_launches',
   'production_plan_days',
   'production_plans',
   'productivity_matrix',

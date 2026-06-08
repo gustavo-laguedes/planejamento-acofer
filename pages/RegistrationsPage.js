@@ -2,11 +2,10 @@ import { api } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
 import { InternalTabs } from '../shared/InternalTabs.js';
 import { CodeChipsInput } from '../shared/CodeChipsInput.js';
-import { MultiMaterialSelector } from '../shared/MultiMaterialSelector.js';
 
 const registrationTabs = [
   { id: 'locations', label: 'Locais' },
-  { id: 'machines', label: 'Maquinas' },
+  { id: 'machines', label: 'Máquinas' },
   { id: 'materials', label: 'Materiais' }
 ];
 
@@ -17,7 +16,7 @@ export function RegistrationsPage() {
     <div class="page-header">
       <div>
         <h1>Cadastros</h1>
-        <p>Organize locais, maquinas e materiais usados no planejamento.</p>
+        <p>Organize locais, máquinas e materiais usados no planejamento.</p>
       </div>
     </div>
     <div class="internal-tabs-target"></div>
@@ -59,7 +58,7 @@ export function RegistrationsPage() {
   }
 
   async function renderLocations() {
-    target.innerHTML = sectionShell('Locais', 'Cadastrar local', 'Buscar por codigo ou local');
+    target.innerHTML = sectionShell('Locais', 'Cadastrar local', 'Buscar por código ou local');
     const search = target.querySelector('.search');
     const tableTarget = target.querySelector('.table-target');
     let rows = [];
@@ -69,10 +68,10 @@ export function RegistrationsPage() {
       tableTarget.innerHTML = '';
       tableTarget.appendChild(DataTable({
         columns: [
-          { label: 'Codigo', key: 'code' },
+          { label: 'Código', key: 'code' },
           { label: 'Nome do local', key: 'name' },
           { label: 'Status', render: row => row.active ? 'Ativo' : 'Inativo' },
-          { label: 'Acoes', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
+          { label: 'Ações', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
         ],
         rows
       }));
@@ -81,7 +80,7 @@ export function RegistrationsPage() {
     function openModal(row = null) {
       const modal = createModal(row ? 'Editar local' : 'Cadastrar local', `
         <form class="grid-form registration-form">
-          <label>Codigo do local<input name="code" required /></label>
+          <label>Código do local<input name="code" required /></label>
           <label>Nome do local<input name="name" required /></label>
           <div class="form-actions">
             <button class="primary-button" type="submit">Salvar</button>
@@ -109,7 +108,7 @@ export function RegistrationsPage() {
 
   async function renderMachines() {
     await refreshLookups();
-    target.innerHTML = sectionShell('Maquinas', 'Cadastrar maquina', 'Buscar por maquina ou local');
+    target.innerHTML = sectionShell('Máquinas', 'Cadastrar máquina', 'Buscar por máquina ou local');
     const search = target.querySelector('.search');
     const tableTarget = target.querySelector('.table-target');
     let rows = [];
@@ -120,10 +119,10 @@ export function RegistrationsPage() {
       tableTarget.innerHTML = '';
       tableTarget.appendChild(DataTable({
         columns: [
-          { label: 'Nome da maquina', key: 'name' },
+          { label: 'Nome da máquina', key: 'name' },
           { label: 'Local', key: 'location_name' },
           { label: 'Status', render: row => row.active ? 'Ativo' : 'Inativo' },
-          { label: 'Acoes', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
+          { label: 'Ações', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
         ],
         rows
       }));
@@ -134,9 +133,9 @@ export function RegistrationsPage() {
     }
 
     function openModal(row = null) {
-      const modal = createModal(row ? 'Editar maquina' : 'Cadastrar maquina', `
+      const modal = createModal(row ? 'Editar máquina' : 'Cadastrar máquina', `
         <form class="grid-form registration-form">
-          <label>Nome da maquina<input name="name" required /></label>
+          <label>Nome da máquina<input name="name" required /></label>
           <label>Local<select name="locationId" required><option value="">Selecione</option>${locationOptions(row?.location_id)}</select></label>
           <div class="form-actions">
             <button class="primary-button" type="submit">Salvar</button>
@@ -167,7 +166,7 @@ export function RegistrationsPage() {
 
   async function renderMaterials() {
     await refreshLookups();
-    target.innerHTML = sectionShell('Materiais', 'Cadastrar material', 'Buscar por material ou codigo');
+    target.innerHTML = sectionShell('Materiais', 'Cadastrar material', 'Buscar por material ou código');
     const search = target.querySelector('.search');
     const tableTarget = target.querySelector('.table-target');
     let rows = [];
@@ -179,34 +178,36 @@ export function RegistrationsPage() {
       tableTarget.appendChild(DataTable({
         columns: [
           { label: 'Nome', key: 'name' },
-          { label: 'Codigos', render: row => formatCodes(row.codes) },
+          { label: 'Códigos', render: row => formatCodes(row.codes) },
           { label: 'Unidade principal', key: 'primary_unit' },
-          { label: 'Unidade secundaria', key: 'secondary_unit' },
+          { label: 'Unidade secundária', key: 'secondary_unit' },
           { label: 'Fator', key: 'primary_to_secondary_factor' },
+          { label: 'Matéria-prima inicial', render: row => row.is_initial_raw_material ? 'Sim' : 'Não' },
           { label: 'Materiais de origem', render: row => formatInputs(row.input_materials) },
           { label: 'Status', render: row => row.active ? 'Ativo' : 'Inativo' },
-          { label: 'Acoes', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
+          { label: 'Ações', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
         ],
         rows
       }));
     }
 
     function openModal(row = null) {
-      const selectedInputs = (row?.input_materials || []).map(item => item.id);
+      const selectedInputs = new Map((row?.input_materials || []).map(item => [String(item.id), item.qtyPerOutput || 1]));
       const codeInput = CodeChipsInput({ initialCodes: row?.codes || [] });
-      const materialSelector = MultiMaterialSelector({
-        materials,
-        selectedIds: selectedInputs,
-        excludeId: row?.id || null
-      });
       const modal = createModal(row ? 'Editar material' : 'Cadastrar material', `
         <form class="grid-form registration-form material-form">
           <label>Nome do material<input name="name" required /></label>
           <label>Unidade principal<select name="primaryUnit" required><option value="un">un</option><option value="kg">kg</option></select></label>
-          <label>Unidade secundaria<select name="secondaryUnit" required><option value="un">un</option><option value="kg">kg</option></select></label>
+          <label>Unidade secundária<select name="secondaryUnit" required><option value="un">un</option><option value="kg">kg</option></select></label>
           <label>Fator fixo<input name="primaryToSecondaryFactor" type="number" step="0.001" min="0.001" required /></label>
-          <label class="wide-field">Codigos atrelados<div class="codes-target"></div></label>
-          <label class="wide-field">Materiais usados para produzir este material<div class="materials-target"></div></label>
+          <label class="checkbox-line wide-field"><input name="isInitialRawMaterial" type="checkbox" /> Matéria-prima inicial</label>
+          <label class="wide-field">Códigos atrelados<div class="codes-target"></div></label>
+          <div class="wide-field consumed-selector-block">
+            <label>Materiais usados para produzir este material</label>
+            <div class="material-inputs-target"></div>
+            <h3>Materiais consumidos</h3>
+            <div class="consumed-materials-target"></div>
+          </div>
           <div class="form-actions">
             <button class="primary-button" type="submit">Salvar</button>
             <button class="secondary-button close-modal" type="button">Cancelar</button>
@@ -215,11 +216,14 @@ export function RegistrationsPage() {
       `);
       const form = modal.querySelector('form');
       modal.querySelector('.codes-target').appendChild(codeInput.element);
-      modal.querySelector('.materials-target').appendChild(materialSelector.element);
+      renderMaterialInputs(modal, selectedInputs, row?.id || null);
       form.elements.name.value = row?.name || '';
       form.elements.primaryUnit.value = row?.primary_unit || 'un';
       form.elements.secondaryUnit.value = row?.secondary_unit || 'kg';
       form.elements.primaryToSecondaryFactor.value = row?.primary_to_secondary_factor || '';
+      form.elements.isInitialRawMaterial.checked = row?.is_initial_raw_material === true;
+      updateConsumedVisibility(modal);
+      form.elements.isInitialRawMaterial.addEventListener('change', () => updateConsumedVisibility(modal));
       form.addEventListener('submit', async event => {
         event.preventDefault();
         const body = {
@@ -228,7 +232,8 @@ export function RegistrationsPage() {
           primaryUnit: form.elements.primaryUnit.value,
           secondaryUnit: form.elements.secondaryUnit.value,
           primaryToSecondaryFactor: Number(form.elements.primaryToSecondaryFactor.value),
-          inputMaterialIds: materialSelector.getSelectedIds(),
+          isInitialRawMaterial: form.elements.isInitialRawMaterial.checked,
+          inputMaterials: form.elements.isInitialRawMaterial.checked ? [] : getMaterialInputs(modal),
           active: true
         };
         await api(row ? `/materials/${row.id}` : '/materials', { method: row ? 'PUT' : 'POST', body });
@@ -296,7 +301,73 @@ export function RegistrationsPage() {
   }
 
   function formatInputs(inputs = []) {
-    return Array.isArray(inputs) ? inputs.map(input => input.name).join(', ') : '';
+    return Array.isArray(inputs) ? inputs.map(input => `${input.name} (${input.qtyPerOutput || 1})`).join(', ') : '';
+  }
+
+  function renderMaterialInputs(modal, selectedInputs, excludeId) {
+    const target = modal.querySelector('.material-inputs-target');
+    const consumedTarget = modal.querySelector('.consumed-materials-target');
+    const available = materials.filter(material => String(material.id) !== String(excludeId || ''));
+    target.className = 'material-inputs-target material-selector-list';
+    target.innerHTML = available.length
+      ? available.map(material => {
+          const selected = selectedInputs.has(String(material.id));
+          return `
+            <label class="checkbox-line material-option">
+              <input type="checkbox" value="${material.id}" ${selected ? 'checked' : ''} />
+              ${material.name}
+            </label>
+          `;
+        }).join('')
+      : '<div class="empty-state compact">Nenhum material cadastrado.</div>';
+    target.addEventListener('change', event => {
+      if (event.target.type !== 'checkbox') return;
+      if (event.target.checked && !selectedInputs.has(String(event.target.value))) selectedInputs.set(String(event.target.value), 1);
+      if (!event.target.checked) selectedInputs.delete(String(event.target.value));
+      renderConsumedRows(consumedTarget, selectedInputs);
+    });
+    consumedTarget.addEventListener('input', event => {
+      if (!event.target.classList.contains('usage-qty')) return;
+      selectedInputs.set(String(event.target.dataset.materialId), Number(event.target.value || 1));
+    });
+    renderConsumedRows(consumedTarget, selectedInputs);
+  }
+
+  function getMaterialInputs(modal) {
+    return [...modal.querySelectorAll('.consumed-material-row')]
+      .map(row => ({
+        inputMaterialId: Number(row.dataset.materialId),
+        qtyPerOutput: Number(row.querySelector('.usage-qty').value || 1)
+      }));
+  }
+
+  function renderConsumedRows(target, selectedInputs) {
+    const selectedRows = [...selectedInputs.entries()]
+      .map(([id, qty]) => ({ material: materials.find(item => String(item.id) === id), qty }))
+      .filter(row => row.material);
+    target.innerHTML = selectedRows.length
+      ? `
+        <div class="consumed-material-header">
+          <strong>Material consumido</strong>
+          <strong>Quantidade utilizada</strong>
+        </div>
+        ${selectedRows.map(row => `
+          <div class="consumed-material-row" data-material-id="${row.material.id}">
+            <span>${row.material.name}</span>
+            <input class="usage-qty" data-material-id="${row.material.id}" type="number" step="0.001" min="0.001" value="${row.qty || 1}" />
+          </div>
+        `).join('')}
+      `
+      : '<div class="empty-state compact">Nenhum material consumido selecionado.</div>';
+  }
+
+  function updateConsumedVisibility(modal) {
+    const disabled = modal.querySelector('[name="isInitialRawMaterial"]').checked;
+    const block = modal.querySelector('.consumed-selector-block');
+    block.classList.toggle('muted-block', disabled);
+    block.querySelectorAll('input').forEach(input => {
+      input.disabled = disabled;
+    });
   }
 
   render().catch(toast);

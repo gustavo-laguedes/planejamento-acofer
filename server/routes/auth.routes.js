@@ -14,7 +14,7 @@ router.post('/login', async (req, res) => {
     : password === plainPassword;
 
   if (!isValid) {
-    return res.status(401).json({ error: 'Senha invalida.' });
+    return res.status(401).json({ error: 'Senha inválida.' });
   }
 
   const ttlHours = Number(process.env.SESSION_TTL_HOURS || 12);

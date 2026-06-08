@@ -36,7 +36,7 @@ export function AppShell() {
     main.appendChild(pages[activeTab]());
   }
 
-  shell.appendChild(Topbar({ onImported: () => activeTab === 'stock' && renderPage() }));
+  shell.appendChild(Topbar());
   shell.appendChild(Tabs(activeTab, tab => {
     activeTab = tab;
     renderPage();

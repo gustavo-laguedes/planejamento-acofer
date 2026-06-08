@@ -1,83 +1,254 @@
 import { api } from '../shared/api.js';
 import { CalendarTimeline } from '../shared/CalendarTimeline.js';
+import { DataTable } from '../shared/DataTable.js';
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatDate(value) {
+  return value ? new Date(value).toLocaleString('pt-BR') : '';
+}
+
+function chips(values = [], emptyText = 'Sem informação') {
+  const items = values.filter(Boolean);
+  return items.length
+    ? items.map(value => `<span class="code-pill">${value}</span>`).join('')
+    : `<span class="muted-text">${emptyText}</span>`;
+}
+
+function renderTree(node) {
+  if (!node) return '';
+  return `
+    <li>
+      <strong>${node.materialName}</strong>
+      <span>${node.requiredQty} ${node.unit || ''} | estoque ${node.stockQty} | produzir ${node.produceQty} | ${node.status}</span>
+      ${node.children?.length ? `<ul>${node.children.map(renderTree).join('')}</ul>` : ''}
+    </li>
+  `;
+}
 
 export function PlanningPage() {
   const page = document.createElement('section');
-  page.className = 'stack';
+  page.className = 'stack planning-page';
   page.innerHTML = `
     <div class="page-header">
       <div>
         <h1>Planejamento</h1>
-        <p>Simule prazos a partir da matriz de produtividade e salve a programacao.</p>
+        <p>Simule prazos a partir da engenharia cadastrada, estoque e matriz de produtividade.</p>
       </div>
     </div>
     <div class="panel">
       <form class="grid-form planning-form">
-        <label>Material<input name="materialName" required /></label>
-        <label>Codigo<input name="materialCode" /></label>
+        <fieldset class="date-mode-field">
+          <legend>Tipo de data</legend>
+          <label class="choice-pill"><input name="dateModeChoice" type="checkbox" value="start" checked /> Data inicial</label>
+          <label class="choice-pill"><input name="dateModeChoice" type="checkbox" value="end" /> Data final</label>
+        </fieldset>
+        <label>Data<input name="selectedDate" type="date" required /></label>
+        <label>Material<select name="materialId" required></select></label>
+        <div class="readonly-field">
+          <span>Código</span>
+          <div class="material-codes readonly-chip-list"></div>
+        </div>
+        <div class="readonly-field">
+          <span>Unidade</span>
+          <div class="material-unit readonly-chip-list"></div>
+        </div>
         <label>Quantidade<input name="plannedQty" type="number" step="0.001" required /></label>
-        <label>Unidade<input name="plannedUnit" value="un" /></label>
-        <label>Data inicial<input name="startDate" type="date" required /></label>
-        <label>Maquina<input name="machineName" required /></label>
-        <label>Pessoas<input name="peopleCount" type="number" min="1" required /></label>
+        <label>Máquina<select name="machineName" required></select></label>
+        <label>Pessoas<select name="peopleCount" required></select></label>
         <label>Horas/dia<input name="hoursPerDay" type="number" step="0.5" value="8" /></label>
         <div class="form-actions">
-          <button class="primary-button" name="simulate" type="submit">Simular planejamento</button>
-          <button class="secondary-button" name="save" type="button" disabled>Salvar programacao</button>
-          <button class="secondary-button" name="pdf" type="button" disabled>Gerar PDF</button>
+          <button class="primary-button" name="simulate" type="submit">Simular</button>
+          <button class="secondary-button" name="save" type="button" disabled>Salvar planejamento</button>
         </div>
       </form>
     </div>
     <div class="summary-grid"></div>
+    <div class="panel tree-panel" hidden>
+      <h2>Árvore produtiva</h2>
+      <ul class="production-tree"></ul>
+    </div>
     <div class="panel">
       <h2>Linha do tempo</h2>
       <div class="timeline-target"></div>
+    </div>
+    <div class="panel planning-history-panel">
+      <div class="section-heading">
+        <h2>Histórico de Planejamentos</h2>
+        <button class="secondary-button refresh-history" type="button">Atualizar</button>
+      </div>
+      <div class="planning-history-target"></div>
     </div>
   `;
 
   const form = page.querySelector('form');
   const saveButton = page.querySelector('[name="save"]');
-  const pdfButton = page.querySelector('[name="pdf"]');
   const summaryGrid = page.querySelector('.summary-grid');
   const timelineTarget = page.querySelector('.timeline-target');
+  const treePanel = page.querySelector('.tree-panel');
+  const treeTarget = page.querySelector('.production-tree');
+  const historyTarget = page.querySelector('.planning-history-target');
+  let materials = [];
+  let matrix = [];
   let lastPayload = null;
-  let savedPlan = null;
 
   timelineTarget.appendChild(CalendarTimeline([]));
+  form.elements.selectedDate.value = today();
+
+  function selectedMaterial() {
+    return materials.find(material => String(material.id) === String(form.elements.materialId.value));
+  }
+
+  function currentDateMode() {
+    return page.querySelector('[name="dateModeChoice"][value="end"]').checked ? 'end' : 'start';
+  }
+
+  function matchingMatrix(material) {
+    const codes = new Set((material?.codes || []).map(code => String(code).toLowerCase()));
+    return matrix.filter(row => row.material_name === material?.name || (row.material_codes || []).some(code => codes.has(String(code).toLowerCase())));
+  }
+
+  function updateMaterialFields() {
+    const material = selectedMaterial();
+    page.querySelector('.material-codes').innerHTML = chips(material?.codes || [], 'Sem códigos');
+    page.querySelector('.material-unit').innerHTML = chips([material?.primary_unit]);
+    const rows = matchingMatrix(material);
+    const machines = [...new Set(rows.map(row => row.machine_name).filter(Boolean))];
+    form.elements.machineName.innerHTML = machines.map(machine => `<option value="${machine}">${machine}</option>`).join('');
+    form.elements.machineName.disabled = machines.length === 1;
+    form.elements.machineName.dataset.locked = machines.length === 1 ? 'true' : 'false';
+    updatePeopleOptions();
+  }
+
+  function updatePeopleOptions() {
+    const rows = matchingMatrix(selectedMaterial()).filter(row => !form.elements.machineName.value || row.machine_name === form.elements.machineName.value);
+    const people = [...new Set(rows.map(row => row.people_count).filter(Boolean))];
+    form.elements.peopleCount.innerHTML = people.map(value => `<option value="${value}">${value}</option>`).join('');
+    form.elements.peopleCount.disabled = people.length === 1;
+    form.elements.peopleCount.dataset.locked = people.length === 1 ? 'true' : 'false';
+  }
 
   function payload() {
-    const data = Object.fromEntries(new FormData(form));
-    data.peopleCount = Number(data.peopleCount);
-    data.plannedQty = Number(data.plannedQty);
-    data.hoursPerDay = Number(data.hoursPerDay || 8);
-    return data;
+    const material = selectedMaterial();
+    return {
+      dateMode: currentDateMode(),
+      selectedDate: form.elements.selectedDate.value,
+      startDate: form.elements.selectedDate.value,
+      materialId: Number(form.elements.materialId.value),
+      materialCode: material?.codes?.[0] || '',
+      plannedQty: Number(form.elements.plannedQty.value),
+      plannedUnit: material?.primary_unit || 'un',
+      machineName: form.elements.machineName.value,
+      peopleCount: Number(form.elements.peopleCount.value),
+      hoursPerDay: Number(form.elements.hoursPerDay.value || 8)
+    };
   }
 
   function renderSimulation(result) {
     const cards = [
+      ['Código previsto', result.code],
       ['Material', result.summary.materialName],
-      ['Quantidade total', `${result.summary.plannedQty} ${result.summary.plannedUnit}`],
-      ['Maquina', result.summary.machineName],
-      ['Pessoas', result.summary.peopleCount],
-      ['Produtividade usada', result.summary.productivityUsed],
-      ['Dias necessarios', result.summary.daysNeeded],
-      ['Data inicial', result.summary.startDate],
-      ['Data final estimada', result.summary.endDate]
+      ['Quantidade', `${result.summary.plannedQty} ${result.summary.plannedUnit}`],
+      ['Período', `${result.summary.startDate} até ${result.summary.endDate}`],
+      ['Operações', result.operations.length],
+      ['Dias', result.summary.daysNeeded],
+      ['Máquina inicial', result.summary.machineName || '-'],
+      ['Pessoas', result.summary.peopleCount || '-']
     ];
     summaryGrid.innerHTML = cards.map(([label, value]) => `<article class="metric-card"><span>${label}</span><strong>${value}</strong></article>`).join('');
+    treePanel.hidden = false;
+    treeTarget.innerHTML = renderTree(result.tree);
     timelineTarget.innerHTML = '';
     timelineTarget.appendChild(CalendarTimeline(result.days));
   }
+
+  async function loadHistory() {
+    const rows = await api('/planning/plans');
+    historyTarget.innerHTML = '';
+    historyTarget.appendChild(DataTable({
+      columns: [
+        { label: 'Código do planejamento', key: 'code' },
+        { label: 'Material', key: 'material_name' },
+        { label: 'Quantidade', render: row => `${row.planned_qty} ${row.planned_unit}` },
+        { label: 'Data de criação', render: row => formatDate(row.created_at) },
+        { label: 'Status', key: 'status' },
+        { label: 'Ações', render: row => `
+          <button class="link-button" data-view="${row.id}">Visualizar</button>
+          <button class="link-button" data-pdf="${row.id}">Gerar PDF</button>
+          <button class="link-button danger" data-cancel="${row.id}">Cancelar</button>
+        ` }
+      ],
+      rows
+    }));
+  }
+
+  async function downloadPdf(id) {
+    const blob = await api(`/planning/plans/${id}/pdf`);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `planejamento-${id}.pdf`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function cancelPlan(id) {
+    if (!confirm('Confirma o cancelamento deste planejamento?')) return;
+    await api(`/planning/plans/${id}/cancel`, { method: 'POST', body: { reason: 'Cancelado pelo usuário' } });
+    await loadHistory();
+  }
+
+  async function viewPlan(id) {
+    const detail = await api(`/planning/plans/${id}`);
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-header">
+          <h2>${detail.plan.code || detail.plan.id}</h2>
+          <button class="link-button close-modal" type="button">Fechar</button>
+        </div>
+        <pre class="plan-json">${JSON.stringify({ arvore: detail.tree, operacoes: detail.operations }, null, 2)}</pre>
+      </div>
+    `;
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
+    });
+    page.appendChild(backdrop);
+  }
+
+  async function loadLookups() {
+    [materials, matrix] = await Promise.all([api('/materials'), api('/productivity')]);
+    form.elements.materialId.innerHTML = materials.map(material => `<option value="${material.id}">${material.name}</option>`).join('');
+    updateMaterialFields();
+  }
+
+  page.querySelectorAll('[name="dateModeChoice"]').forEach(input => {
+    input.addEventListener('change', () => {
+      page.querySelectorAll('[name="dateModeChoice"]').forEach(option => {
+        option.checked = option === input;
+      });
+    });
+  });
+  form.elements.materialId.addEventListener('change', updateMaterialFields);
+  form.elements.machineName.addEventListener('change', updatePeopleOptions);
+  page.querySelector('.refresh-history').addEventListener('click', () => loadHistory().catch(error => window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message }))));
+  historyTarget.addEventListener('click', async event => {
+    if (event.target.dataset.pdf) return downloadPdf(event.target.dataset.pdf);
+    if (event.target.dataset.cancel) return cancelPlan(event.target.dataset.cancel);
+    if (event.target.dataset.view) return viewPlan(event.target.dataset.view);
+  });
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
     try {
       lastPayload = payload();
       const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
+      if (result.summary.hasPastStart && !confirm(`ATENÇÃO\n\nO planejamento exige início em ${result.summary.startDate}.\nA data já passou.\n\nDeseja continuar mesmo assim?`)) return;
       renderSimulation(result);
       saveButton.disabled = false;
-      savedPlan = null;
-      pdfButton.disabled = true;
     } catch (error) {
       window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message }));
     }
@@ -85,24 +256,15 @@ export function PlanningPage() {
 
   saveButton.addEventListener('click', async () => {
     try {
-      savedPlan = await api('/planning/plans', { method: 'POST', body: lastPayload || payload() });
-      pdfButton.disabled = false;
-      window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: 'Programacao salva.' }));
+      const saved = await api('/planning/plans', { method: 'POST', body: lastPayload || payload() });
+      saveButton.disabled = true;
+      await loadHistory();
+      window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Planejamento ${saved.plan.code || saved.plan.id} salvo.` }));
     } catch (error) {
       window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message }));
     }
   });
 
-  pdfButton.addEventListener('click', async () => {
-    if (!savedPlan?.plan?.id) return;
-    const blob = await api(`/planning/plans/${savedPlan.plan.id}/pdf`);
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `programacao-${savedPlan.plan.id}.pdf`;
-    link.click();
-    URL.revokeObjectURL(url);
-  });
-
+  Promise.all([loadLookups(), loadHistory()]).catch(error => window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message })));
   return page;
 }

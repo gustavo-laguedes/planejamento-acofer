@@ -6,10 +6,10 @@ export function LoginPage() {
   page.innerHTML = `
     <form class="login-card">
       <div class="login-logo">
-        <img src="/assets/logo-acofer.png" alt="Aco-Fer" onerror="this.style.display='none'; this.nextElementSibling.style.display='grid'" />
-        <span class="logo-fallback large">Aco-Fer</span>
+        <img src="/assets/logo-acofer.png" alt="Aço-Fer" onerror="this.style.display='none'; this.nextElementSibling.style.display='grid'" />
+        <span class="logo-fallback large">Aço-Fer</span>
       </div>
-      <h1>Planejamento Aco-Fer</h1>
+      <h1>Planejamento Aço-Fer</h1>
       <label>
         Senha
         <input type="password" name="password" autocomplete="current-password" required autofocus />

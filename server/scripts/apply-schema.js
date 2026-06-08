@@ -7,7 +7,15 @@ import postgres from 'postgres';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const databaseDir = path.resolve(__dirname, '../../database');
-const files = ['001_schema.sql', '004_productivity_codes_seconds.sql', '005_registrations.sql', '006_stock_location_adjustments.sql', '002_indexes.sql', '003_seed_optional.sql'];
+const files = [
+  '001_schema.sql',
+  '004_productivity_codes_seconds.sql',
+  '005_registrations.sql',
+  '006_stock_location_adjustments.sql',
+  '007_launches_planning_tree.sql',
+  '002_indexes.sql',
+  '003_seed_optional.sql'
+];
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL nao configurada. Preencha .env ou defina a variavel no ambiente.');
