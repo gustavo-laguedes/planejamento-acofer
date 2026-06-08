@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS production_launches (
 
 ALTER TABLE production_plans
   ADD COLUMN IF NOT EXISTS code TEXT,
+  ADD COLUMN IF NOT EXISTS hours_per_day NUMERIC NOT NULL DEFAULT 8 CHECK (hours_per_day > 0),
   ADD COLUMN IF NOT EXISTS date_mode TEXT NOT NULL DEFAULT 'start',
   ADD COLUMN IF NOT EXISTS schedule_tree JSONB NOT NULL DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS operations JSONB NOT NULL DEFAULT '[]'::jsonb,

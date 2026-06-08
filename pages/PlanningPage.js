@@ -16,6 +16,26 @@ function formatDate(value) {
   return value ? new Date(value).toLocaleString('pt-BR') : '';
 }
 
+function parsePtBrDecimal(value, fallback = NaN) {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) return fallback;
+  const normalizedValue = rawValue.includes(',')
+    ? rawValue.replace(/\./g, '').replace(',', '.')
+    : rawValue;
+  const number = Number(normalizedValue);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function formatPtBrDecimal(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  const hasDecimals = !Number.isInteger(number);
+  return number.toLocaleString('pt-BR', {
+    minimumFractionDigits: hasDecimals ? 2 : 0,
+    maximumFractionDigits: 3
+  });
+}
+
 function chips(values = [], emptyText = 'Sem informação') {
   const items = values.filter(Boolean);
   return items.length
@@ -108,7 +128,7 @@ export function PlanningPage() {
           <label>Quantidade<input name="plannedQty" type="number" step="0.001" required /></label>
           <label>Máquina<select name="machineName" required></select></label>
           <label>Pessoas<select name="peopleCount" required></select></label>
-          <label>Horas/dia<input name="hoursPerDay" type="number" step="0.5" value="8" /></label>
+          <label>Horas/dia<input name="hoursPerDay" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="8" /></label>
           <div class="form-actions">
             <button class="primary-button" name="simulate" type="submit">Simular</button>
             <button class="secondary-button" name="save" type="button" disabled>Salvar planejamento</button>
@@ -158,6 +178,7 @@ export function PlanningPage() {
 
     function payload() {
       const material = selectedMaterial(form);
+      const hoursPerDay = parsePtBrDecimal(form.elements.hoursPerDay.value, 8);
       return {
         dateMode: currentDateMode(form),
         selectedDate: form.elements.selectedDate.value,
@@ -168,7 +189,7 @@ export function PlanningPage() {
         plannedUnit: material?.primary_unit || 'un',
         machineName: form.elements.machineName.value,
         peopleCount: Number(form.elements.peopleCount.value),
-        hoursPerDay: Number(form.elements.hoursPerDay.value || 8)
+        hoursPerDay
       };
     }
 
@@ -180,6 +201,7 @@ export function PlanningPage() {
         ['Período', `${result.summary.startDate} até ${result.summary.endDate}`],
         ['Operações', result.operations.length],
         ['Dias', result.summary.daysNeeded],
+        ['Horas/dia', formatPtBrDecimal(result.summary.hoursPerDay)],
         ['Máquina inicial', result.summary.machineName || '-'],
         ['Pessoas', result.summary.peopleCount || '-']
       ];
@@ -199,11 +221,20 @@ export function PlanningPage() {
     });
     form.elements.materialId.addEventListener('change', updateMaterialFields);
     form.elements.machineName.addEventListener('change', updatePeopleOptions);
+    form.elements.hoursPerDay.addEventListener('input', () => form.elements.hoursPerDay.setCustomValidity(''));
     updateMaterialFields();
 
     form.addEventListener('submit', async event => {
       event.preventDefault();
       try {
+        const hoursPerDay = parsePtBrDecimal(form.elements.hoursPerDay.value, 8);
+        form.elements.hoursPerDay.setCustomValidity('');
+        if (!Number.isFinite(hoursPerDay) || hoursPerDay <= 0) {
+          form.elements.hoursPerDay.setCustomValidity('Informe as horas por dia com valor maior que zero.');
+          form.reportValidity();
+          return;
+        }
+        form.elements.hoursPerDay.value = formatPtBrDecimal(hoursPerDay);
         lastPayload = payload();
         const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
         if (result.summary.hasPastStart && !confirm(`ATENÇÃO\n\nO planejamento exige início em ${result.summary.startDate}.\nA data já passou.\n\nDeseja continuar mesmo assim?`)) return;
@@ -245,6 +276,7 @@ export function PlanningPage() {
           { label: 'Código do planejamento', key: 'code' },
           { label: 'Material', key: 'material_name' },
           { label: 'Quantidade', render: row => `${row.planned_qty} ${row.planned_unit}` },
+          { label: 'Horas/dia', render: row => formatPtBrDecimal(row.hours_per_day), sortValue: row => Number(row.hours_per_day || 0) },
           { label: 'Data de criação', render: row => formatDate(row.created_at), sortValue: row => row.created_at },
           { label: 'Status', key: 'status' },
           { label: 'Ações', render: row => `
@@ -283,7 +315,7 @@ export function PlanningPage() {
             <h2>${detail.plan.code || detail.plan.id}</h2>
             <button class="link-button close-modal" type="button">Fechar</button>
           </div>
-          <pre class="plan-json">${JSON.stringify({ arvore: detail.tree, operacoes: detail.operations }, null, 2)}</pre>
+          <pre class="plan-json">${JSON.stringify({ horasPorDia: formatPtBrDecimal(detail.plan.hours_per_day), arvore: detail.tree, operacoes: detail.operations }, null, 2)}</pre>
         </div>
       `;
       backdrop.addEventListener('click', event => {

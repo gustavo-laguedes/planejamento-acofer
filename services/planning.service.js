@@ -9,7 +9,11 @@ function dateKey(date) {
 }
 
 function toNumber(value) {
-  const number = Number(value || 0);
+  const rawValue = String(value ?? '').trim();
+  const normalizedValue = rawValue.includes(',')
+    ? rawValue.replace(/\./g, '').replace(',', '.')
+    : rawValue;
+  const number = Number(normalizedValue || 0);
   return Number.isFinite(number) ? number : 0;
 }
 
@@ -106,7 +110,8 @@ function flattenOperations(tree, operations = []) {
 }
 
 function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay }) {
-  const dailyMinutes = Math.max(toNumber(hoursPerDay || 8) * 60, 1);
+  const normalizedHoursPerDay = Math.max(toNumber(hoursPerDay || 8), 1 / 60);
+  const dailyMinutes = normalizedHoursPerDay * 60;
   const scheduled = [];
   const forward = dateMode !== 'end';
   let cursor = selectedDate;
@@ -186,6 +191,7 @@ export function buildPlan(payload, context) {
     hoursPerDay: payload.hoursPerDay
   });
   const days = buildDays(operations, material.primary_unit);
+  const hoursPerDay = Math.max(toNumber(payload.hoursPerDay || 8), 1 / 60);
   const startDate = operations.length ? operations[0].startDate : payload.selectedDate || payload.startDate;
   const endDate = operations.length ? operations[operations.length - 1].endDate : payload.selectedDate || payload.startDate;
 
@@ -200,6 +206,7 @@ export function buildPlan(payload, context) {
       machineName: operations[0]?.machineName || payload.machineName || null,
       peopleCount: operations[0]?.peopleCount || Number(payload.peopleCount || 0) || null,
       dateMode: payload.dateMode || 'start',
+      hoursPerDay,
       startDate,
       endDate,
       daysNeeded: days.length,

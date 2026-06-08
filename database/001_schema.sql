@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS production_plans (
   people_count INTEGER NOT NULL,
   planned_qty NUMERIC NOT NULL,
   planned_unit TEXT NOT NULL DEFAULT 'un',
+  hours_per_day NUMERIC NOT NULL DEFAULT 8 CHECK (hours_per_day > 0),
   start_date DATE NOT NULL,
   end_date DATE NOT NULL,
   status TEXT NOT NULL DEFAULT 'planned',

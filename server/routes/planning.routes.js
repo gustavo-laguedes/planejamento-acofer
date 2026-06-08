@@ -54,12 +54,12 @@ router.post('/plans', async (req, res, next) => {
       const [created] = await tx`
         INSERT INTO production_plans (
           code, material_name, material_code, machine_name, people_count, planned_qty,
-          planned_unit, start_date, end_date, status, date_mode, schedule_tree, operations, user_id
+          planned_unit, hours_per_day, start_date, end_date, status, date_mode, schedule_tree, operations, user_id
         )
         VALUES (
           ${plan.code}, ${plan.summary.materialName}, ${plan.summary.materialCode}, ${plan.summary.machineName || ''},
           ${Number(plan.summary.peopleCount || 0)}, ${plan.summary.plannedQty}, ${plan.summary.plannedUnit},
-          ${plan.summary.startDate}, ${plan.summary.endDate}, 'planned', ${plan.summary.dateMode},
+          ${plan.summary.hoursPerDay}, ${plan.summary.startDate}, ${plan.summary.endDate}, 'planned', ${plan.summary.dateMode},
           ${JSON.stringify(plan.tree)}::jsonb, ${JSON.stringify(plan.operations)}::jsonb, NULL
         )
         RETURNING *
@@ -82,7 +82,7 @@ router.get('/plans', async (req, res, next) => {
   try {
     const db = requireDb();
     const rows = await db`
-      SELECT id, code, material_name, material_code, planned_qty, planned_unit, start_date, end_date, status, created_at
+      SELECT id, code, material_name, material_code, planned_qty, planned_unit, hours_per_day, start_date, end_date, status, created_at
       FROM production_plans
       ORDER BY created_at DESC
       LIMIT 100
