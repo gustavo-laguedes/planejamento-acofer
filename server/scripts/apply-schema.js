@@ -13,6 +13,7 @@ const files = [
   '005_registrations.sql',
   '006_stock_location_adjustments.sql',
   '007_launches_planning_tree.sql',
+  '008_production_models.sql',
   '002_indexes.sql',
   '003_seed_optional.sql'
 ];
