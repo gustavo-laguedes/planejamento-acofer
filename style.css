@@ -1347,24 +1347,26 @@ thead tr:nth-child(2) th {
 
 .gantt-bar {
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: var(--event-left, 8px);
+  width: var(--event-width, calc(100% - 16px));
   top: var(--event-top);
-  min-height: var(--event-height);
+  height: var(--event-height);
+  min-height: 0;
   margin: 0;
   display: grid;
   gap: 3px;
   align-content: center;
   border: 0;
-  border-left: 5px solid var(--accent);
+  border-left: 5px solid var(--event-border, var(--accent));
   border-radius: 6px;
-  background: #0f4c5c;
-  color: #ffffff;
-  padding: 8px 12px;
+  background: var(--event-bg, #0f4c5c);
+  color: var(--event-text, #ffffff);
+  padding: 6px 10px;
   text-align: left;
   cursor: pointer;
   box-shadow: 0 10px 24px rgba(15, 76, 92, 0.22);
   z-index: 4;
+  overflow: hidden;
 }
 
 .gantt-lunch-band {

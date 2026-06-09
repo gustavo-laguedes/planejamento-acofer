@@ -51,6 +51,7 @@ function minutesToTime(minutes) {
 }
 
 function formatHour(minutes) {
+  if (minutes % 60 === 0) return `${String(Math.floor(minutes / 60)).padStart(2, '0')}h`;
   return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 }
 
@@ -130,24 +131,90 @@ function parseLunchMinutes(value) {
   return Math.max(Number.isFinite(hours) ? hours * 60 : 0, 0);
 }
 
-function clampMinutes(minutes, shiftStart, shiftEnd) {
-  return Math.max(shiftStart, Math.min(minutes, shiftEnd));
+function clampMinutes(minutes, start, end) {
+  return Math.max(start, Math.min(minutes, end));
 }
 
-function segmentStyle(segment, shiftStart, shiftEnd, hourHeight) {
-  const start = clampMinutes(parseTime(segment.startTime, minutesToTime(shiftStart)), shiftStart, shiftEnd);
-  const end = clampMinutes(parseTime(segment.endTime, minutesToTime(shiftEnd)), shiftStart, shiftEnd);
-  const top = ((start - shiftStart) / 60) * hourHeight;
-  const height = Math.max(((Math.max(end - start, 1)) / 60) * hourHeight, 62);
-  return `--event-top: ${top}px; --event-height: ${height}px;`;
+const MATERIAL_COLORS = [
+  { bg: '#0f4c5c', border: '#1f7a8c', text: '#ffffff' },
+  { bg: '#7a3e2f', border: '#b85743', text: '#ffffff' },
+  { bg: '#2f5d50', border: '#4c9a82', text: '#ffffff' },
+  { bg: '#5b4b8a', border: '#8270c8', text: '#ffffff' },
+  { bg: '#7b5d1e', border: '#c18a25', text: '#ffffff' },
+  { bg: '#24547a', border: '#3f88c5', text: '#ffffff' },
+  { bg: '#6f3d66', border: '#aa63a0', text: '#ffffff' },
+  { bg: '#4f5f2f', border: '#83994a', text: '#ffffff' },
+  { bg: '#344054', border: '#667085', text: '#ffffff' },
+  { bg: '#6941c6', border: '#9e77ed', text: '#ffffff' },
+  { bg: '#175cd3', border: '#528bff', text: '#ffffff' },
+  { bg: '#a15c07', border: '#dc8a1f', text: '#ffffff' }
+];
+
+function segmentStyle(segment, dayStart, dayEnd, hourHeight) {
+  const start = clampMinutes(parseTime(segment.startTime, minutesToTime(dayStart)), dayStart, dayEnd);
+  const end = clampMinutes(parseTime(segment.endTime, minutesToTime(dayEnd)), dayStart, dayEnd);
+  const top = ((start - dayStart) / 60) * hourHeight;
+  const rawHeight = ((Math.max(end - start, 1)) / 60) * hourHeight;
+  const height = Math.max(rawHeight - 4, 1);
+  return `--event-top: ${top + 2}px; --event-height: ${height}px;`;
 }
 
-function lunchStyle(lunchStart, lunchEnd, shiftStart, shiftEnd, hourHeight) {
-  const start = clampMinutes(lunchStart, shiftStart, shiftEnd);
-  const end = clampMinutes(lunchEnd, shiftStart, shiftEnd);
-  const top = ((start - shiftStart) / 60) * hourHeight;
+function laneStyle(lane, laneCount) {
+  const width = 100 / Math.max(laneCount, 1);
+  return `--event-left: calc(8px + ${lane * width}%); --event-width: calc(${width}% - 16px);`;
+}
+
+function colorStyle(color) {
+  return `--event-bg: ${color.bg}; --event-border: ${color.border}; --event-text: ${color.text};`;
+}
+
+function lunchStyle(lunchStart, lunchEnd, dayStart, dayEnd, hourHeight) {
+  const start = clampMinutes(lunchStart, dayStart, dayEnd);
+  const end = clampMinutes(lunchEnd, dayStart, dayEnd);
+  const top = ((start - dayStart) / 60) * hourHeight;
   const height = Math.max(((Math.max(end - start, 0)) / 60) * hourHeight, 0);
   return `--lunch-top: ${top}px; --lunch-height: ${height}px;`;
+}
+
+function overlaps(first, second) {
+  return first.start < second.end && second.start < first.end;
+}
+
+function arrangeParallelSegments(items) {
+  const sorted = items
+    .map((item, index) => ({
+      ...item,
+      index,
+      start: parseTime(item.segment.startTime),
+      end: Math.max(parseTime(item.segment.endTime), parseTime(item.segment.startTime) + 1)
+    }))
+    .sort((first, second) => first.start - second.start || first.end - second.end);
+  const active = [];
+  const groups = [];
+
+  sorted.forEach(item => {
+    for (let index = active.length - 1; index >= 0; index -= 1) {
+      if (active[index].end <= item.start) active.splice(index, 1);
+    }
+    if (!active.length) groups.push([]);
+    groups[groups.length - 1].push(item);
+    active.push(item);
+  });
+
+  groups.forEach(group => {
+    group.forEach(item => {
+      const used = new Set(group.filter(other => other !== item && overlaps(item, other)).map(other => other.lane));
+      let lane = 0;
+      while (used.has(lane)) lane += 1;
+      item.lane = lane;
+    });
+    const laneCount = Math.max(...group.map(item => item.lane), 0) + 1;
+    group.forEach(item => {
+      item.laneCount = laneCount;
+    });
+  });
+
+  return sorted.sort((first, second) => first.index - second.index);
 }
 
 function splitSegmentByLunch(segment, lunchStart, lunchEnd, shiftStart, shiftEnd) {
@@ -334,17 +401,24 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   const calendarStartDate = addDays(knownDates[0], -15);
   const calendarEndDate = addDays(knownDates[knownDates.length - 1], 15);
   const dates = eachDate(calendarStartDate, calendarEndDate);
+  const materialColors = new Map();
+  operations.forEach(operation => {
+    const key = String(operation.materialId || operation.materialName || '');
+    if (!materialColors.has(key)) {
+      materialColors.set(key, MATERIAL_COLORS[materialColors.size % MATERIAL_COLORS.length]);
+    }
+  });
   const shiftStart = parseTime(config.shiftStartTime || '07:00', '07:00');
   const shiftEnd = Math.max(parseTime(config.shiftEndTime || '17:00', '17:00'), shiftStart + 60);
   const lunchStart = 12 * 60;
   const lunchMinutes = parseLunchMinutes(config.lunchHours);
   const lunchEnd = lunchStart + lunchMinutes;
+  const dayStart = 0;
+  const dayEnd = 24 * 60;
   const hourMarks = [];
-  for (let minutes = Math.ceil(shiftStart / 60) * 60; minutes <= shiftEnd; minutes += 60) {
+  for (let minutes = dayStart; minutes < dayEnd; minutes += 60) {
     hourMarks.push(minutes);
   }
-  if (!hourMarks.includes(shiftStart)) hourMarks.unshift(shiftStart);
-  if (!hourMarks.includes(shiftEnd)) hourMarks.push(shiftEnd);
 
   wrapper.innerHTML = `
     <div class="gantt-zoom-controls" aria-label="Zoom do calend&aacute;rio">
@@ -388,9 +462,9 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
 
   function renderBoard() {
     const zoom = zoomLevels[zoomIndex];
-    const totalMinutes = shiftEnd - shiftStart;
+    const totalMinutes = dayEnd - dayStart;
     const bodyHeight = (totalMinutes / 60) * zoom.hourHeight;
-    const lunchVisible = lunchMinutes > 0 && lunchEnd > shiftStart && lunchStart < shiftEnd;
+    const lunchVisible = lunchMinutes > 0 && lunchEnd > dayStart && lunchStart < dayEnd;
     const board = wrapper.querySelector('.gantt-board');
     board.style.setProperty('--calendar-days', String(dates.length));
     board.style.setProperty('--calendar-day-width', `${zoom.dayWidth}px`);
@@ -400,7 +474,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
       <div class="agenda-grid">
         <div class="agenda-corner">
           <strong>Hor&aacute;rio</strong>
-          <span>${minutesToTime(shiftStart)}-${minutesToTime(shiftEnd)}</span>
+          <span>00:00-23:59</span>
         </div>
         <div class="gantt-dates">
           ${dates.map(date => `
@@ -412,31 +486,36 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         </div>
         <div class="agenda-time-axis">
           ${hourMarks.map(minutes => `
-            <span style="--time-top: ${((minutes - shiftStart) / 60) * zoom.hourHeight}px">${formatHour(minutes)}</span>
+            <span style="--time-top: ${((minutes - dayStart) / 60) * zoom.hourHeight}px">${formatHour(minutes)}</span>
           `).join('')}
         </div>
         <div class="agenda-days">
           ${dates.map(date => {
-            const dayOperations = operations.flatMap(operation => {
+            const daySegments = operations.flatMap(operation => {
               const segments = operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart, lunchEnd).get(date) || [];
+              return segments.map(segment => ({ operation, segment }));
+            });
+            const dayOperations = arrangeParallelSegments(daySegments).map(item => {
+              const { operation, segment } = item;
               const startTime = operationStartTime(operation);
               const endTime = operationEndTime(operation);
               const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
-              return segments.map(segment => `
-                <button class="gantt-bar" type="button" data-operation-material="${operation.materialId}" style="${segmentStyle(segment, shiftStart, shiftEnd, zoom.hourHeight)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+              const materialKey = String(operation.materialId || operation.materialName || '');
+              return `
+                <button class="gantt-bar" type="button" data-operation-material="${operation.materialId}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(materialColors.get(materialKey))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
                   <strong>${operation.materialName}</strong>
                   <span>${quantity || '-'}</span>
                   <span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
                   <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
                 </button>
-              `);
+              `;
             }).join('');
             return `
               <div class="agenda-day-column" data-date="${date}">
                 ${hourMarks.map(minutes => `
-                  <span class="agenda-hour-line" style="--time-top: ${((minutes - shiftStart) / 60) * zoom.hourHeight}px"></span>
+                  <span class="agenda-hour-line" style="--time-top: ${((minutes - dayStart) / 60) * zoom.hourHeight}px"></span>
                 `).join('')}
-                ${lunchVisible ? `<span class="gantt-lunch-band" style="${lunchStyle(lunchStart, lunchEnd, shiftStart, shiftEnd, zoom.hourHeight)}">Almo&ccedil;o</span>` : ''}
+                ${lunchVisible ? `<span class="gantt-lunch-band" style="${lunchStyle(lunchStart, lunchEnd, dayStart, dayEnd, zoom.hourHeight)}">Almo&ccedil;o</span>` : ''}
                 ${dayOperations}
               </div>
             `;
