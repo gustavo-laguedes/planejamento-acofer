@@ -14,6 +14,10 @@ function eachDate(startDate, endDate) {
   return dates;
 }
 
+function formatDate(date) {
+  return date ? new Date(`${date}T00:00:00`).toLocaleDateString('pt-BR') : '';
+}
+
 function formatDateLabel(date) {
   return new Date(`${date}T00:00:00`).toLocaleDateString('pt-BR', {
     weekday: 'short',
@@ -22,58 +26,156 @@ function formatDateLabel(date) {
   });
 }
 
-function formatMinutes(value) {
-  const minutes = Number(value || 0);
-  if (!Number.isFinite(minutes) || minutes <= 0) return '';
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = Math.round(minutes % 60);
-  if (!hours) return `${remainingMinutes}min`;
-  return remainingMinutes ? `${hours}h ${remainingMinutes}min` : `${hours}h`;
+function formatQty(value) {
+  return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+}
+
+function optionValue(option) {
+  return `${option.machineName}||${option.peopleCount}`;
+}
+
+function operationValue(operation) {
+  return `${operation.machineName}||${operation.peopleCount}`;
+}
+
+function modelOptions(operation) {
+  return Array.isArray(operation.productionModelOptions) ? operation.productionModelOptions : [];
+}
+
+function barStyle(operation, dates) {
+  const startIndex = Math.max(dates.indexOf(operation.startDate), 0);
+  const endIndex = Math.max(dates.indexOf(operation.endDate), startIndex);
+  return `--bar-start: ${startIndex + 1}; --bar-span: ${endIndex - startIndex + 1};`;
+}
+
+function showOperationModal(wrapper, operation) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <h2>${operation.materialName}</h2>
+        <button class="link-button close-modal" type="button">Fechar</button>
+      </div>
+      <div class="operation-detail-grid">
+        <article><span>Material</span><strong>${operation.materialName}</strong></article>
+        <article><span>Quantidade</span><strong>${formatQty(operation.produceQty)} ${operation.unit || ''}</strong></article>
+        <article><span>M&aacute;quina</span><strong>${operation.machineName || '-'}</strong></article>
+        <article><span>Pessoas</span><strong>${operation.peopleCount || '-'}</strong></article>
+        <article><span>Modelo de produ&ccedil;&atilde;o</span><strong>${operation.productionModelName || '-'}</strong></article>
+        <article><span>Produtividade</span><strong>${formatQty(operation.outputQty)} ${operation.outputUnit || ''} em ${formatQty(operation.timeSeconds)}s</strong></article>
+        <article class="wide"><span>Per&iacute;odo</span><strong>${formatDate(operation.startDate)} ${operation.startTime} at&eacute; ${formatDate(operation.endDate)} ${operation.endTime}</strong></article>
+      </div>
+    </div>
+  `;
+  backdrop.addEventListener('click', event => {
+    if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
+  });
+  wrapper.appendChild(backdrop);
 }
 
 export function CalendarTimeline(days = [], operations = []) {
   const wrapper = document.createElement('section');
   wrapper.className = 'calendar-gantt';
 
-  if (!days.length) {
-    wrapper.innerHTML = '<div class="empty-state">Simule um planejamento para visualizar o calendário.</div>';
+  if (!operations.length) {
+    wrapper.innerHTML = '<div class="empty-state">Simule um planejamento para visualizar o calend&aacute;rio.</div>';
     return wrapper;
   }
 
-  const datesFromDays = days.map(day => day.planned_date).filter(Boolean);
-  const datesFromOperations = operations.flatMap(operation => [operation.startDate, operation.endDate]).filter(Boolean);
-  const allKnownDates = [...datesFromDays, ...datesFromOperations].sort();
-  const dates = eachDate(allKnownDates[0], allKnownDates[allKnownDates.length - 1]);
-  const grouped = days.reduce((acc, day) => {
-    acc[day.planned_date] ||= [];
-    acc[day.planned_date].push(day);
-    return acc;
-  }, {});
+  const knownDates = operations.flatMap(operation => [operation.startDate, operation.endDate]).filter(Boolean).sort();
+  const dates = eachDate(knownDates[0], knownDates[knownDates.length - 1]);
 
   wrapper.innerHTML = `
-    <div class="calendar-scroll">
-      <div class="calendar-grid" style="--calendar-days: ${dates.length}">
+    <div class="gantt-board">
+      <div class="gantt-left gantt-header">
+        <span>Material</span>
+        <span>M&aacute;quina</span>
+        <span>Pessoas</span>
+        <span>Quantidade</span>
+      </div>
+      <div class="gantt-right gantt-header gantt-dates" style="--calendar-days: ${dates.length}">
         ${dates.map(date => `
-          <div class="calendar-column">
-            <div class="calendar-date">
-              <strong>${formatDateLabel(date)}</strong>
-              <span>${date}</span>
-            </div>
-            <div class="calendar-events">
-              ${(grouped[date] || []).map(item => `
-                <article class="production-card">
-                  <strong>${item.material_name}</strong>
-                  <span>${item.machine_name} &middot; ${item.people_count} pessoa${Number(item.people_count) === 1 ? '' : 's'}</span>
-                  <b>${Number(item.planned_qty).toLocaleString('pt-BR')} ${item.planned_unit}</b>
-                  ${item.daily_minutes ? `<small>${formatMinutes(item.daily_minutes)}</small>` : ''}
-                </article>
-              `).join('') || '<div class="calendar-empty-day"></div>'}
-            </div>
+          <div class="gantt-date" data-date="${date}">
+            <strong>${formatDateLabel(date)}</strong>
+            <span>${formatDate(date)}</span>
           </div>
         `).join('')}
       </div>
+      ${operations.map(operation => {
+        const machineOptions = operation.productivityOptions || [];
+        const models = modelOptions(operation);
+        const selectedModel = operation.productionModelMaterialId || models[0]?.materialId || '';
+        return `
+          <div class="gantt-left gantt-row-controls" data-operation-id="${operation.materialId}">
+            <strong>${operation.materialName}</strong>
+            <select data-action="machine" data-operation-material="${operation.materialId}" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
+              ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.machineName} / ${option.peopleCount}</option>`).join('')}
+            </select>
+            <select data-action="people" data-operation-material="${operation.materialId}" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
+              ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.peopleCount}</option>`).join('')}
+            </select>
+            <span>${formatQty(operation.produceQty)} ${operation.unit || ''}</span>
+            <label class="production-model-control">Modelo
+              <select data-action="model" data-operation-material="${operation.materialId}" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
+                ${models.length ? models.map(model => `<option value="${model.materialId}" ${String(model.materialId) === String(selectedModel) ? 'selected' : ''}>${model.materialName}</option>`).join('') : '<option value="">Sem origem</option>'}
+              </select>
+            </label>
+          </div>
+          <div class="gantt-right gantt-row" style="--calendar-days: ${dates.length}">
+            <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, dates)}">
+              <strong>${operation.materialName}</strong>
+              <span>${formatQty(operation.produceQty)} ${operation.unit || ''} | ${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
+              <small>${formatDate(operation.startDate)} ${operation.startTime} - ${formatDate(operation.endDate)} ${operation.endTime}</small>
+            </button>
+          </div>
+        `;
+      }).join('')}
     </div>
   `;
+
+  wrapper.addEventListener('change', event => {
+    const materialId = event.target.dataset.operationMaterial;
+    if (!materialId) return;
+    const row = event.target.closest('.gantt-row-controls');
+    const machineSelect = row?.querySelector('[data-action="machine"]');
+    const modelSelect = row?.querySelector('[data-action="model"]');
+    const [machineName, peopleCount] = (machineSelect?.value || '').split('||');
+    wrapper.dispatchEvent(new CustomEvent('operation-config-change', {
+      bubbles: true,
+      detail: {
+        materialId,
+        machineName,
+        peopleCount: Number(peopleCount || 0),
+        productionModelMaterialId: modelSelect?.value || null
+      }
+    }));
+  });
+
+  wrapper.addEventListener('click', event => {
+    const bar = event.target.closest('.gantt-bar');
+    if (!bar) return;
+    const operation = operations.find(item => String(item.materialId) === String(bar.dataset.operationMaterial));
+    if (operation) showOperationModal(wrapper, operation);
+  });
+
+  wrapper.addEventListener('dragstart', event => {
+    const bar = event.target.closest('.gantt-bar');
+    if (bar) event.dataTransfer.setData('text/plain', bar.dataset.operationMaterial);
+  });
+
+  wrapper.querySelectorAll('.gantt-date').forEach(dateCell => {
+    dateCell.addEventListener('dragover', event => event.preventDefault());
+    dateCell.addEventListener('drop', event => {
+      event.preventDefault();
+      const materialId = event.dataTransfer.getData('text/plain');
+      if (!materialId) return;
+      wrapper.dispatchEvent(new CustomEvent('operation-date-change', {
+        bubbles: true,
+        detail: { materialId, startDate: dateCell.dataset.date }
+      }));
+    });
+  });
 
   return wrapper;
 }

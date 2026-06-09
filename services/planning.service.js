@@ -32,10 +32,9 @@ function formatCodeQuantity(quantity) {
     : String(Number(number.toFixed(3)));
 }
 
-function codeForPlan(materialName, quantity, date = new Date()) {
+function codeForPlan(date = new Date()) {
   const pad = value => String(value).padStart(2, '0');
-  const stamp = `${pad(date.getDate())}${pad(date.getMonth() + 1)}${String(date.getFullYear()).slice(-2)}${pad(date.getHours())}${pad(date.getMinutes())}`;
-  return `${stamp}${cleanCodePart(materialName)}${formatCodeQuantity(quantity)}`;
+  return `${pad(date.getDate())}${pad(date.getMonth() + 1)}${String(date.getFullYear()).slice(-2)}${pad(date.getHours())}${pad(date.getMinutes())}`;
 }
 
 function materialCode(material) {
@@ -131,7 +130,23 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
     return node;
   }
 
-  const inputs = inputsByMaterialId.get(String(material.id)) || [];
+  const allInputs = inputsByMaterialId.get(String(material.id)) || [];
+  const selectedModelId = override?.productionModelMaterialId ? String(override.productionModelMaterialId) : null;
+  const inputs = selectedModelId
+    ? allInputs.filter(input => String(input.input_material_id) === selectedModelId)
+    : allInputs;
+  node.productionModelMaterialId = inputs[0]?.input_material_id || null;
+  node.productionModelName = node.productionModelMaterialId
+    ? materialsById.get(String(node.productionModelMaterialId))?.name || null
+    : null;
+  node.productionModelOptions = allInputs.map(input => {
+    const inputMaterial = materialsById.get(String(input.input_material_id));
+    return inputMaterial ? {
+      materialId: inputMaterial.id,
+      materialName: inputMaterial.name,
+      qtyPerOutput: toNumber(input.qty_per_output || 1)
+    } : null;
+  }).filter(Boolean);
   node.children = inputs.map(input => {
     const inputMaterial = materialsById.get(String(input.input_material_id));
     if (!inputMaterial) return null;
@@ -156,14 +171,118 @@ function flattenOperations(tree, operations = []) {
   return operations;
 }
 
-function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay }) {
-  const normalizedHoursPerDay = Math.max(toNumber(hoursPerDay || 8), 1 / 60);
-  const dailyMinutes = normalizedHoursPerDay * 60;
-  const scheduled = [];
-  let cursor = selectedDate;
-  const source = [...operations].reverse();
+function groupOperations(operations) {
+  const grouped = new Map();
+  for (const operation of operations) {
+    const key = String(operation.materialId);
+    if (!grouped.has(key)) {
+      grouped.set(key, { ...operation, requiredQty: 0, produceQty: 0 });
+    }
+    const current = grouped.get(key);
+    current.requiredQty = Number((toNumber(current.requiredQty) + toNumber(operation.requiredQty)).toFixed(3));
+    current.produceQty = Number((toNumber(current.produceQty) + toNumber(operation.produceQty)).toFixed(3));
+  }
+  return [...grouped.values()];
+}
 
-  for (const operation of source) {
+function parseTime(value, fallback) {
+  const [hours, minutes] = String(value || fallback).split(':').map(part => Number(part));
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return parseTime(fallback, '07:12');
+  return Math.max(0, hours * 60 + minutes);
+}
+
+function minutesToTime(minutes) {
+  const normalized = Math.max(0, Math.round(minutes));
+  const hours = Math.floor(normalized / 60);
+  const mins = normalized % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
+function splitDateTime(value, fallbackDate, fallbackMinutes) {
+  if (value?.includes('T')) {
+    const [date, time = ''] = value.split('T');
+    return { date, minutes: parseTime(time.slice(0, 5), minutesToTime(fallbackMinutes)) };
+  }
+  return { date: value || fallbackDate, minutes: fallbackMinutes };
+}
+
+function compareCursor(left, right) {
+  return left.date === right.date ? left.minutes - right.minutes : left.date.localeCompare(right.date);
+}
+
+function nextWorkStart(cursor, shiftStart, shiftEnd) {
+  if (cursor.minutes < shiftStart) return { date: cursor.date, minutes: shiftStart };
+  if (cursor.minutes >= shiftEnd) return { date: addDays(cursor.date, 1), minutes: shiftStart };
+  return cursor;
+}
+
+function previousWorkEnd(cursor, shiftStart, shiftEnd) {
+  if (cursor.minutes > shiftEnd) return { date: cursor.date, minutes: shiftEnd };
+  if (cursor.minutes <= shiftStart) return { date: addDays(cursor.date, -1), minutes: shiftEnd };
+  return cursor;
+}
+
+function scheduleForward(cursor, durationMinutes, shiftStart, shiftEnd) {
+  const start = nextWorkStart(cursor, shiftStart, shiftEnd);
+  let current = { ...start };
+  let remaining = durationMinutes;
+  while (remaining > 0) {
+    current = nextWorkStart(current, shiftStart, shiftEnd);
+    const available = shiftEnd - current.minutes;
+    const used = Math.min(remaining, available);
+    current = { date: current.date, minutes: current.minutes + used };
+    remaining -= used;
+    if (remaining > 0) current = { date: addDays(current.date, 1), minutes: shiftStart };
+  }
+  return { start, end: current };
+}
+
+function scheduleBackward(cursor, durationMinutes, shiftStart, shiftEnd) {
+  const end = previousWorkEnd(cursor, shiftStart, shiftEnd);
+  let current = { ...end };
+  let remaining = durationMinutes;
+  while (remaining > 0) {
+    current = previousWorkEnd(current, shiftStart, shiftEnd);
+    const available = current.minutes - shiftStart;
+    const used = Math.min(remaining, available);
+    current = { date: current.date, minutes: current.minutes - used };
+    remaining -= used;
+    if (remaining > 0) current = { date: addDays(current.date, -1), minutes: shiftEnd };
+  }
+  return { start: current, end };
+}
+
+function segmentsForOperation(operation, shiftStart, shiftEnd) {
+  const segments = [];
+  let cursor = { date: operation.startDate, minutes: parseTime(operation.startTime, '07:12') };
+  const end = { date: operation.endDate, minutes: parseTime(operation.endTime, '16:00') };
+  while (compareCursor(cursor, end) < 0) {
+    cursor = nextWorkStart(cursor, shiftStart, shiftEnd);
+    if (compareCursor(cursor, end) >= 0) break;
+    const segmentEndMinutes = cursor.date === end.date ? Math.min(end.minutes, shiftEnd) : shiftEnd;
+    const minutes = Math.max(segmentEndMinutes - cursor.minutes, 0);
+    if (minutes > 0) {
+      segments.push({
+        date: cursor.date,
+        startTime: minutesToTime(cursor.minutes),
+        endTime: minutesToTime(segmentEndMinutes),
+        minutes
+      });
+    }
+    cursor = { date: addDays(cursor.date, 1), minutes: shiftStart };
+  }
+  return segments;
+}
+
+function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, operationOverrides = {} }) {
+  const shiftStart = parseTime(shiftStartTime, '07:12');
+  const requestedShiftEnd = Math.max(parseTime(shiftEndTime, '16:00'), shiftStart + 1);
+  const dailyMinutes = Math.max(toNumber(hoursPerDay || 8), 1 / 60) * 60;
+  const shiftEnd = Math.min(requestedShiftEnd, shiftStart + dailyMinutes);
+  const scheduled = [];
+  const source = groupOperations(operations);
+
+  const enrich = operation => {
     const matrix = resolveMatrix(
       { name: operation.materialName, codes: operation.materialCode ? [operation.materialCode] : [] },
       matrixRows,
@@ -179,15 +298,7 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     const timeMinutes = timeSeconds / 60;
     const minutesPerUnit = timeMinutes / Math.max(toNumber(matrix.output_qty), 1);
     const totalMinutes = Math.ceil(operation.produceQty * minutesPerUnit);
-    const daysNeeded = Math.max(Math.ceil(totalMinutes / dailyMinutes), 1);
-    const isFinalOperation = scheduled.length === 0;
-    const startDate = dateMode === 'start' && isFinalOperation
-      ? cursor
-      : addDays(cursor, -(daysNeeded - 1));
-    const endDate = dateMode === 'start' && isFinalOperation
-      ? addDays(cursor, daysNeeded - 1)
-      : cursor;
-    scheduled.push({
+    return {
       ...operation,
       machineName: matrix.machine_name,
       peopleCount: Number(matrix.people_count),
@@ -195,30 +306,75 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       outputUnit: matrix.output_unit || operation.unit || 'un',
       timeSeconds,
       minutesPerUnit,
-      totalMinutes,
-      daysNeeded,
-      startDate,
-      endDate
-    });
-    cursor = addDays(startDate, -1);
+      totalMinutes
+    };
+  };
+
+  if (dateMode === 'end') {
+    let cursor = { date: selectedDate, minutes: shiftEnd };
+    for (const operation of [...source].reverse()) {
+      const item = enrich(operation);
+      const slot = scheduleBackward(cursor, item.totalMinutes, shiftStart, shiftEnd);
+      scheduled.unshift({
+        ...item,
+        daysNeeded: eachSegmentDayCount(slot.start.date, slot.end.date),
+        startDate: slot.start.date,
+        startTime: minutesToTime(slot.start.minutes),
+        endDate: slot.end.date,
+        endTime: minutesToTime(slot.end.minutes),
+        segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, shiftStart, shiftEnd)
+      });
+      cursor = slot.start;
+    }
+  } else {
+    let cursor = { date: selectedDate, minutes: shiftStart };
+    for (const operation of source) {
+      const override = overrideForMaterial(operationOverrides, operation);
+      const overrideCursor = splitDateTime(override?.startDate, cursor.date, shiftStart);
+      if (override?.startDate && compareCursor(overrideCursor, cursor) > 0) cursor = overrideCursor;
+      const item = enrich(operation);
+      const slot = scheduleForward(cursor, item.totalMinutes, shiftStart, shiftEnd);
+      scheduled.push({
+        ...item,
+        daysNeeded: eachSegmentDayCount(slot.start.date, slot.end.date),
+        startDate: slot.start.date,
+        startTime: minutesToTime(slot.start.minutes),
+        endDate: slot.end.date,
+        endTime: minutesToTime(slot.end.minutes),
+        segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, shiftStart, shiftEnd)
+      });
+      cursor = slot.end;
+    }
   }
 
-  return scheduled.reverse();
+  return scheduled;
+}
+
+function eachSegmentDayCount(startDate, endDate) {
+  let count = 1;
+  let cursor = startDate;
+  while (cursor < endDate) {
+    cursor = addDays(cursor, 1);
+    count += 1;
+  }
+  return count;
 }
 
 function buildDays(operations, plannedUnit) {
   return operations.flatMap(operation => {
-    const qtyPerDay = operation.produceQty / operation.daysNeeded;
-    return Array.from({ length: operation.daysNeeded }, (_, index) => ({
-      planned_date: addDays(operation.startDate, index),
+    const totalSegmentMinutes = operation.segments.reduce((sum, segment) => sum + segment.minutes, 0) || operation.totalMinutes || 1;
+    return operation.segments.map(segment => ({
+      planned_date: segment.date,
       material_name: operation.materialName,
       material_code: operation.materialCode,
       machine_name: operation.machineName,
       people_count: operation.peopleCount,
-      planned_qty: Number(qtyPerDay.toFixed(3)),
+      planned_qty: Number((operation.produceQty * (segment.minutes / totalSegmentMinutes)).toFixed(3)),
       planned_unit: operation.unit || plannedUnit || 'un',
       total_minutes: operation.totalMinutes,
-      daily_minutes: Math.ceil(operation.totalMinutes / operation.daysNeeded)
+      daily_minutes: segment.minutes,
+      start_time: segment.startTime,
+      end_time: segment.endTime
     }));
   });
 }
@@ -247,16 +403,20 @@ export function buildPlan(payload, context) {
   const operations = scheduleOperations(flattenOperations(tree), context.matrixRows, {
     dateMode: payload.dateMode,
     selectedDate: payload.selectedDate || payload.startDate,
-    hoursPerDay: payload.hoursPerDay
+    hoursPerDay: payload.hoursPerDay,
+    shiftStartTime: payload.shiftStartTime,
+    shiftEndTime: payload.shiftEndTime,
+    operationOverrides: payload.operationOverrides || {}
   });
   const days = buildDays(operations, material.primary_unit);
   const hoursPerDay = Math.max(toNumber(payload.hoursPerDay || 8), 1 / 60);
   const startDate = operations.length ? operations[0].startDate : payload.selectedDate || payload.startDate;
   const endDate = operations.length ? operations[operations.length - 1].endDate : payload.selectedDate || payload.startDate;
   const finalOperation = operations[operations.length - 1];
+  const uniqueDaysNeeded = new Set(days.map(day => day.planned_date)).size;
 
   return {
-    code: codeForPlan(material.name, payload.plannedQty),
+    code: codeForPlan(),
     summary: {
       materialId: material.id,
       materialName: material.name,
@@ -268,9 +428,11 @@ export function buildPlan(payload, context) {
       dateMode: payload.dateMode || 'start',
       selectedDate: payload.selectedDate || payload.startDate,
       hoursPerDay,
+      shiftStartTime: payload.shiftStartTime || '07:12',
+      shiftEndTime: payload.shiftEndTime || '16:00',
       startDate,
       endDate,
-      daysNeeded: days.length,
+      daysNeeded: uniqueDaysNeeded,
       hasPastStart: new Date(`${startDate}T00:00:00`) < new Date(`${dateKey(new Date())}T00:00:00`)
     },
     tree,

@@ -957,7 +957,8 @@ thead tr:nth-child(2) th {
 
 .planning-results {
   display: grid;
-  gap: 16px;
+  gap: 24px;
+  margin-top: 28px;
 }
 
 .planning-results[hidden] {
@@ -1113,6 +1114,169 @@ thead tr:nth-child(2) th {
 .production-card small {
   color: var(--muted);
   font-size: 11px;
+}
+
+.gantt-board {
+  display: grid;
+  grid-template-columns: minmax(520px, 620px) minmax(720px, 1fr);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.gantt-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-height: 62px;
+  background: #eef5f7;
+  color: var(--petroleum-dark);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.gantt-left {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(150px, 1.25fr) minmax(120px, 0.9fr) minmax(86px, 0.6fr) minmax(96px, 0.75fr);
+  gap: 10px;
+  align-items: center;
+  border-right: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.gantt-left.gantt-header {
+  z-index: 4;
+  padding: 0 12px;
+  background: #eef5f7;
+}
+
+.gantt-right {
+  min-width: calc(var(--calendar-days) * 150px);
+}
+
+.gantt-dates,
+.gantt-row {
+  display: grid;
+  grid-template-columns: repeat(var(--calendar-days), minmax(150px, 1fr));
+}
+
+.gantt-date {
+  display: grid;
+  gap: 2px;
+  align-content: center;
+  min-height: 62px;
+  padding: 9px 10px;
+  border-right: 1px solid var(--line);
+}
+
+.gantt-date span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.gantt-row-controls,
+.gantt-row {
+  min-height: 86px;
+  border-bottom: 1px solid var(--line);
+}
+
+.gantt-row-controls {
+  padding: 10px 12px;
+}
+
+.gantt-row-controls strong,
+.gantt-row-controls span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.gantt-row-controls select {
+  min-width: 0;
+  padding: 8px 9px;
+}
+
+.production-model-control {
+  grid-column: 1 / -1;
+  grid-template-columns: 70px minmax(0, 1fr);
+  align-items: center;
+}
+
+.gantt-row {
+  position: relative;
+  align-items: center;
+  background:
+    repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc((100% / var(--calendar-days)) - 1px),
+      rgba(15, 76, 92, 0.08) calc((100% / var(--calendar-days)) - 1px),
+      rgba(15, 76, 92, 0.08) calc(100% / var(--calendar-days))
+    );
+}
+
+.gantt-bar {
+  grid-column: var(--bar-start) / span var(--bar-span);
+  width: calc(100% - 16px);
+  min-height: 58px;
+  margin: 0 8px;
+  display: grid;
+  gap: 3px;
+  align-content: center;
+  border: 0;
+  border-left: 5px solid var(--accent);
+  border-radius: 6px;
+  background: #0f4c5c;
+  color: #ffffff;
+  padding: 8px 12px;
+  text-align: left;
+  box-shadow: 0 10px 24px rgba(15, 76, 92, 0.22);
+}
+
+.gantt-bar span,
+.gantt-bar small {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gantt-bar strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.operation-detail-grid article {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.operation-detail-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.operation-detail-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .toast {

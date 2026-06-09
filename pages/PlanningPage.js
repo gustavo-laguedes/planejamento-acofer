@@ -16,9 +16,17 @@ function formatDate(value) {
   return value ? new Date(value).toLocaleString('pt-BR') : '';
 }
 
+function formatDateOnly(value) {
+  return value ? new Date(`${value}T00:00:00`).toLocaleDateString('pt-BR') : '';
+}
+
 function parsePtBrDecimal(value, fallback = NaN) {
   const rawValue = String(value ?? '').trim();
   if (!rawValue) return fallback;
+  const timeLikeValue = rawValue.match(/^(\d+),(\d{2})$/);
+  if (timeLikeValue && Number(timeLikeValue[2]) <= 59) {
+    return Number(timeLikeValue[1]) + (Number(timeLikeValue[2]) / 60);
+  }
   const normalizedValue = rawValue.includes(',')
     ? rawValue.replace(/\./g, '').replace(',', '.')
     : rawValue;
@@ -127,6 +135,11 @@ export function PlanningPage() {
     return materials.find(material => String(material.id) === String(form.elements.materialId.value));
   }
 
+  function materialLabel(material) {
+    const codes = (material.codes || []).join(' ');
+    return `${material.name}${codes ? ` - ${codes}` : ''}`;
+  }
+
   function currentDateMode(form) {
     return form.querySelector('[name="dateModeChoice"][value="end"]').checked ? 'end' : 'start';
   }
@@ -149,11 +162,15 @@ export function PlanningPage() {
         <form class="grid-form planning-form">
           <fieldset class="date-mode-field">
             <legend>Tipo de data</legend>
-            <label class="choice-pill"><input name="dateModeChoice" type="checkbox" value="start" checked /> Data inicial</label>
-            <label class="choice-pill"><input name="dateModeChoice" type="checkbox" value="end" /> Data final</label>
+            <label class="choice-pill"><input name="dateModeChoice" type="checkbox" value="start" checked /> Come&ccedil;ar produ&ccedil;&atilde;o em</label>
+            <label class="choice-pill"><input name="dateModeChoice" type="checkbox" value="end" /> Terminar produ&ccedil;&atilde;o em</label>
           </fieldset>
           <label>Data<input name="selectedDate" type="date" required /></label>
-          <label>Material<select name="materialId" required></select></label>
+          <label>Material
+            <input name="materialSearch" type="search" list="planning-material-options" autocomplete="off" placeholder="Digite para pesquisar" required />
+            <input name="materialId" type="hidden" />
+            <datalist id="planning-material-options"></datalist>
+          </label>
           <div class="readonly-field">
             <span>Código</span>
             <div class="material-codes readonly-chip-list"></div>
@@ -165,7 +182,9 @@ export function PlanningPage() {
           <label>Quantidade<input name="plannedQty" type="number" step="0.001" required /></label>
           <label>Máquina<select name="machineName" required></select></label>
           <label>Pessoas<select name="peopleCount" required></select></label>
-          <label>Horas/dia<input name="hoursPerDay" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="8" /></label>
+          <label>Horas/dia<input name="hoursPerDay" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="8,48" /></label>
+          <label>Come&ccedil;o do turno<input name="shiftStartTime" type="time" value="07:12" required /></label>
+          <label>Final do turno<input name="shiftEndTime" type="time" value="16:00" required /></label>
           <div class="form-actions">
             <button class="primary-button" name="simulate" type="submit">Simular</button>
             <button class="secondary-button" name="save" type="button" disabled>Salvar planejamento</button>
@@ -178,18 +197,6 @@ export function PlanningPage() {
             <h2>Resumo da simula&ccedil;&atilde;o</h2>
           </div>
           <div class="summary-grid compact-summary"></div>
-        </div>
-        <div class="panel operation-panel">
-          <div class="section-heading">
-            <h2>Configura&ccedil;&atilde;o por opera&ccedil;&atilde;o</h2>
-          </div>
-          <div class="operation-config-target"></div>
-        </div>
-        <div class="panel engineering-panel">
-          <div class="section-heading">
-            <h2>Engenharia do planejamento</h2>
-          </div>
-          <div class="engineering-tree"></div>
         </div>
         <div class="panel calendar-panel">
           <div class="section-heading">
@@ -204,11 +211,9 @@ export function PlanningPage() {
     const saveButton = target.querySelector('[name="save"]');
     const resultsTarget = target.querySelector('.planning-results');
     const summaryGrid = target.querySelector('.summary-grid');
-    const operationConfigTarget = target.querySelector('.operation-config-target');
     const timelineTarget = target.querySelector('.timeline-target');
-    const engineeringTarget = target.querySelector('.engineering-tree');
     form.elements.selectedDate.value = today();
-    form.elements.materialId.innerHTML = materials.map(material => `<option value="${material.id}">${material.name}</option>`).join('');
+    target.querySelector('#planning-material-options').innerHTML = materials.map(material => `<option value="${materialLabel(material)}"></option>`).join('');
     timelineTarget.appendChild(CalendarTimeline([]));
 
     function updateMaterialFields() {
@@ -217,18 +222,22 @@ export function PlanningPage() {
       target.querySelector('.material-unit').innerHTML = chips([material?.primary_unit]);
       const rows = matchingMatrix(material);
       const machines = [...new Set(rows.map(row => row.machine_name).filter(Boolean))];
-      form.elements.machineName.innerHTML = machines.map(machine => `<option value="${machine}">${machine}</option>`).join('');
-      form.elements.machineName.disabled = machines.length === 1;
-      form.elements.machineName.dataset.locked = machines.length === 1 ? 'true' : 'false';
+      form.elements.machineName.innerHTML = machines.length
+        ? machines.map(machine => `<option value="${machine}">${machine}</option>`).join('')
+        : '<option value="">Selecione um material</option>';
+      form.elements.machineName.disabled = !material || machines.length === 1;
+      form.elements.machineName.dataset.locked = material && machines.length === 1 ? 'true' : 'false';
       updatePeopleOptions();
     }
 
     function updatePeopleOptions() {
       const rows = matchingMatrix(selectedMaterial(form)).filter(row => !form.elements.machineName.value || row.machine_name === form.elements.machineName.value);
       const people = [...new Set(rows.map(row => row.people_count).filter(Boolean))];
-      form.elements.peopleCount.innerHTML = people.map(value => `<option value="${value}">${value}</option>`).join('');
-      form.elements.peopleCount.disabled = people.length === 1;
-      form.elements.peopleCount.dataset.locked = people.length === 1 ? 'true' : 'false';
+      form.elements.peopleCount.innerHTML = people.length
+        ? people.map(value => `<option value="${value}">${value}</option>`).join('')
+        : '<option value="">Selecione um material</option>';
+      form.elements.peopleCount.disabled = !selectedMaterial(form) || people.length === 1;
+      form.elements.peopleCount.dataset.locked = selectedMaterial(form) && people.length === 1 ? 'true' : 'false';
     }
 
     function payload() {
@@ -245,6 +254,8 @@ export function PlanningPage() {
         machineName: form.elements.machineName.value,
         peopleCount: Number(form.elements.peopleCount.value),
         hoursPerDay,
+        shiftStartTime: form.elements.shiftStartTime.value,
+        shiftEndTime: form.elements.shiftEndTime.value,
         operationOverrides
       };
     }
@@ -255,45 +266,25 @@ export function PlanningPage() {
         ['C&oacute;digo previsto', result.code],
         ['Material final', result.summary.materialName],
         ['Quantidade final', `${formatPtBrDecimal(result.summary.plannedQty)} ${result.summary.plannedUnit}`],
-        ['Tipo de data', result.summary.dateMode === 'end' ? 'Data final' : 'Data inicial'],
-        ['Data informada', result.summary.selectedDate || form.elements.selectedDate.value],
-        ['Per&iacute;odo estimado', `${result.summary.startDate} at&eacute; ${result.summary.endDate}`],
+        ['Tipo de data', result.summary.dateMode === 'end' ? 'Terminar produ&ccedil;&atilde;o em' : 'Come&ccedil;ar produ&ccedil;&atilde;o em'],
+        ['Data informada', formatDateOnly(result.summary.selectedDate || form.elements.selectedDate.value)],
+        ['Per&iacute;odo estimado', `${formatDateOnly(result.summary.startDate)} ${result.operations[0]?.startTime || ''} at&eacute; ${formatDateOnly(result.summary.endDate)} ${result.operations.at(-1)?.endTime || ''}`],
         ['Total de opera&ccedil;&otilde;es', result.operations.length],
         ['Total de dias', result.summary.daysNeeded],
-        ['Horas/dia', formatPtBrDecimal(result.summary.hoursPerDay)]
+        ['Horas/dia', formatPtBrDecimal(result.summary.hoursPerDay)],
+        ['Turno', `${result.summary.shiftStartTime || form.elements.shiftStartTime.value} at&eacute; ${result.summary.shiftEndTime || form.elements.shiftEndTime.value}`]
       ];
       summaryGrid.innerHTML = cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${value}</strong></article>`).join('');
-      operationConfigTarget.innerHTML = result.operations.map(operation => {
-        const options = operation.productivityOptions || [];
-        const selectedValue = `${operation.machineName}||${operation.peopleCount}`;
-        const editable = options.length > 1;
-        return `
-          <article class="operation-config-card">
-            <div>
-              <strong>${operation.materialName}</strong>
-              <span>${formatPtBrDecimal(operation.produceQty)} ${operation.unit || result.summary.plannedUnit} &middot; ${formatMinutes(operation.totalMinutes)}</span>
-            </div>
-            <label>M&aacute;quina / pessoas
-              <select data-operation-material="${operation.materialId}" ${editable ? '' : 'disabled data-locked="true"'}>
-                ${options.map(option => {
-                  const value = `${option.machineName}||${option.peopleCount}`;
-                  return `<option value="${value}" ${value === selectedValue ? 'selected' : ''}>${option.machineName} &middot; ${option.peopleCount} pessoa${option.peopleCount === 1 ? '' : 's'}</option>`;
-                }).join('')}
-              </select>
-            </label>
-            <div class="operation-meta">
-              <span>Produtividade: ${productivityLabel(options.find(option => `${option.machineName}||${option.peopleCount}` === selectedValue))}</span>
-              <span>Per&iacute;odo: ${operation.startDate} at&eacute; ${operation.endDate}</span>
-            </div>
-          </article>
-        `;
-      }).join('');
-      engineeringTarget.innerHTML = renderEngineeringTree(result.tree);
       timelineTarget.innerHTML = '';
       timelineTarget.appendChild(CalendarTimeline(result.days, result.operations));
     }
 
     async function simulate() {
+      if (!selectedMaterial(form)) {
+        form.elements.materialSearch.setCustomValidity('Selecione um material cadastrado.');
+        form.reportValidity();
+        return null;
+      }
       const hoursPerDay = parsePtBrDecimal(form.elements.hoursPerDay.value, 8);
       form.elements.hoursPerDay.setCustomValidity('');
       if (!Number.isFinite(hoursPerDay) || hoursPerDay <= 0) {
@@ -328,14 +319,36 @@ Deseja continuar mesmo assim?`)) return null;
       resultsTarget.hidden = true;
       saveButton.disabled = true;
     });
+    form.elements.materialSearch.addEventListener('input', () => {
+      form.elements.materialSearch.setCustomValidity('');
+      const searchValue = form.elements.materialSearch.value.trim().toLowerCase();
+      const material = materials.find(item =>
+        materialLabel(item).toLowerCase() === searchValue
+        || item.name.toLowerCase() === searchValue
+        || (item.codes || []).some(code => String(code).toLowerCase() === searchValue)
+      );
+      form.elements.materialId.value = material?.id || '';
+      form.elements.materialId.dispatchEvent(new Event('change'));
+    });
     form.elements.machineName.addEventListener('change', updatePeopleOptions);
     form.elements.hoursPerDay.addEventListener('input', () => form.elements.hoursPerDay.setCustomValidity(''));
-    operationConfigTarget.addEventListener('change', async event => {
-      if (!event.target.dataset.operationMaterial) return;
-      const [machineName, peopleCount] = event.target.value.split('||');
-      operationOverrides[event.target.dataset.operationMaterial] = {
-        machineName,
-        peopleCount: Number(peopleCount)
+    timelineTarget.addEventListener('operation-config-change', async event => {
+      operationOverrides[event.detail.materialId] = {
+        ...(operationOverrides[event.detail.materialId] || {}),
+        machineName: event.detail.machineName,
+        peopleCount: Number(event.detail.peopleCount),
+        productionModelMaterialId: event.detail.productionModelMaterialId ? Number(event.detail.productionModelMaterialId) : null
+      };
+      try {
+        await simulate();
+      } catch (error) {
+        toast(error);
+      }
+    });
+    timelineTarget.addEventListener('operation-date-change', async event => {
+      operationOverrides[event.detail.materialId] = {
+        ...(operationOverrides[event.detail.materialId] || {}),
+        startDate: event.detail.startDate
       };
       try {
         await simulate();
