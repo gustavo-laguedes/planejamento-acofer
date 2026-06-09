@@ -161,10 +161,6 @@ export function PlanningPage() {
       .sort((left, right) => matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right));
   }
 
-  function materialInputs(material) {
-    return Array.isArray(material?.input_materials) ? material.input_materials : [];
-  }
-
   async function loadLookups() {
     [materials, matrix] = await Promise.all([api('/materials'), api('/productivity')]);
   }
@@ -198,7 +194,6 @@ export function PlanningPage() {
           <label>Quantidade<input name="plannedQty" type="number" step="0.001" required /></label>
           <label>Máquina<select name="machineName" required></select></label>
           <label>Pessoas<select name="peopleCount" required></select></label>
-          <label>Material consumido<select name="productionModelMaterialId"></select></label>
           <label>Horas/dia<input name="hoursPerDay" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="8,48" /></label>
           <label>Come&ccedil;o do turno<input name="shiftStartTime" type="time" value="07:00" required /></label>
           <label>Horas de almo&ccedil;o<input name="lunchHours" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="1,12" /></label>
@@ -292,39 +287,10 @@ export function PlanningPage() {
       form.elements.peopleCount.dataset.locked = selectedMaterial(form) && people.length === 1 ? 'true' : 'false';
     }
 
-    function syncMaterialConsumedOverride() {
-      const material = selectedMaterial(form);
-      const selectedInputId = form.elements.productionModelMaterialId.value;
-      if (!material) return;
-      const key = String(material.id);
-      if (!selectedInputId) {
-        if (operationOverrides[key]) delete operationOverrides[key].productionModelMaterialId;
-        return;
-      }
-      operationOverrides[key] = {
-        ...(operationOverrides[key] || {}),
-        productionModelMaterialId: Number(selectedInputId)
-      };
-    }
-
-    function updateConsumedMaterialOptions() {
-      const material = selectedMaterial(form);
-      const inputs = materialInputs(material);
-      const select = form.elements.productionModelMaterialId;
-      select.innerHTML = inputs.length
-        ? inputs.map(input => `<option value="${input.id}">${escapeHtml(input.name)}</option>`).join('')
-        : '<option value="">Sem material consumido</option>';
-      select.disabled = inputs.length <= 1;
-      select.dataset.locked = inputs.length === 1 ? 'true' : 'false';
-      if (inputs.length === 1) select.value = String(inputs[0].id);
-      syncMaterialConsumedOverride();
-    }
-
     function payload() {
       const material = selectedMaterial(form);
       const hoursPerDay = parsePtBrDecimal(form.elements.hoursPerDay.value, 8);
       const lunchHours = parsePtBrDecimal(form.elements.lunchHours.value, 1);
-      syncMaterialConsumedOverride();
       return {
         dateMode: currentDateMode(form),
         selectedDate: form.elements.selectedDate.value,
@@ -408,7 +374,6 @@ Deseja continuar mesmo assim?`)) return null;
       operationOverrides = {};
       lastPayload = null;
       updateMaterialFields();
-      updateConsumedMaterialOptions();
       resultsTarget.hidden = true;
       saveButton.disabled = true;
     });
@@ -425,7 +390,6 @@ Deseja continuar mesmo assim?`)) return null;
       else {
         lastPayload = null;
         updateMaterialFields();
-        updateConsumedMaterialOptions();
         resultsTarget.hidden = true;
         saveButton.disabled = true;
       }
@@ -442,17 +406,6 @@ Deseja continuar mesmo assim?`)) return null;
       setTimeout(() => { suggestionsTarget.hidden = true; }, 120);
     });
     form.elements.machineName.addEventListener('change', updatePeopleOptions);
-    form.elements.productionModelMaterialId.addEventListener('change', async () => {
-      syncMaterialConsumedOverride();
-      resultsTarget.hidden = true;
-      saveButton.disabled = true;
-      if (!lastPayload) return;
-      try {
-        await simulate();
-      } catch (error) {
-        toast(error);
-      }
-    });
     form.elements.hoursPerDay.addEventListener('input', () => form.elements.hoursPerDay.setCustomValidity(''));
     form.elements.lunchHours.addEventListener('input', () => form.elements.lunchHours.setCustomValidity(''));
     timelineTarget.addEventListener('operation-config-change', async event => {
@@ -480,7 +433,6 @@ Deseja continuar mesmo assim?`)) return null;
       }
     });
     updateMaterialFields();
-    updateConsumedMaterialOptions();
 
     form.addEventListener('submit', async event => {
       event.preventDefault();
