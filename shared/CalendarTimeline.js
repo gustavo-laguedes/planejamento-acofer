@@ -55,6 +55,10 @@ function modelOptions(operation) {
   return Array.isArray(operation.productionModelOptions) ? operation.productionModelOptions : [];
 }
 
+function productionModelFallback(operation) {
+  return operation.isInitialRawMaterial ? 'Mat&eacute;ria-prima inicial' : 'Sem origem';
+}
+
 function barStyle(operation, dates) {
   const startIndex = Math.max(dates.indexOf(operation.startDate), 0);
   const endIndex = Math.max(dates.indexOf(operation.endDate), startIndex);
@@ -139,7 +143,7 @@ function showOperationModal(wrapper, operation) {
           </label>
           <label>Modelo de produ&ccedil;&atilde;o
             <select name="productionModel" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
-              ${models.length ? models.map(model => `<option value="${model.materialId}" ${String(model.materialId) === String(selectedModel) ? 'selected' : ''}>${model.materialName}</option>`).join('') : '<option value="">Sem origem</option>'}
+              ${models.length ? models.map(model => `<option value="${model.materialId}" ${String(model.materialId) === String(selectedModel) ? 'selected' : ''}>${model.materialName}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
             </select>
           </label>
           <article><span>Produtividade</span><strong>${formatQty(operation.outputQty)} ${operation.outputUnit || ''} em ${formatQty(operation.timeSeconds)}s</strong></article>
