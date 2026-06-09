@@ -27,11 +27,16 @@ function toOperationalHours(value) {
 }
 
 function normalizedMaterialKey(operation) {
-  if (operation.materialId) return String(operation.materialId);
-  return [
+  const materialKey = operation.materialId ? String(operation.materialId) : [
     String(operation.materialName || '').trim().toLowerCase(),
     operation.materialCode || '',
     operation.unit || ''
+  ].join('|');
+  return [
+    materialKey,
+    operation.machineName || '',
+    operation.productionModelMaterialId || '',
+    operation.productionOrder || 0
   ].join('|');
 }
 
@@ -283,7 +288,7 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
     }
   }
 
-  return [...states.values()]
+  const operations = [...states.values()]
     .filter(state => state.material.is_initial_raw_material !== true)
     .map(state => {
       const rank = operationRank(state.material, context, operationOverrides);
@@ -303,6 +308,28 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
       || String(left.materialName).localeCompare(String(right.materialName))
     )
     .map((operation, index) => ({ ...operation, productionOrder: index }));
+
+  const operationMaterialIds = new Set(operations.map(operation => String(operation.materialId)));
+  const withDependencies = operations.map(operation => {
+    const material = context.materialsById.get(String(operation.materialId));
+    const dependencyMaterialIds = selectedInputs(material, context.inputsByMaterialId, operationOverrides)
+      .map(input => String(input.input_material_id))
+      .filter(inputMaterialId => operationMaterialIds.has(inputMaterialId));
+    return {
+      ...operation,
+      dependencyMaterialIds: [...new Set(dependencyMaterialIds)],
+      successorMaterialIds: []
+    };
+  });
+  const byMaterialId = new Map(withDependencies.map(operation => [String(operation.materialId), operation]));
+  for (const operation of withDependencies) {
+    for (const dependencyMaterialId of operation.dependencyMaterialIds || []) {
+      const dependency = byMaterialId.get(String(dependencyMaterialId));
+      if (!dependency) continue;
+      dependency.successorMaterialIds = [...new Set([...(dependency.successorMaterialIds || []), String(operation.materialId)])];
+    }
+  }
+  return withDependencies;
 }
 
 function groupOperations(operations) {
@@ -310,20 +337,28 @@ function groupOperations(operations) {
   for (const operation of operations) {
     const key = normalizedMaterialKey(operation);
     if (!grouped.has(key)) {
-      grouped.set(key, { ...operation, requiredQty: 0, produceQty: 0 });
+      grouped.set(key, { ...operation, requiredQty: 0, produceQty: 0, dependencyMaterialIds: [], successorMaterialIds: [] });
     }
     const current = grouped.get(key);
     current.requiredQty = Number((toNumber(current.requiredQty) + toNumber(operation.requiredQty)).toFixed(3));
     current.productionOrder = Math.min(toNumber(current.productionOrder), toNumber(operation.productionOrder));
     current.stockQty = Number(Math.max(toNumber(current.stockQty), toNumber(operation.stockQty)).toFixed(3));
+    current.dependencyMaterialIds = [...new Set([...(current.dependencyMaterialIds || []), ...(operation.dependencyMaterialIds || []).map(String)])];
+    current.successorMaterialIds = [...new Set([...(current.successorMaterialIds || []), ...(operation.successorMaterialIds || []).map(String)])];
   }
-  return [...grouped.values()]
+  const result = [...grouped.values()]
     .map(operation => ({
       ...operation,
       produceQty: Number(Math.max(toNumber(operation.requiredQty) - toNumber(operation.stockQty), 0).toFixed(3))
     }))
     .filter(operation => operation.produceQty > 0)
     .sort((left, right) => toNumber(left.productionOrder) - toNumber(right.productionOrder));
+  const materialIds = new Set(result.map(operation => String(operation.materialId)));
+  return result.map(operation => ({
+    ...operation,
+    dependencyMaterialIds: (operation.dependencyMaterialIds || []).filter(materialId => materialIds.has(String(materialId))),
+    successorMaterialIds: (operation.successorMaterialIds || []).filter(materialId => materialIds.has(String(materialId)))
+  }));
 }
 
 function parseTime(value, fallback) {
@@ -349,6 +384,18 @@ function splitDateTime(value, fallbackDate, fallbackMinutes) {
 
 function compareCursor(left, right) {
   return left.date === right.date ? left.minutes - right.minutes : left.date.localeCompare(right.date);
+}
+
+function maxCursor(...cursors) {
+  return cursors.filter(Boolean).reduce((latest, cursor) => (
+    !latest || compareCursor(cursor, latest) > 0 ? cursor : latest
+  ), null);
+}
+
+function minCursor(...cursors) {
+  return cursors.filter(Boolean).reduce((earliest, cursor) => (
+    !earliest || compareCursor(cursor, earliest) < 0 ? cursor : earliest
+  ), null);
 }
 
 function nextWorkStart(cursor, shiftStart, shiftEnd) {
@@ -463,43 +510,79 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, shiftStart, shiftEnd)
   });
 
-  if (dateMode === 'end') {
-    let cursor = { date: selectedDate, minutes: shiftEnd };
-    const baseline = [];
-    for (const operation of [...source].reverse()) {
-      const item = enrich(operation);
-      const slot = scheduleBackward(cursor, item.totalMinutes, shiftStart, shiftEnd);
-      baseline.unshift(scheduledItem(item, slot));
-      cursor = slot.start;
-    }
-    const firstMovedIndex = baseline.findIndex(operation => overrideForMaterial(operationOverrides, operation)?.startDate);
-    if (firstMovedIndex < 0) return baseline;
-    scheduled.push(...baseline.slice(0, firstMovedIndex));
-    cursor = firstMovedIndex > 0
-      ? { date: baseline[firstMovedIndex - 1].endDate, minutes: parseTime(baseline[firstMovedIndex - 1].endTime, minutesToTime(shiftStart)) }
-      : { date: baseline[firstMovedIndex].startDate, minutes: shiftStart };
-    for (const operation of baseline.slice(firstMovedIndex)) {
+  const enriched = source.map(enrich);
+  const byMaterialId = new Map(enriched.map(operation => [String(operation.materialId), operation]));
+  const hasManualStart = enriched.some(operation => overrideForMaterial(operationOverrides, operation)?.startDate);
+  const byMachine = new Map();
+  const scheduledByMaterialId = new Map();
+
+  const predecessorsDone = operation => (operation.dependencyMaterialIds || [])
+    .every(materialId => scheduledByMaterialId.has(String(materialId)) || !byMaterialId.has(String(materialId)));
+  const successorsDone = operation => (operation.successorMaterialIds || [])
+    .every(materialId => scheduledByMaterialId.has(String(materialId)) || !byMaterialId.has(String(materialId)));
+  const topological = [...enriched].sort((left, right) =>
+    toNumber(left.productionOrder) - toNumber(right.productionOrder)
+    || String(left.materialName).localeCompare(String(right.materialName))
+  );
+
+  function scheduleForwardGraph(startCursor) {
+    const pending = [...topological];
+    let guard = 0;
+    while (pending.length && guard < 1000) {
+      guard += 1;
+      const index = pending.findIndex(predecessorsDone);
+      const operation = pending.splice(index >= 0 ? index : 0, 1)[0];
+      const dependencyEnd = maxCursor(...(operation.dependencyMaterialIds || [])
+        .map(materialId => scheduledByMaterialId.get(String(materialId)))
+        .filter(Boolean)
+        .map(item => ({ date: item.endDate, minutes: parseTime(item.endTime, minutesToTime(shiftStart)) })));
+      const machineCursor = byMachine.get(operation.machineName || '') || startCursor;
       const override = overrideForMaterial(operationOverrides, operation);
-      const overrideCursor = splitDateTime(override?.startDate, cursor.date, shiftStart);
-      if (override?.startDate && (!scheduled.length || compareCursor(overrideCursor, cursor) > 0)) cursor = overrideCursor;
+      const overrideCursor = override?.startDate ? splitDateTime(override.startDate, startCursor.date, shiftStart) : null;
+      const cursor = maxCursor(startCursor, dependencyEnd, machineCursor, overrideCursor);
       const slot = scheduleForward(cursor, operation.totalMinutes, shiftStart, shiftEnd);
-      scheduled.push(scheduledItem(operation, slot));
-      cursor = slot.end;
-    }
-  } else {
-    let cursor = { date: selectedDate, minutes: shiftStart };
-    for (const operation of source) {
-      const override = overrideForMaterial(operationOverrides, operation);
-      const overrideCursor = splitDateTime(override?.startDate, cursor.date, shiftStart);
-      if (override?.startDate && (!scheduled.length || compareCursor(overrideCursor, cursor) > 0)) cursor = overrideCursor;
-      const item = enrich(operation);
-      const slot = scheduleForward(cursor, item.totalMinutes, shiftStart, shiftEnd);
-      scheduled.push(scheduledItem(item, slot));
-      cursor = slot.end;
+      const item = scheduledItem(operation, slot);
+      scheduledByMaterialId.set(String(operation.materialId), item);
+      byMachine.set(operation.machineName || '', slot.end);
+      scheduled.push(item);
     }
   }
 
-  return scheduled;
+  function scheduleBackwardGraph(endCursor) {
+    const pending = [...topological].reverse();
+    const reverseMachine = new Map();
+    let guard = 0;
+    while (pending.length && guard < 1000) {
+      guard += 1;
+      const index = pending.findIndex(successorsDone);
+      const operation = pending.splice(index >= 0 ? index : 0, 1)[0];
+      const successorStart = minCursor(...(operation.successorMaterialIds || [])
+        .map(materialId => scheduledByMaterialId.get(String(materialId)))
+        .filter(Boolean)
+        .map(item => ({ date: item.startDate, minutes: parseTime(item.startTime, minutesToTime(shiftStart)) })));
+      const machineCursor = reverseMachine.get(operation.machineName || '') || endCursor;
+      const cursor = minCursor(endCursor, successorStart, machineCursor);
+      const slot = scheduleBackward(cursor, operation.totalMinutes, shiftStart, shiftEnd);
+      const item = scheduledItem(operation, slot);
+      scheduledByMaterialId.set(String(operation.materialId), item);
+      reverseMachine.set(operation.machineName || '', slot.start);
+      scheduled.push(item);
+    }
+  }
+
+  if (dateMode === 'end' && !hasManualStart) {
+    scheduleBackwardGraph({ date: selectedDate, minutes: shiftEnd });
+  } else {
+    scheduleForwardGraph({ date: selectedDate, minutes: shiftStart });
+  }
+
+  return scheduled.sort((left, right) =>
+    compareCursor(
+      { date: left.startDate, minutes: parseTime(left.startTime, minutesToTime(shiftStart)) },
+      { date: right.startDate, minutes: parseTime(right.startTime, minutesToTime(shiftStart)) }
+    )
+    || toNumber(left.productionOrder) - toNumber(right.productionOrder)
+  );
 }
 
 function eachSegmentDayCount(startDate, endDate) {

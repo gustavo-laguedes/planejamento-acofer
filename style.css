@@ -1200,6 +1200,21 @@ thead tr:nth-child(2) th {
   min-width: 0;
 }
 
+.gantt-zoom-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.gantt-zoom-controls .secondary-button {
+  width: 38px;
+  min-height: 34px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
 .gantt-header {
   position: sticky;
   top: 0;
@@ -1232,15 +1247,15 @@ thead tr:nth-child(2) th {
 }
 
 .gantt-right {
-  min-width: calc(var(--calendar-days) * 150px);
+  min-width: calc(var(--calendar-days) * var(--calendar-day-width, 180px));
 }
 
 .gantt-dates,
 .gantt-row {
   display: grid;
-  width: max(100%, calc(var(--calendar-days) * 150px));
-  min-width: calc(var(--calendar-days) * 150px);
-  grid-template-columns: repeat(var(--calendar-days), minmax(150px, 1fr));
+  width: max(100%, calc(var(--calendar-days) * var(--calendar-day-width, 180px)));
+  min-width: calc(var(--calendar-days) * var(--calendar-day-width, 180px));
+  grid-template-columns: repeat(var(--calendar-days), minmax(var(--calendar-day-width, 180px), 1fr));
 }
 
 .gantt-dates {
@@ -1309,13 +1324,16 @@ thead tr:nth-child(2) th {
 }
 
 .gantt-bar {
-  grid-column: var(--bar-start) / span var(--bar-span);
-  width: calc(100% - 16px);
+  position: absolute;
+  left: var(--bar-left);
+  width: max(var(--bar-width), 18px);
   min-height: 58px;
-  margin: 0 8px;
+  margin: 0;
   display: grid;
   gap: 3px;
   align-content: center;
+  top: 50%;
+  transform: translateY(-50%);
   border: 0;
   border-left: 5px solid var(--accent);
   border-radius: 6px;

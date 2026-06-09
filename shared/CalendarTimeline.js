@@ -20,6 +20,25 @@ function dayDiff(startDate, endDate) {
   return Math.round((end - start) / 86400000);
 }
 
+function dateTimeMs(date, time = '00:00') {
+  return new Date(`${date}T${time || '00:00'}`).getTime();
+}
+
+function dateTimeParts(date) {
+  const pad = value => String(value).padStart(2, '0');
+  return {
+    date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    time: `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  };
+}
+
+function snapMinutes(date, step = 15) {
+  const copy = new Date(date);
+  copy.setSeconds(0, 0);
+  copy.setMinutes(Math.round(copy.getMinutes() / step) * step);
+  return copy;
+}
+
 function formatDate(date) {
   return date ? new Date(`${date}T00:00:00`).toLocaleDateString('pt-BR') : '';
 }
@@ -65,17 +84,23 @@ function productionModelFallback(operation) {
   return operation.isInitialRawMaterial ? 'Mat&eacute;ria-prima inicial' : 'Sem origem';
 }
 
-function barStyle(operation, calendarStartDate, calendarEndDate) {
-  const maxIndex = Math.max(dayDiff(calendarStartDate, calendarEndDate), 0);
-  const startIndex = Math.max(0, Math.min(dayDiff(calendarStartDate, operation.startDate), maxIndex));
-  const endIndex = Math.max(startIndex, Math.min(dayDiff(calendarStartDate, operation.endDate), maxIndex));
-  return `--bar-start: ${startIndex + 1}; --bar-span: ${endIndex - startIndex + 1};`;
+function barStyle(operation, timelineStartMs, timelineEndMs) {
+  const totalMs = Math.max(timelineEndMs - timelineStartMs, 1);
+  const startMs = Math.max(timelineStartMs, Math.min(dateTimeMs(operation.startDate, operationStartTime(operation)), timelineEndMs));
+  const endMs = Math.max(startMs, Math.min(dateTimeMs(operation.endDate, operationEndTime(operation)), timelineEndMs));
+  const left = ((startMs - timelineStartMs) / totalMs) * 100;
+  const width = Math.max(((endMs - startMs) / totalMs) * 100, 0.25);
+  return `--bar-left: ${left}%; --bar-width: ${width}%;`;
 }
 
-function dateFromDrop(event, row, dates) {
+function dateTimeFromDrop(event, row, calendarStartDate, calendarEndDate) {
   const rect = row.getBoundingClientRect();
   const ratio = Math.max(0, Math.min(0.999, (event.clientX - rect.left) / rect.width));
-  return dates[Math.floor(ratio * dates.length)] || dates[0];
+  const startMs = dateTimeMs(calendarStartDate);
+  const endMs = dateTimeMs(addDays(calendarEndDate, 1));
+  const droppedAt = snapMinutes(new Date(startMs + ((endMs - startMs) * ratio)));
+  const parts = dateTimeParts(droppedAt);
+  return `${parts.date}T${parts.time}`;
 }
 
 function focusFirstOperation(wrapper, dates, operations) {
@@ -193,6 +218,8 @@ function showOperationModal(wrapper, operation) {
 export function CalendarTimeline(days = [], operations = []) {
   const wrapper = document.createElement('section');
   wrapper.className = 'calendar-gantt';
+  const zoomWidths = [90, 130, 180, 260, 360];
+  let zoomIndex = 2;
 
   if (!operations.length) {
     wrapper.innerHTML = '<div class="empty-state">Simule um planejamento para visualizar o calend&aacute;rio.</div>';
@@ -203,9 +230,22 @@ export function CalendarTimeline(days = [], operations = []) {
   const calendarStartDate = addDays(knownDates[0], -15);
   const calendarEndDate = addDays(knownDates[knownDates.length - 1], 15);
   const dates = eachDate(calendarStartDate, calendarEndDate);
+  const timelineStartMs = dateTimeMs(calendarStartDate);
+  const timelineEndMs = dateTimeMs(addDays(calendarEndDate, 1));
+
+  function setZoom(nextIndex) {
+    zoomIndex = Math.max(0, Math.min(zoomWidths.length - 1, nextIndex));
+    wrapper.querySelector('.gantt-board')?.style.setProperty('--calendar-day-width', `${zoomWidths[zoomIndex]}px`);
+    wrapper.querySelector('[data-zoom-out]')?.toggleAttribute('disabled', zoomIndex === 0);
+    wrapper.querySelector('[data-zoom-in]')?.toggleAttribute('disabled', zoomIndex === zoomWidths.length - 1);
+  }
 
   wrapper.innerHTML = `
-    <div class="gantt-board gantt-board-full" style="--calendar-days: ${dates.length}">
+    <div class="gantt-zoom-controls" aria-label="Zoom do calend&aacute;rio">
+      <button class="secondary-button" type="button" data-zoom-out aria-label="Diminuir zoom">-</button>
+      <button class="secondary-button" type="button" data-zoom-in aria-label="Aumentar zoom">+</button>
+    </div>
+    <div class="gantt-board gantt-board-full" style="--calendar-days: ${dates.length}; --calendar-day-width: ${zoomWidths[zoomIndex]}px">
       <div class="gantt-dates">
         ${dates.map(date => `
           <div class="gantt-date" data-date="${date}">
@@ -219,7 +259,7 @@ export function CalendarTimeline(days = [], operations = []) {
         const endTime = operationEndTime(operation);
         return `
           <div class="gantt-row" data-row-operation="${operation.materialId}">
-            <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, calendarStartDate, calendarEndDate)}">
+            <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, timelineStartMs, timelineEndMs)}">
               <strong>${operation.materialName}</strong>
               <span>${formatQty(operation.produceQty)} ${operation.unit || ''} | ${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
               <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
@@ -236,6 +276,9 @@ export function CalendarTimeline(days = [], operations = []) {
     const operation = operations.find(item => String(item.materialId) === String(bar.dataset.operationMaterial));
     if (operation) showOperationModal(wrapper, operation);
   });
+
+  wrapper.querySelector('[data-zoom-out]')?.addEventListener('click', () => setZoom(zoomIndex - 1));
+  wrapper.querySelector('[data-zoom-in]')?.addEventListener('click', () => setZoom(zoomIndex + 1));
 
   wrapper.addEventListener('dragstart', event => {
     const bar = event.target.closest('.gantt-bar');
@@ -256,7 +299,10 @@ export function CalendarTimeline(days = [], operations = []) {
       const row = event.currentTarget.classList.contains('gantt-row')
         ? event.currentTarget
         : wrapper.querySelector(`.gantt-row[data-row-operation="${materialId}"]`);
-      const startDate = event.currentTarget.dataset.date || dateFromDrop(event, row, dates);
+      const operation = operations.find(item => String(item.materialId) === String(materialId));
+      const startDate = event.currentTarget.dataset.date
+        ? `${event.currentTarget.dataset.date}T${operation ? operationStartTime(operation) || '00:00' : '00:00'}`
+        : dateTimeFromDrop(event, row, calendarStartDate, calendarEndDate);
       wrapper.dispatchEvent(new CustomEvent('operation-date-change', {
         bubbles: true,
         detail: { materialId, startDate }
@@ -264,6 +310,7 @@ export function CalendarTimeline(days = [], operations = []) {
     });
   });
 
+  setZoom(zoomIndex);
   focusFirstOperation(wrapper, dates, operations);
 
   return wrapper;
