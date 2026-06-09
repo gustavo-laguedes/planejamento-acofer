@@ -136,8 +136,7 @@ export function PlanningPage() {
   }
 
   function materialLabel(material) {
-    const codes = (material.codes || []).join(' ');
-    return `${material.name}${codes ? ` - ${codes}` : ''}`;
+    return material.name || '';
   }
 
   function currentDateMode(form) {
@@ -184,6 +183,7 @@ export function PlanningPage() {
           <label>Pessoas<select name="peopleCount" required></select></label>
           <label>Horas/dia<input name="hoursPerDay" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="8,48" /></label>
           <label>Come&ccedil;o do turno<input name="shiftStartTime" type="time" value="07:12" required /></label>
+          <label>Horas de almo&ccedil;o<input name="lunchHours" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="1,00" /></label>
           <label>Final do turno<input name="shiftEndTime" type="time" value="16:00" required /></label>
           <div class="form-actions">
             <button class="primary-button" name="simulate" type="submit">Simular</button>
@@ -243,6 +243,7 @@ export function PlanningPage() {
     function payload() {
       const material = selectedMaterial(form);
       const hoursPerDay = parsePtBrDecimal(form.elements.hoursPerDay.value, 8);
+      const lunchHours = parsePtBrDecimal(form.elements.lunchHours.value, 1);
       return {
         dateMode: currentDateMode(form),
         selectedDate: form.elements.selectedDate.value,
@@ -254,6 +255,7 @@ export function PlanningPage() {
         machineName: form.elements.machineName.value,
         peopleCount: Number(form.elements.peopleCount.value),
         hoursPerDay,
+        lunchHours,
         shiftStartTime: form.elements.shiftStartTime.value,
         shiftEndTime: form.elements.shiftEndTime.value,
         operationOverrides
@@ -262,16 +264,19 @@ export function PlanningPage() {
 
     function renderSimulation(result) {
       resultsTarget.hidden = false;
+      const firstOperation = result.operations[0];
+      const lastOperation = result.operations[result.operations.length - 1];
       const cards = [
         ['C&oacute;digo previsto', result.code],
         ['Material final', result.summary.materialName],
         ['Quantidade final', `${formatPtBrDecimal(result.summary.plannedQty)} ${result.summary.plannedUnit}`],
         ['Tipo de data', result.summary.dateMode === 'end' ? 'Terminar produ&ccedil;&atilde;o em' : 'Come&ccedil;ar produ&ccedil;&atilde;o em'],
         ['Data informada', formatDateOnly(result.summary.selectedDate || form.elements.selectedDate.value)],
-        ['Per&iacute;odo estimado', `${formatDateOnly(result.summary.startDate)} ${result.operations[0]?.startTime || ''} at&eacute; ${formatDateOnly(result.summary.endDate)} ${result.operations.at(-1)?.endTime || ''}`],
+        ['Per&iacute;odo estimado', `${formatDateOnly(result.summary.startDate)} ${firstOperation?.startTime || ''} at&eacute; ${formatDateOnly(result.summary.endDate)} ${lastOperation?.endTime || ''}`],
         ['Total de opera&ccedil;&otilde;es', result.operations.length],
         ['Total de dias', result.summary.daysNeeded],
         ['Horas/dia', formatPtBrDecimal(result.summary.hoursPerDay)],
+        ['Almo&ccedil;o', formatPtBrDecimal(result.summary.lunchHours)],
         ['Turno', `${result.summary.shiftStartTime || form.elements.shiftStartTime.value} at&eacute; ${result.summary.shiftEndTime || form.elements.shiftEndTime.value}`]
       ];
       summaryGrid.innerHTML = cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${value}</strong></article>`).join('');
@@ -286,19 +291,26 @@ export function PlanningPage() {
         return null;
       }
       const hoursPerDay = parsePtBrDecimal(form.elements.hoursPerDay.value, 8);
+      const lunchHours = parsePtBrDecimal(form.elements.lunchHours.value, 1);
       form.elements.hoursPerDay.setCustomValidity('');
+      form.elements.lunchHours.setCustomValidity('');
       if (!Number.isFinite(hoursPerDay) || hoursPerDay <= 0) {
         form.elements.hoursPerDay.setCustomValidity('Informe as horas por dia com valor maior que zero.');
         form.reportValidity();
         return null;
       }
+      if (!Number.isFinite(lunchHours) || lunchHours < 0) {
+        form.elements.lunchHours.setCustomValidity('Informe as horas de almoço com valor igual ou maior que zero.');
+        form.reportValidity();
+        return null;
+      }
       form.elements.hoursPerDay.value = formatPtBrDecimal(hoursPerDay);
+      form.elements.lunchHours.value = formatPtBrDecimal(lunchHours);
       lastPayload = payload();
       const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
       if (result.summary.hasPastStart && !confirm(`ATENCAO
 
-O planejamento exige inicio em ${result.summary.startDate}.
-A data ja passou.
+Para terminar em ${formatDateOnly(result.summary.selectedDate)} seria necessario iniciar em ${formatDateOnly(result.summary.startDate)}.
 
 Deseja continuar mesmo assim?`)) return null;
       renderSimulation(result);
@@ -332,6 +344,7 @@ Deseja continuar mesmo assim?`)) return null;
     });
     form.elements.machineName.addEventListener('change', updatePeopleOptions);
     form.elements.hoursPerDay.addEventListener('input', () => form.elements.hoursPerDay.setCustomValidity(''));
+    form.elements.lunchHours.addEventListener('input', () => form.elements.lunchHours.setCustomValidity(''));
     timelineTarget.addEventListener('operation-config-change', async event => {
       operationOverrides[event.detail.materialId] = {
         ...(operationOverrides[event.detail.materialId] || {}),
@@ -400,6 +413,8 @@ Deseja continuar mesmo assim?`)) return null;
           { label: 'Quantidade', render: row => `${row.planned_qty} ${row.planned_unit}` },
           { label: 'Horas/dia', render: row => formatPtBrDecimal(row.hours_per_day), sortValue: row => Number(row.hours_per_day || 0) },
           { label: 'Data de criação', render: row => formatDate(row.created_at), sortValue: row => row.created_at },
+          { label: 'Início', render: row => formatDateOnly(row.start_date), sortValue: row => row.start_date },
+          { label: 'Fim', render: row => formatDateOnly(row.end_date), sortValue: row => row.end_date },
           { label: 'Status', key: 'status' },
           { label: 'Ações', render: row => `
             <button class="link-button" data-view="${row.id}">Visualizar</button>
@@ -429,6 +444,14 @@ Deseja continuar mesmo assim?`)) return null;
 
     async function viewPlan(id) {
       const detail = await api(`/planning/plans/${id}`);
+      const operations = (detail.operations || []).map(operation => ({
+        material: operation.materialName,
+        quantidade: `${formatPtBrDecimal(operation.produceQty)} ${operation.unit || ''}`,
+        maquina: operation.machineName,
+        pessoas: operation.peopleCount,
+        inicio: `${formatDateOnly(operation.startDate)} ${operation.startTime || ''}`.trim(),
+        fim: `${formatDateOnly(operation.endDate)} ${operation.endTime || ''}`.trim()
+      }));
       const backdrop = document.createElement('div');
       backdrop.className = 'modal-backdrop';
       backdrop.innerHTML = `
@@ -437,7 +460,7 @@ Deseja continuar mesmo assim?`)) return null;
             <h2>${detail.plan.code || detail.plan.id}</h2>
             <button class="link-button close-modal" type="button">Fechar</button>
           </div>
-          <pre class="plan-json">${JSON.stringify({ horasPorDia: formatPtBrDecimal(detail.plan.hours_per_day), arvore: detail.tree, operacoes: detail.operations }, null, 2)}</pre>
+          <pre class="plan-json">${JSON.stringify({ horasPorDia: formatPtBrDecimal(detail.plan.hours_per_day), operacoes: operations }, null, 2)}</pre>
         </div>
       `;
       backdrop.addEventListener('click', event => {

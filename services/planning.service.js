@@ -17,6 +17,14 @@ function toNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function normalizedMaterialKey(operation) {
+  return [
+    String(operation.materialName || '').trim().toLowerCase(),
+    operation.materialCode || '',
+    operation.unit || ''
+  ].join('|');
+}
+
 function cleanCodePart(value) {
   return String(value || 'SEM-CODIGO')
     .normalize('NFD')
@@ -174,15 +182,18 @@ function flattenOperations(tree, operations = []) {
 function groupOperations(operations) {
   const grouped = new Map();
   for (const operation of operations) {
-    const key = String(operation.materialId);
+    const key = normalizedMaterialKey(operation);
     if (!grouped.has(key)) {
       grouped.set(key, { ...operation, requiredQty: 0, produceQty: 0 });
     }
     const current = grouped.get(key);
     current.requiredQty = Number((toNumber(current.requiredQty) + toNumber(operation.requiredQty)).toFixed(3));
-    current.produceQty = Number((toNumber(current.produceQty) + toNumber(operation.produceQty)).toFixed(3));
+    current.stockQty = Number(Math.max(toNumber(current.stockQty), toNumber(operation.stockQty)).toFixed(3));
   }
-  return [...grouped.values()];
+  return [...grouped.values()].map(operation => ({
+    ...operation,
+    produceQty: Number(Math.max(toNumber(operation.requiredQty) - toNumber(operation.stockQty), 0).toFixed(3))
+  })).filter(operation => operation.produceQty > 0);
 }
 
 function parseTime(value, fallback) {
@@ -274,10 +285,12 @@ function segmentsForOperation(operation, shiftStart, shiftEnd) {
   return segments;
 }
 
-function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, operationOverrides = {} }) {
+function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, operationOverrides = {} }) {
   const shiftStart = parseTime(shiftStartTime, '07:12');
   const requestedShiftEnd = Math.max(parseTime(shiftEndTime, '16:00'), shiftStart + 1);
-  const dailyMinutes = Math.max(toNumber(hoursPerDay || 8), 1 / 60) * 60;
+  const lunchMinutes = Math.max(toNumber(lunchHours || 0), 0) * 60;
+  const shiftAvailableMinutes = Math.max(requestedShiftEnd - shiftStart - lunchMinutes, 1);
+  const dailyMinutes = Math.min(Math.max(toNumber(hoursPerDay || 8), 1 / 60) * 60, shiftAvailableMinutes);
   const shiftEnd = Math.min(requestedShiftEnd, shiftStart + dailyMinutes);
   const scheduled = [];
   const source = groupOperations(operations);
@@ -406,6 +419,7 @@ export function buildPlan(payload, context) {
     hoursPerDay: payload.hoursPerDay,
     shiftStartTime: payload.shiftStartTime,
     shiftEndTime: payload.shiftEndTime,
+    lunchHours: payload.lunchHours,
     operationOverrides: payload.operationOverrides || {}
   });
   const days = buildDays(operations, material.primary_unit);
@@ -430,10 +444,11 @@ export function buildPlan(payload, context) {
       hoursPerDay,
       shiftStartTime: payload.shiftStartTime || '07:12',
       shiftEndTime: payload.shiftEndTime || '16:00',
+      lunchHours: toNumber(payload.lunchHours || 0),
       startDate,
       endDate,
       daysNeeded: uniqueDaysNeeded,
-      hasPastStart: new Date(`${startDate}T00:00:00`) < new Date(`${dateKey(new Date())}T00:00:00`)
+      hasPastStart: (payload.dateMode || 'start') === 'end' && new Date(`${startDate}T00:00:00`) < new Date(`${dateKey(new Date())}T00:00:00`)
     },
     tree,
     operations,

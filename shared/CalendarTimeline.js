@@ -30,6 +30,10 @@ function formatQty(value) {
   return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 }
 
+function safeTime(value, fallback) {
+  return value || fallback;
+}
+
 function optionValue(option) {
   return `${option.machineName}||${option.peopleCount}`;
 }
@@ -48,28 +52,87 @@ function barStyle(operation, dates) {
   return `--bar-start: ${startIndex + 1}; --bar-span: ${endIndex - startIndex + 1};`;
 }
 
+function dateFromDrop(event, row, dates) {
+  const rect = row.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(0.999, (event.clientX - rect.left) / rect.width));
+  return dates[Math.floor(ratio * dates.length)] || dates[0];
+}
+
+function dispatchConfig(wrapper, operation, modal) {
+  const machineSelect = modal.querySelector('[name="machinePeople"]');
+  const peopleSelect = modal.querySelector('[name="peopleMachine"]');
+  const [machineName, peopleCount] = (peopleSelect?.value || machineSelect?.value || '').split('||');
+  const modelSelect = modal.querySelector('[name="productionModel"]');
+  wrapper.dispatchEvent(new CustomEvent('operation-config-change', {
+    bubbles: true,
+    detail: {
+      materialId: String(operation.materialId),
+      machineName,
+      peopleCount: Number(peopleCount || 0),
+      productionModelMaterialId: modelSelect?.value || null
+    }
+  }));
+}
+
 function showOperationModal(wrapper, operation) {
+  const machineOptions = operation.productivityOptions || [];
+  const models = modelOptions(operation);
+  const selectedModel = operation.productionModelMaterialId || models[0]?.materialId || '';
+  const startTime = safeTime(operation.startTime, '00:00');
+  const endTime = safeTime(operation.endTime, '00:00');
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   backdrop.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal operation-modal" role="dialog" aria-modal="true">
       <div class="modal-header">
         <h2>${operation.materialName}</h2>
         <button class="link-button close-modal" type="button">Fechar</button>
       </div>
-      <div class="operation-detail-grid">
-        <article><span>Material</span><strong>${operation.materialName}</strong></article>
-        <article><span>Quantidade</span><strong>${formatQty(operation.produceQty)} ${operation.unit || ''}</strong></article>
-        <article><span>M&aacute;quina</span><strong>${operation.machineName || '-'}</strong></article>
-        <article><span>Pessoas</span><strong>${operation.peopleCount || '-'}</strong></article>
-        <article><span>Modelo de produ&ccedil;&atilde;o</span><strong>${operation.productionModelName || '-'}</strong></article>
-        <article><span>Produtividade</span><strong>${formatQty(operation.outputQty)} ${operation.outputUnit || ''} em ${formatQty(operation.timeSeconds)}s</strong></article>
-        <article class="wide"><span>Per&iacute;odo</span><strong>${formatDate(operation.startDate)} ${operation.startTime} at&eacute; ${formatDate(operation.endDate)} ${operation.endTime}</strong></article>
-      </div>
+      <form class="operation-modal-form">
+        <div class="operation-detail-grid">
+          <article><span>Material</span><strong>${operation.materialName}</strong></article>
+          <article><span>Quantidade</span><strong>${formatQty(operation.produceQty)} ${operation.unit || ''}</strong></article>
+          <label>M&aacute;quina
+            <select name="machinePeople" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
+              ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.machineName}</option>`).join('')}
+            </select>
+          </label>
+          <label>Pessoas
+            <select name="peopleMachine" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
+              ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.peopleCount}</option>`).join('')}
+            </select>
+          </label>
+          <label>Modelo de produ&ccedil;&atilde;o
+            <select name="productionModel" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
+              ${models.length ? models.map(model => `<option value="${model.materialId}" ${String(model.materialId) === String(selectedModel) ? 'selected' : ''}>${model.materialName}</option>`).join('') : '<option value="">Sem origem</option>'}
+            </select>
+          </label>
+          <article><span>Produtividade</span><strong>${formatQty(operation.outputQty)} ${operation.outputUnit || ''} em ${formatQty(operation.timeSeconds)}s</strong></article>
+          <article><span>Data inicial</span><strong>${formatDate(operation.startDate)}</strong></article>
+          <article><span>Hora inicial</span><strong>${startTime}</strong></article>
+          <article><span>Data final</span><strong>${formatDate(operation.endDate)}</strong></article>
+          <article><span>Hora final</span><strong>${endTime}</strong></article>
+        </div>
+        <div class="form-actions modal-actions">
+          <button class="secondary-button close-modal" type="button">Cancelar</button>
+          <button class="primary-button" type="submit">Salvar</button>
+        </div>
+      </form>
     </div>
   `;
   backdrop.addEventListener('click', event => {
     if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
+  });
+  backdrop.querySelectorAll('[name="machinePeople"], [name="peopleMachine"]').forEach(select => {
+    select.addEventListener('change', () => {
+      backdrop.querySelector('[name="machinePeople"]').value = select.value;
+      backdrop.querySelector('[name="peopleMachine"]').value = select.value;
+    });
+  });
+  backdrop.querySelector('form').addEventListener('submit', event => {
+    event.preventDefault();
+    dispatchConfig(wrapper, operation, backdrop);
+    backdrop.remove();
   });
   wrapper.appendChild(backdrop);
 }
@@ -87,14 +150,8 @@ export function CalendarTimeline(days = [], operations = []) {
   const dates = eachDate(knownDates[0], knownDates[knownDates.length - 1]);
 
   wrapper.innerHTML = `
-    <div class="gantt-board">
-      <div class="gantt-left gantt-header">
-        <span>Material</span>
-        <span>M&aacute;quina</span>
-        <span>Pessoas</span>
-        <span>Quantidade</span>
-      </div>
-      <div class="gantt-right gantt-header gantt-dates" style="--calendar-days: ${dates.length}">
+    <div class="gantt-board gantt-board-full" style="--calendar-days: ${dates.length}">
+      <div class="gantt-dates">
         ${dates.map(date => `
           <div class="gantt-date" data-date="${date}">
             <strong>${formatDateLabel(date)}</strong>
@@ -103,54 +160,20 @@ export function CalendarTimeline(days = [], operations = []) {
         `).join('')}
       </div>
       ${operations.map(operation => {
-        const machineOptions = operation.productivityOptions || [];
-        const models = modelOptions(operation);
-        const selectedModel = operation.productionModelMaterialId || models[0]?.materialId || '';
+        const startTime = safeTime(operation.startTime, '00:00');
+        const endTime = safeTime(operation.endTime, '00:00');
         return `
-          <div class="gantt-left gantt-row-controls" data-operation-id="${operation.materialId}">
-            <strong>${operation.materialName}</strong>
-            <select data-action="machine" data-operation-material="${operation.materialId}" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
-              ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.machineName} / ${option.peopleCount}</option>`).join('')}
-            </select>
-            <select data-action="people" data-operation-material="${operation.materialId}" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
-              ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.peopleCount}</option>`).join('')}
-            </select>
-            <span>${formatQty(operation.produceQty)} ${operation.unit || ''}</span>
-            <label class="production-model-control">Modelo
-              <select data-action="model" data-operation-material="${operation.materialId}" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
-                ${models.length ? models.map(model => `<option value="${model.materialId}" ${String(model.materialId) === String(selectedModel) ? 'selected' : ''}>${model.materialName}</option>`).join('') : '<option value="">Sem origem</option>'}
-              </select>
-            </label>
-          </div>
-          <div class="gantt-right gantt-row" style="--calendar-days: ${dates.length}">
+          <div class="gantt-row" data-row-operation="${operation.materialId}">
             <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, dates)}">
               <strong>${operation.materialName}</strong>
               <span>${formatQty(operation.produceQty)} ${operation.unit || ''} | ${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
-              <small>${formatDate(operation.startDate)} ${operation.startTime} - ${formatDate(operation.endDate)} ${operation.endTime}</small>
+              <small>${formatDate(operation.startDate)} ${startTime} - ${formatDate(operation.endDate)} ${endTime}</small>
             </button>
           </div>
         `;
       }).join('')}
     </div>
   `;
-
-  wrapper.addEventListener('change', event => {
-    const materialId = event.target.dataset.operationMaterial;
-    if (!materialId) return;
-    const row = event.target.closest('.gantt-row-controls');
-    const machineSelect = row?.querySelector('[data-action="machine"]');
-    const modelSelect = row?.querySelector('[data-action="model"]');
-    const [machineName, peopleCount] = (machineSelect?.value || '').split('||');
-    wrapper.dispatchEvent(new CustomEvent('operation-config-change', {
-      bubbles: true,
-      detail: {
-        materialId,
-        machineName,
-        peopleCount: Number(peopleCount || 0),
-        productionModelMaterialId: modelSelect?.value || null
-      }
-    }));
-  });
 
   wrapper.addEventListener('click', event => {
     const bar = event.target.closest('.gantt-bar');
@@ -161,18 +184,27 @@ export function CalendarTimeline(days = [], operations = []) {
 
   wrapper.addEventListener('dragstart', event => {
     const bar = event.target.closest('.gantt-bar');
-    if (bar) event.dataTransfer.setData('text/plain', bar.dataset.operationMaterial);
+    if (!bar) return;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', bar.dataset.operationMaterial);
   });
 
-  wrapper.querySelectorAll('.gantt-date').forEach(dateCell => {
-    dateCell.addEventListener('dragover', event => event.preventDefault());
-    dateCell.addEventListener('drop', event => {
+  wrapper.querySelectorAll('.gantt-row, .gantt-date').forEach(dropTarget => {
+    dropTarget.addEventListener('dragover', event => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+    });
+    dropTarget.addEventListener('drop', event => {
       event.preventDefault();
       const materialId = event.dataTransfer.getData('text/plain');
       if (!materialId) return;
+      const row = event.currentTarget.classList.contains('gantt-row')
+        ? event.currentTarget
+        : wrapper.querySelector(`.gantt-row[data-row-operation="${materialId}"]`);
+      const startDate = event.currentTarget.dataset.date || dateFromDrop(event, row, dates);
       wrapper.dispatchEvent(new CustomEvent('operation-date-change', {
         bubbles: true,
-        detail: { materialId, startDate: dateCell.dataset.date }
+        detail: { materialId, startDate }
       }));
     });
   });

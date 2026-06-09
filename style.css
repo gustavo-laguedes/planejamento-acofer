@@ -340,11 +340,13 @@ select:disabled {
 .date-mode-field {
   min-height: 70px;
   border: 1px solid #cfd8df;
-  border-radius: 6px;
-  padding: 8px 10px 10px;
-  display: flex;
+  border-radius: 8px;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(170px, 1fr));
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  background: #f8fbfc;
 }
 
 .date-mode-field legend {
@@ -355,18 +357,26 @@ select:disabled {
 }
 
 .choice-pill {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  min-height: 34px;
-  padding: 0 10px;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 12px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 6px;
   background: #ffffff;
   color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .choice-pill input {
-  width: auto;
+  width: 16px;
+  min-width: 16px;
 }
 
 .chip-entry {
@@ -1118,11 +1128,14 @@ thead tr:nth-child(2) th {
 
 .gantt-board {
   display: grid;
-  grid-template-columns: minmax(520px, 620px) minmax(720px, 1fr);
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
+}
+
+.gantt-board-full {
+  grid-template-columns: minmax(100%, calc(var(--calendar-days) * 160px));
 }
 
 .gantt-header {
@@ -1164,6 +1177,15 @@ thead tr:nth-child(2) th {
 .gantt-row {
   display: grid;
   grid-template-columns: repeat(var(--calendar-days), minmax(150px, 1fr));
+}
+
+.gantt-dates {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-height: 62px;
+  background: #eef5f7;
+  border-bottom: 1px solid var(--line);
 }
 
 .gantt-date {
@@ -1210,6 +1232,8 @@ thead tr:nth-child(2) th {
 .gantt-row {
   position: relative;
   align-items: center;
+  min-height: 88px;
+  border-bottom: 1px solid var(--line);
   background:
     repeating-linear-gradient(
       to right,
@@ -1235,7 +1259,12 @@ thead tr:nth-child(2) th {
   color: #ffffff;
   padding: 8px 12px;
   text-align: left;
+  cursor: grab;
   box-shadow: 0 10px 24px rgba(15, 76, 92, 0.22);
+}
+
+.gantt-bar:active {
+  cursor: grabbing;
 }
 
 .gantt-bar span,
@@ -1259,7 +1288,8 @@ thead tr:nth-child(2) th {
   gap: 12px;
 }
 
-.operation-detail-grid article {
+.operation-detail-grid article,
+.operation-detail-grid label {
   display: grid;
   gap: 5px;
   border: 1px solid var(--line);
@@ -1272,11 +1302,30 @@ thead tr:nth-child(2) th {
   grid-column: 1 / -1;
 }
 
-.operation-detail-grid span {
+.operation-detail-grid span,
+.operation-detail-grid label {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.operation-detail-grid label select {
+  margin-top: 4px;
+  text-transform: none;
+}
+
+.operation-modal {
+  width: min(860px, 100%);
+}
+
+.operation-modal-form {
+  display: grid;
+  gap: 16px;
+}
+
+.modal-actions {
+  justify-content: flex-end;
 }
 
 .toast {
