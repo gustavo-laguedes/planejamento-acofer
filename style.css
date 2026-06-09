@@ -1093,7 +1093,19 @@ thead tr:nth-child(2) th {
 }
 
 .calendar-gantt {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   margin-top: 4px;
+}
+
+.calendar-panel,
+.calendar-panel .timeline-target {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .calendar-scroll {
@@ -1173,15 +1185,19 @@ thead tr:nth-child(2) th {
 }
 
 .gantt-board {
-  display: grid;
-  overflow: auto;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
 }
 
 .gantt-board-full {
-  grid-template-columns: minmax(100%, calc(var(--calendar-days) * 160px));
+  min-width: 0;
 }
 
 .gantt-header {
@@ -1222,6 +1238,8 @@ thead tr:nth-child(2) th {
 .gantt-dates,
 .gantt-row {
   display: grid;
+  width: max(100%, calc(var(--calendar-days) * 150px));
+  min-width: max-content;
   grid-template-columns: repeat(var(--calendar-days), minmax(150px, 1fr));
 }
 
