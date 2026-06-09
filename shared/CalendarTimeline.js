@@ -327,7 +327,14 @@ function dispatchDate(wrapper, operation, modal) {
   if (!startDate || (startDate === operation.startDate && startTime === currentTime)) return;
   wrapper.dispatchEvent(new CustomEvent('operation-date-change', {
     bubbles: true,
-    detail: { materialId: String(operation.materialId), startDate: `${startDate}T${startTime || currentTime || '00:00'}` }
+    detail: {
+      materialId: String(operation.materialId),
+      materialName: operation.materialName,
+      previousStartDate: operation.startDate,
+      previousStartTime: currentTime,
+      startDate,
+      startTime: startTime || currentTime || '00:00'
+    }
   }));
 }
 

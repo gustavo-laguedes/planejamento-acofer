@@ -326,6 +326,12 @@ export function PlanningPage() {
       return `${operation.startDate}T${operation.startTime || '00:00'}`;
     }
 
+    function overrideDateTime(override) {
+      if (!override?.startDate) return null;
+      if (String(override.startDate).includes('T')) return override.startDate;
+      return `${override.startDate}T${override.startTime || '00:00'}`;
+    }
+
     function compareOperationStart(left, right) {
       return operationStartDateTime(left).localeCompare(operationStartDateTime(right));
     }
@@ -339,7 +345,7 @@ export function PlanningPage() {
       const editedOperation = currentOperations.find(operation => String(operation.materialId) === String(editedMaterialId));
       const anchorOperation = [...currentOperations].sort(compareOperationStart)[0];
       const editedOverride = editedOperation ? operationOverrides[String(editedOperation.materialId)] : null;
-      const editedStartDate = editedOverride?.startDate?.split('T')[0] || editedOperation?.startDate;
+      const editedStartDate = overrideDateTime(editedOverride)?.split('T')[0] || editedOperation?.startDate;
       const previousOperations = editedOperation
         ? currentOperations.filter(operation => compareOperationStart(operation, editedOperation) < 0)
         : [];
@@ -507,7 +513,8 @@ Deseja continuar mesmo assim?`)) return null;
     timelineTarget.addEventListener('operation-date-change', async event => {
       operationOverrides[event.detail.materialId] = {
         ...(operationOverrides[event.detail.materialId] || {}),
-        startDate: event.detail.startDate
+        startDate: event.detail.startDate,
+        startTime: event.detail.startTime
       };
       queueManualRecalculate(event.detail.materialId);
     });

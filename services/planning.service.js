@@ -64,6 +64,18 @@ function materialCode(material) {
   return Array.isArray(material?.codes) ? material.codes[0] || null : null;
 }
 
+function materialIdentifier(material) {
+  return material?.id ?? material?.materialId;
+}
+
+function materialName(material) {
+  return material?.name ?? material?.materialName;
+}
+
+function materialCodeForOverride(material) {
+  return materialCode(material) ?? material?.materialCode;
+}
+
 function machineOptions(material, matrixRows) {
   const codes = new Set((material.codes || []).map(code => String(code).toLowerCase()));
   return matrixRows.filter(row => {
@@ -105,11 +117,23 @@ function productivityOptions(material, matrixRows) {
 }
 
 function overrideForMaterial(overrides = {}, material) {
-  const keys = [material.id, String(material.id), material.name, materialCode(material)].filter(Boolean);
+  const id = materialIdentifier(material);
+  const keys = [id, id == null ? null : String(id), materialName(material), materialCodeForOverride(material)].filter(Boolean);
   for (const key of keys) {
     if (overrides[key]) return overrides[key];
   }
   return null;
+}
+
+function overrideStartCursor(override, fallbackDate, fallbackMinutes) {
+  if (!override?.startDate) return null;
+  if (String(override.startDate).includes('T')) {
+    return splitDateTime(override.startDate, fallbackDate, fallbackMinutes);
+  }
+  return {
+    date: override.startDate || fallbackDate,
+    minutes: parseTime(override.startTime, minutesToTime(fallbackMinutes))
+  };
 }
 
 function stockForMaterial(material, stockRows, inventoryRows, productionRows) {
@@ -613,8 +637,8 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
         .map(item => ({ date: item.endDate, minutes: parseTime(item.endTime, minutesToTime(shiftStart)) })));
       const machineCursor = byMachine.get(operation.machineName || '') || startCursor;
       const override = overrideForMaterial(operationOverrides, operation);
-      const overrideCursor = override?.startDate ? splitDateTime(override.startDate, startCursor.date, shiftStart) : null;
-      const cursor = maxCursor(startCursor, dependencyEnd, machineCursor, overrideCursor);
+      const overrideCursor = overrideStartCursor(override, startCursor.date, shiftStart);
+      const cursor = overrideCursor || maxCursor(startCursor, dependencyEnd, machineCursor);
       const slot = scheduleForward(cursor, operation.totalMinutes, calendar);
       const item = scheduledItem(operation, slot);
       scheduledByMaterialId.set(String(operation.materialId), item);
