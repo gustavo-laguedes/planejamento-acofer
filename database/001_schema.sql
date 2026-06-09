@@ -80,9 +80,10 @@ CREATE TABLE IF NOT EXISTS material_inputs (
   id BIGSERIAL PRIMARY KEY,
   material_id BIGINT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
   input_material_id BIGINT NOT NULL REFERENCES materials(id),
+  production_model_name TEXT NOT NULL DEFAULT 'Modelo padrão',
   created_at TIMESTAMPTZ DEFAULT now(),
   CONSTRAINT material_inputs_not_self CHECK (material_id <> input_material_id),
-  CONSTRAINT material_inputs_unique UNIQUE (material_id, input_material_id)
+  CONSTRAINT material_inputs_unique UNIQUE (material_id, production_model_name, input_material_id)
 );
 
 CREATE TABLE IF NOT EXISTS stock_location_adjustments (

@@ -514,6 +514,31 @@ select:disabled {
   font-size: 15px;
 }
 
+.compact-heading {
+  margin: 0;
+}
+
+.production-models-target {
+  display: grid;
+  gap: 12px;
+}
+
+.production-model-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.production-model-card-header {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
 .consumed-material-header,
 .consumed-material-row {
   display: grid;
@@ -1343,6 +1368,28 @@ thead tr:nth-child(2) th {
   text-align: left;
   cursor: grab;
   box-shadow: 0 10px 24px rgba(15, 76, 92, 0.22);
+}
+
+.gantt-bar:hover::after,
+.gantt-bar:focus-visible::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  width: max-content;
+  max-width: min(320px, 80vw);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  box-shadow: 0 14px 34px rgba(16, 24, 40, 0.18);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+  white-space: pre-line;
+  pointer-events: none;
 }
 
 .gantt-bar:active {

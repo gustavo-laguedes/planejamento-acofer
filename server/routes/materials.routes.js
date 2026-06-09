@@ -24,6 +24,16 @@ function normalizeInputs(value, materialId = null) {
   return [...byId.values()];
 }
 
+function normalizeProductionModels(value, legacyInputs, materialId = null) {
+  const sourceModels = Array.isArray(value) && value.length
+    ? value
+    : [{ name: 'Modelo padrão', inputMaterials: legacyInputs || [] }];
+  return sourceModels.map((model, index) => ({
+    name: String(model.name || `Modelo ${index + 1}`).trim() || `Modelo ${index + 1}`,
+    inputMaterials: normalizeInputs(model.inputMaterials || model.inputs || [], materialId)
+  })).filter(model => model.inputMaterials.length);
+}
+
 function validateMaterial(body) {
   const name = String(body.name || '').trim();
   const primaryUnit = String(body.primaryUnit || '').trim();
@@ -38,6 +48,24 @@ function validateMaterial(body) {
   return { name, primaryUnit, secondaryUnit, factor };
 }
 
+function materialResponse(row) {
+  const grouped = new Map();
+  for (const item of row.production_model_items || []) {
+    const modelName = item.modelName || 'Modelo padrão';
+    if (!grouped.has(modelName)) grouped.set(modelName, []);
+    grouped.get(modelName).push({
+      id: item.inputMaterialId,
+      inputMaterialId: item.inputMaterialId,
+      name: item.materialName,
+      qtyPerOutput: item.qtyPerOutput || 1
+    });
+  }
+  return {
+    ...row,
+    production_models: [...grouped.entries()].map(([name, inputMaterials]) => ({ name, inputMaterials }))
+  };
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const db = requireDb();
@@ -45,10 +73,15 @@ router.get('/', async (req, res, next) => {
     const rows = await db`
       SELECT m.*,
              COALESCE(
-               json_agg(json_build_object('id', i.id, 'name', i.name, 'qtyPerOutput', mi.qty_per_output) ORDER BY i.name)
+               json_agg(json_build_object('id', i.id, 'name', i.name, 'qtyPerOutput', mi.qty_per_output, 'modelName', COALESCE(mi.production_model_name, 'Modelo padrão')) ORDER BY COALESCE(mi.production_model_name, 'Modelo padrão'), i.name)
                FILTER (WHERE i.id IS NOT NULL),
                '[]'::json
-             ) AS input_materials
+             ) AS input_materials,
+             COALESCE(
+               json_agg(json_build_object('modelName', COALESCE(mi.production_model_name, 'Modelo padrão'), 'inputMaterialId', i.id, 'materialName', i.name, 'qtyPerOutput', mi.qty_per_output) ORDER BY COALESCE(mi.production_model_name, 'Modelo padrão'), i.name)
+               FILTER (WHERE i.id IS NOT NULL),
+               '[]'::json
+             ) AS production_model_items
       FROM materials m
       LEFT JOIN material_inputs mi ON mi.material_id = m.id
       LEFT JOIN materials i ON i.id = mi.input_material_id
@@ -58,7 +91,7 @@ router.get('/', async (req, res, next) => {
       GROUP BY m.id
       ORDER BY m.active DESC, m.name
     `;
-    res.json(rows);
+    res.json(rows.map(materialResponse));
   } catch (error) {
     next(error);
   }
@@ -71,20 +104,22 @@ router.post('/', async (req, res, next) => {
 
     const db = requireDb();
     const codes = normalizeCodes(req.body.codes);
-    const inputItems = normalizeInputs(req.body.inputMaterials || req.body.inputMaterialIds);
+    const models = normalizeProductionModels(req.body.productionModels, req.body.inputMaterials || req.body.inputMaterialIds);
     const row = await db.begin(async tx => {
       const [created] = await tx`
         INSERT INTO materials (name, codes, primary_unit, secondary_unit, primary_to_secondary_factor, is_initial_raw_material, active)
         VALUES (${valid.name}, ${codes}, ${valid.primaryUnit}, ${valid.secondaryUnit}, ${valid.factor}, ${req.body.isInitialRawMaterial === true}, ${req.body.active !== false})
         RETURNING *
       `;
-      for (const input of inputItems) {
-        await tx`
-          INSERT INTO material_inputs (material_id, input_material_id, qty_per_output)
-          VALUES (${created.id}, ${input.inputMaterialId}, ${input.qtyPerOutput})
-          ON CONFLICT (material_id, input_material_id)
-          DO UPDATE SET qty_per_output = EXCLUDED.qty_per_output
-        `;
+      for (const model of models) {
+        for (const input of model.inputMaterials) {
+          await tx`
+            INSERT INTO material_inputs (material_id, input_material_id, qty_per_output, production_model_name)
+            VALUES (${created.id}, ${input.inputMaterialId}, ${input.qtyPerOutput}, ${model.name})
+            ON CONFLICT (material_id, production_model_name, input_material_id)
+            DO UPDATE SET qty_per_output = EXCLUDED.qty_per_output
+          `;
+        }
       }
       return created;
     });
@@ -101,7 +136,7 @@ router.put('/:id', async (req, res, next) => {
 
     const db = requireDb();
     const codes = normalizeCodes(req.body.codes);
-    const inputItems = normalizeInputs(req.body.inputMaterials || req.body.inputMaterialIds, req.params.id);
+    const models = normalizeProductionModels(req.body.productionModels, req.body.inputMaterials || req.body.inputMaterialIds, req.params.id);
     const row = await db.begin(async tx => {
       const [updated] = await tx`
         UPDATE materials
@@ -119,13 +154,15 @@ router.put('/:id', async (req, res, next) => {
       if (!updated) return null;
 
       await tx`DELETE FROM material_inputs WHERE material_id = ${req.params.id}`;
-      for (const input of inputItems) {
-        await tx`
-          INSERT INTO material_inputs (material_id, input_material_id, qty_per_output)
-          VALUES (${req.params.id}, ${input.inputMaterialId}, ${input.qtyPerOutput})
-          ON CONFLICT (material_id, input_material_id)
-          DO UPDATE SET qty_per_output = EXCLUDED.qty_per_output
-        `;
+      for (const model of models) {
+        for (const input of model.inputMaterials) {
+          await tx`
+            INSERT INTO material_inputs (material_id, input_material_id, qty_per_output, production_model_name)
+            VALUES (${req.params.id}, ${input.inputMaterialId}, ${input.qtyPerOutput}, ${model.name})
+            ON CONFLICT (material_id, production_model_name, input_material_id)
+            DO UPDATE SET qty_per_output = EXCLUDED.qty_per_output
+          `;
+        }
       }
       return updated;
     });

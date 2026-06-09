@@ -183,7 +183,7 @@ export function RegistrationsPage() {
           { label: 'Unidade secundária', key: 'secondary_unit' },
           { label: 'Fator', key: 'primary_to_secondary_factor' },
           { label: 'Matéria-prima inicial', render: row => row.is_initial_raw_material ? 'Sim' : 'Não' },
-          { label: 'Materiais de origem', render: row => formatInputs(row.input_materials) },
+          { label: 'Modelos de produção', render: row => formatProductionModels(row.production_models || row.input_materials) },
           { label: 'Status', render: row => row.active ? 'Ativo' : 'Inativo' },
           { label: 'Ações', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
         ],
@@ -192,7 +192,7 @@ export function RegistrationsPage() {
     }
 
     function openModal(row = null) {
-      const selectedInputs = new Map((row?.input_materials || []).map(item => [String(item.id), item.qtyPerOutput || 1]));
+      const selectedModels = normalizeProductionModels(row);
       const codeInput = CodeChipsInput({ initialCodes: row?.codes || [] });
       const modal = createModal(row ? 'Editar material' : 'Cadastrar material', `
         <form class="grid-form registration-form material-form">
@@ -203,10 +203,11 @@ export function RegistrationsPage() {
           <label class="checkbox-line wide-field"><input name="isInitialRawMaterial" type="checkbox" /> Matéria-prima inicial</label>
           <label class="wide-field">Códigos atrelados<div class="codes-target"></div></label>
           <div class="wide-field consumed-selector-block">
-            <label>Materiais usados para produzir este material</label>
-            <div class="material-inputs-target"></div>
-            <h3>Materiais consumidos</h3>
-            <div class="consumed-materials-target"></div>
+            <div class="section-heading compact-heading">
+              <h3>Modelos de Produção</h3>
+              <button class="secondary-button new-production-model" type="button">Novo modelo</button>
+            </div>
+            <div class="production-models-target"></div>
           </div>
           <div class="form-actions">
             <button class="primary-button" type="submit">Salvar</button>
@@ -216,7 +217,7 @@ export function RegistrationsPage() {
       `);
       const form = modal.querySelector('form');
       modal.querySelector('.codes-target').appendChild(codeInput.element);
-      renderMaterialInputs(modal, selectedInputs, row?.id || null);
+      renderProductionModels(modal, selectedModels, row?.id || null);
       form.elements.name.value = row?.name || '';
       form.elements.primaryUnit.value = row?.primary_unit || 'un';
       form.elements.secondaryUnit.value = row?.secondary_unit || 'kg';
@@ -233,7 +234,7 @@ export function RegistrationsPage() {
           secondaryUnit: form.elements.secondaryUnit.value,
           primaryToSecondaryFactor: Number(form.elements.primaryToSecondaryFactor.value),
           isInitialRawMaterial: form.elements.isInitialRawMaterial.checked,
-          inputMaterials: form.elements.isInitialRawMaterial.checked ? [] : getMaterialInputs(modal),
+          productionModels: form.elements.isInitialRawMaterial.checked ? [] : getProductionModels(modal),
           active: true
         };
         await api(row ? `/materials/${row.id}` : '/materials', { method: row ? 'PUT' : 'POST', body });
@@ -300,52 +301,90 @@ export function RegistrationsPage() {
     return Array.isArray(codes) ? codes.join(', ') : '';
   }
 
-  function formatInputs(inputs = []) {
-    return Array.isArray(inputs) ? inputs.map(input => `${input.name} (${input.qtyPerOutput || 1})`).join(', ') : '';
+  function normalizeProductionModels(row = null) {
+    const sourceModels = Array.isArray(row?.production_models) && row.production_models.length
+      ? row.production_models
+      : [{ name: 'Modelo padrão', inputMaterials: row?.input_materials || [] }];
+    return sourceModels.map((model, index) => ({
+      name: model.name || model.modelName || `Modelo ${index + 1}`,
+      inputs: new Map((model.inputMaterials || model.inputs || []).map(input => [
+        String(input.inputMaterialId || input.id),
+        input.qtyPerOutput || 1
+      ]))
+    }));
   }
 
-  function renderMaterialInputs(modal, selectedInputs, excludeId) {
-    const target = modal.querySelector('.material-inputs-target');
-    const consumedTarget = modal.querySelector('.consumed-materials-target');
+  function formatProductionModels(models = []) {
+    const normalized = Array.isArray(models) && models[0]?.inputMaterials
+      ? models
+      : [{ name: 'Modelo padrão', inputMaterials: models }];
+    return normalized
+      .filter(model => (model.inputMaterials || []).length)
+      .map(model => `${model.name || model.modelName || 'Modelo padrão'}: ${(model.inputMaterials || []).map(input => `${input.name} (${input.qtyPerOutput || 1})`).join(', ')}`)
+      .join(' | ');
+  }
+
+  function renderProductionModels(modal, selectedModels, excludeId) {
+    const target = modal.querySelector('.production-models-target');
     const available = materials.filter(material => String(material.id) !== String(excludeId || ''));
-    target.className = 'material-inputs-target material-selector-list';
-    target.innerHTML = available.length
-      ? available.map(material => {
-          const selected = selectedInputs.has(String(material.id));
-          return `
-            <label class="checkbox-line material-option">
-              <input type="checkbox" value="${material.id}" ${selected ? 'checked' : ''} />
-              ${material.name}
-            </label>
-          `;
-        }).join('')
-      : '<div class="empty-state compact">Nenhum material cadastrado.</div>';
+    const render = () => {
+      target.innerHTML = selectedModels.map((model, modelIndex) => `
+        <article class="production-model-card" data-model-index="${modelIndex}">
+          <div class="production-model-card-header">
+            <label>Nome do modelo<input class="production-model-name" value="${model.name}" required /></label>
+            ${selectedModels.length > 1 ? `<button class="link-button danger remove-production-model" type="button">Remover</button>` : ''}
+          </div>
+          <div class="material-selector-list">
+            ${available.length
+              ? available.map(material => `
+                  <label class="checkbox-line material-option">
+                    <input class="model-material-check" type="checkbox" value="${material.id}" ${model.inputs.has(String(material.id)) ? 'checked' : ''} />
+                    ${material.name}
+                  </label>
+                `).join('')
+              : '<div class="empty-state compact">Nenhum material cadastrado.</div>'}
+          </div>
+          <h3>Materiais consumidos</h3>
+          <div class="consumed-materials-target">
+            ${consumedRowsHtml(model)}
+          </div>
+        </article>
+      `).join('');
+    };
+
+    target.addEventListener('input', event => {
+      const card = event.target.closest('[data-model-index]');
+      if (!card) return;
+      const model = selectedModels[Number(card.dataset.modelIndex)];
+      if (event.target.classList.contains('production-model-name')) model.name = event.target.value;
+      if (event.target.classList.contains('usage-qty')) model.inputs.set(String(event.target.dataset.materialId), Number(event.target.value || 1));
+    });
     target.addEventListener('change', event => {
-      if (event.target.type !== 'checkbox') return;
-      if (event.target.checked && !selectedInputs.has(String(event.target.value))) selectedInputs.set(String(event.target.value), 1);
-      if (!event.target.checked) selectedInputs.delete(String(event.target.value));
-      renderConsumedRows(consumedTarget, selectedInputs);
+      if (!event.target.classList.contains('model-material-check')) return;
+      const card = event.target.closest('[data-model-index]');
+      const model = selectedModels[Number(card.dataset.modelIndex)];
+      if (event.target.checked) model.inputs.set(String(event.target.value), 1);
+      else model.inputs.delete(String(event.target.value));
+      render();
     });
-    consumedTarget.addEventListener('input', event => {
-      if (!event.target.classList.contains('usage-qty')) return;
-      selectedInputs.set(String(event.target.dataset.materialId), Number(event.target.value || 1));
+    target.addEventListener('click', event => {
+      if (!event.target.classList.contains('remove-production-model')) return;
+      const card = event.target.closest('[data-model-index]');
+      selectedModels.splice(Number(card.dataset.modelIndex), 1);
+      render();
     });
-    renderConsumedRows(consumedTarget, selectedInputs);
+    modal.querySelector('.new-production-model').addEventListener('click', () => {
+      selectedModels.push({ name: `Modelo ${selectedModels.length + 1}`, inputs: new Map() });
+      render();
+    });
+    render();
   }
 
-  function getMaterialInputs(modal) {
-    return [...modal.querySelectorAll('.consumed-material-row')]
-      .map(row => ({
-        inputMaterialId: Number(row.dataset.materialId),
-        qtyPerOutput: Number(row.querySelector('.usage-qty').value || 1)
-      }));
-  }
-
-  function renderConsumedRows(target, selectedInputs) {
-    const selectedRows = [...selectedInputs.entries()]
+  function consumedRowsHtml(model) {
+    const selectedRows = [...model.inputs.entries()]
       .map(([id, qty]) => ({ material: materials.find(item => String(item.id) === id), qty }))
       .filter(row => row.material);
-    target.innerHTML = selectedRows.length
+    return selectedRows.length
       ? `
         <div class="consumed-material-header">
           <strong>Material consumido</strong>
@@ -359,6 +398,16 @@ export function RegistrationsPage() {
         `).join('')}
       `
       : '<div class="empty-state compact">Nenhum material consumido selecionado.</div>';
+  }
+
+  function getProductionModels(modal) {
+    return [...modal.querySelectorAll('.production-model-card')].map(card => ({
+      name: card.querySelector('.production-model-name').value || 'Modelo padrão',
+      inputMaterials: [...card.querySelectorAll('.consumed-material-row')].map(row => ({
+        inputMaterialId: Number(row.dataset.materialId),
+        qtyPerOutput: Number(row.querySelector('.usage-qty').value || 1)
+      }))
+    })).filter(model => model.inputMaterials.length);
   }
 
   function updateConsumedVisibility(modal) {

@@ -32,11 +32,26 @@ function dateTimeParts(date) {
   };
 }
 
-function snapMinutes(date, step = 15) {
+function snapMinutes(date, step = 60) {
   const copy = new Date(date);
   copy.setSeconds(0, 0);
   copy.setMinutes(Math.round(copy.getMinutes() / step) * step);
   return copy;
+}
+
+function parseTime(value, fallback = '00:00') {
+  const [hours, minutes] = String(value || fallback).split(':').map(part => Number(part));
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return parseTime(fallback, '00:00');
+  return Math.max(0, hours * 60 + minutes);
+}
+
+function minutesToTime(minutes) {
+  const normalized = Math.max(0, Math.round(minutes));
+  return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
+}
+
+function formatHour(minutes) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}h`;
 }
 
 function formatDate(date) {
@@ -53,6 +68,14 @@ function formatDateLabel(date) {
 
 function formatQty(value) {
   return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+}
+
+function escapeAttr(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
 
 function safeTime(value) {
@@ -93,12 +116,13 @@ function barStyle(operation, timelineStartMs, timelineEndMs) {
   return `--bar-left: ${left}%; --bar-width: ${width}%;`;
 }
 
-function dateTimeFromDrop(event, row, calendarStartDate, calendarEndDate) {
+function dateTimeFromDrop(event, row, slots) {
   const rect = row.getBoundingClientRect();
   const ratio = Math.max(0, Math.min(0.999, (event.clientX - rect.left) / rect.width));
-  const startMs = dateTimeMs(calendarStartDate);
-  const endMs = dateTimeMs(addDays(calendarEndDate, 1));
-  const droppedAt = snapMinutes(new Date(startMs + ((endMs - startMs) * ratio)));
+  const startMs = dateTimeMs(slots[0].date, slots[0].startTime);
+  const lastSlot = slots[slots.length - 1];
+  const endMs = dateTimeMs(lastSlot.endDate || lastSlot.date, lastSlot.endTime);
+  const droppedAt = snapMinutes(new Date(startMs + ((endMs - startMs) * ratio)), 60);
   const parts = dateTimeParts(droppedAt);
   return `${parts.date}T${parts.time}`;
 }
@@ -119,11 +143,11 @@ function dispatchConfig(wrapper, operation, modal) {
   const peopleSelect = modal.querySelector('[name="peopleMachine"]');
   const [machineName, peopleCount] = (peopleSelect?.value || machineSelect?.value || '').split('||');
   const modelSelect = modal.querySelector('[name="productionModel"]');
-  const productionModelMaterialId = modelSelect?.value || null;
+  const productionModelName = modelSelect?.value || null;
   if (
     machineName === operation.machineName
     && Number(peopleCount || 0) === Number(operation.peopleCount || 0)
-    && String(productionModelMaterialId || '') === String(operation.productionModelMaterialId || '')
+    && String(productionModelName || '') === String(operation.productionModelName || '')
   ) return;
   wrapper.dispatchEvent(new CustomEvent('operation-config-change', {
     bubbles: true,
@@ -131,9 +155,23 @@ function dispatchConfig(wrapper, operation, modal) {
       materialId: String(operation.materialId),
       machineName,
       peopleCount: Number(peopleCount || 0),
-      productionModelMaterialId
+      productionModelName
     }
   }));
+}
+
+function tooltipText(operation) {
+  const people = Number(operation.peopleCount || 0);
+  return [
+    operation.materialName,
+    `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim(),
+    operation.machineName || '-',
+    `${people || '-'} pessoa${people === 1 ? '' : 's'}`,
+    '',
+    `${formatDate(operation.startDate)} ${operationStartTime(operation)}`,
+    'até',
+    `${formatDate(operation.endDate)} ${operationEndTime(operation)}`
+  ].join('\n');
 }
 
 function dispatchDate(wrapper, operation, modal) {
@@ -150,7 +188,7 @@ function dispatchDate(wrapper, operation, modal) {
 function showOperationModal(wrapper, operation) {
   const machineOptions = operation.productivityOptions || [];
   const models = modelOptions(operation);
-  const selectedModel = operation.productionModelMaterialId || models[0]?.materialId || '';
+  const selectedModel = operation.productionModelName || models[0]?.modelName || '';
   const startTime = operationStartTime(operation);
   const endTime = operationEndTime(operation);
   const backdrop = document.createElement('div');
@@ -177,7 +215,7 @@ function showOperationModal(wrapper, operation) {
           </label>
           <label>Modelo de produ&ccedil;&atilde;o
             <select name="productionModel" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
-              ${models.length ? models.map(model => `<option value="${model.materialId}" ${String(model.materialId) === String(selectedModel) ? 'selected' : ''}>${model.materialName}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
+              ${models.length ? models.map(model => `<option value="${model.modelName}" ${String(model.modelName) === String(selectedModel) ? 'selected' : ''}>${model.label || model.modelName}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
             </select>
           </label>
           <article><span>Produtividade</span><strong>${formatQty(operation.outputQty)} ${operation.outputUnit || ''} em ${formatQty(operation.timeSeconds)}s</strong></article>
@@ -215,10 +253,10 @@ function showOperationModal(wrapper, operation) {
   wrapper.appendChild(backdrop);
 }
 
-export function CalendarTimeline(days = [], operations = []) {
+export function CalendarTimeline(days = [], operations = [], config = {}) {
   const wrapper = document.createElement('section');
   wrapper.className = 'calendar-gantt';
-  const zoomWidths = [90, 130, 180, 260, 360];
+  const zoomWidths = [90, 130, 180, 84, 62];
   let zoomIndex = 2;
 
   if (!operations.length) {
@@ -230,14 +268,51 @@ export function CalendarTimeline(days = [], operations = []) {
   const calendarStartDate = addDays(knownDates[0], -15);
   const calendarEndDate = addDays(knownDates[knownDates.length - 1], 15);
   const dates = eachDate(calendarStartDate, calendarEndDate);
-  const timelineStartMs = dateTimeMs(calendarStartDate);
-  const timelineEndMs = dateTimeMs(addDays(calendarEndDate, 1));
+  const shiftStart = parseTime(config.shiftStartTime || '07:00', '07:00');
+  const shiftEnd = Math.max(parseTime(config.shiftEndTime || '17:00', '17:00'), shiftStart + 60);
+
+  function buildSlots() {
+    if (zoomIndex >= 4) {
+      return dates.flatMap(date => {
+        const slots = [];
+        for (let minutes = shiftStart; minutes < shiftEnd; minutes += 60) {
+          slots.push({
+            date,
+            startTime: minutesToTime(minutes),
+            endDate: date,
+            endTime: minutesToTime(Math.min(minutes + 60, shiftEnd)),
+            label: formatHour(minutes),
+            sublabel: formatDate(date)
+          });
+        }
+        return slots;
+      });
+    }
+    if (zoomIndex >= 3) {
+      return dates.map(date => ({
+        date,
+        startTime: minutesToTime(shiftStart),
+        endDate: date,
+        endTime: minutesToTime(shiftEnd),
+        label: formatDateLabel(date),
+        sublabel: `${formatHour(shiftStart)}-${formatHour(shiftEnd)}`
+      }));
+    }
+    return dates.map(date => ({
+      date,
+      startTime: '00:00',
+      endDate: addDays(date, 1),
+      endTime: '00:00',
+      label: formatDateLabel(date),
+      sublabel: formatDate(date)
+    }));
+  }
 
   function setZoom(nextIndex) {
     zoomIndex = Math.max(0, Math.min(zoomWidths.length - 1, nextIndex));
-    wrapper.querySelector('.gantt-board')?.style.setProperty('--calendar-day-width', `${zoomWidths[zoomIndex]}px`);
     wrapper.querySelector('[data-zoom-out]')?.toggleAttribute('disabled', zoomIndex === 0);
     wrapper.querySelector('[data-zoom-in]')?.toggleAttribute('disabled', zoomIndex === zoomWidths.length - 1);
+    renderBoard();
   }
 
   wrapper.innerHTML = `
@@ -245,12 +320,23 @@ export function CalendarTimeline(days = [], operations = []) {
       <button class="secondary-button" type="button" data-zoom-out aria-label="Diminuir zoom">-</button>
       <button class="secondary-button" type="button" data-zoom-in aria-label="Aumentar zoom">+</button>
     </div>
-    <div class="gantt-board gantt-board-full" style="--calendar-days: ${dates.length}; --calendar-day-width: ${zoomWidths[zoomIndex]}px">
+    <div class="gantt-board gantt-board-full"></div>
+  `;
+
+  function renderBoard() {
+    const slots = buildSlots();
+    const timelineStartMs = dateTimeMs(slots[0].date, slots[0].startTime);
+    const lastSlot = slots[slots.length - 1];
+    const timelineEndMs = dateTimeMs(lastSlot.endDate || lastSlot.date, lastSlot.endTime);
+    const board = wrapper.querySelector('.gantt-board');
+    board.style.setProperty('--calendar-days', String(slots.length));
+    board.style.setProperty('--calendar-day-width', `${zoomWidths[zoomIndex]}px`);
+    board.innerHTML = `
       <div class="gantt-dates">
-        ${dates.map(date => `
-          <div class="gantt-date" data-date="${date}">
-            <strong>${formatDateLabel(date)}</strong>
-            <span>${formatDate(date)}</span>
+        ${slots.map(slot => `
+          <div class="gantt-date" data-date="${slot.date}" data-start-time="${slot.startTime}">
+            <strong>${slot.label}</strong>
+            <span>${slot.sublabel}</span>
           </div>
         `).join('')}
       </div>
@@ -259,7 +345,7 @@ export function CalendarTimeline(days = [], operations = []) {
         const endTime = operationEndTime(operation);
         return `
           <div class="gantt-row" data-row-operation="${operation.materialId}">
-            <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, timelineStartMs, timelineEndMs)}">
+            <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, timelineStartMs, timelineEndMs)}" title="${escapeAttr(tooltipText(operation))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
               <strong>${operation.materialName}</strong>
               <span>${formatQty(operation.produceQty)} ${operation.unit || ''} | ${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
               <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
@@ -267,8 +353,9 @@ export function CalendarTimeline(days = [], operations = []) {
           </div>
         `;
       }).join('')}
-    </div>
-  `;
+    `;
+    bindDropTargets(board, slots);
+  }
 
   wrapper.addEventListener('click', event => {
     const bar = event.target.closest('.gantt-bar');
@@ -287,28 +374,29 @@ export function CalendarTimeline(days = [], operations = []) {
     event.dataTransfer.setData('text/plain', bar.dataset.operationMaterial);
   });
 
-  wrapper.querySelectorAll('.gantt-row, .gantt-date').forEach(dropTarget => {
-    dropTarget.addEventListener('dragover', event => {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = 'move';
+  function bindDropTargets(board, slots) {
+    board.querySelectorAll('.gantt-row, .gantt-date').forEach(dropTarget => {
+      dropTarget.addEventListener('dragover', event => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+      });
+      dropTarget.addEventListener('drop', event => {
+        event.preventDefault();
+        const materialId = event.dataTransfer.getData('text/plain');
+        if (!materialId) return;
+        const row = event.currentTarget.classList.contains('gantt-row')
+          ? event.currentTarget
+          : wrapper.querySelector(`.gantt-row[data-row-operation="${materialId}"]`);
+        const startDate = event.currentTarget.dataset.date
+          ? `${event.currentTarget.dataset.date}T${event.currentTarget.dataset.startTime || '00:00'}`
+          : dateTimeFromDrop(event, row, slots);
+        wrapper.dispatchEvent(new CustomEvent('operation-date-change', {
+          bubbles: true,
+          detail: { materialId, startDate }
+        }));
+      });
     });
-    dropTarget.addEventListener('drop', event => {
-      event.preventDefault();
-      const materialId = event.dataTransfer.getData('text/plain');
-      if (!materialId) return;
-      const row = event.currentTarget.classList.contains('gantt-row')
-        ? event.currentTarget
-        : wrapper.querySelector(`.gantt-row[data-row-operation="${materialId}"]`);
-      const operation = operations.find(item => String(item.materialId) === String(materialId));
-      const startDate = event.currentTarget.dataset.date
-        ? `${event.currentTarget.dataset.date}T${operation ? operationStartTime(operation) || '00:00' : '00:00'}`
-        : dateTimeFromDrop(event, row, calendarStartDate, calendarEndDate);
-      wrapper.dispatchEvent(new CustomEvent('operation-date-change', {
-        bubbles: true,
-        detail: { materialId, startDate }
-      }));
-    });
-  });
+  }
 
   setZoom(zoomIndex);
   focusFirstOperation(wrapper, dates, operations);

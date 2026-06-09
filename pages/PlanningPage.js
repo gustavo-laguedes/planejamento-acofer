@@ -161,6 +161,10 @@ export function PlanningPage() {
       .sort((left, right) => matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right));
   }
 
+  function productionModelsFor(material) {
+    return Array.isArray(material?.production_models) ? material.production_models.filter(model => (model.inputMaterials || []).length) : [];
+  }
+
   async function loadLookups() {
     [materials, matrix] = await Promise.all([api('/materials'), api('/productivity')]);
   }
@@ -191,6 +195,7 @@ export function PlanningPage() {
             <span>Unidade</span>
             <div class="material-unit readonly-chip-list"></div>
           </div>
+          <label>Modelo de produ&ccedil;&atilde;o<select name="productionModelName"></select></label>
           <label>Quantidade<input name="plannedQty" type="number" step="0.001" required /></label>
           <label>Máquina<select name="machineName" required></select></label>
           <label>Pessoas<select name="peopleCount" required></select></label>
@@ -274,6 +279,12 @@ export function PlanningPage() {
         : '<option value="">Selecione um material</option>';
       form.elements.machineName.disabled = !material || machines.length === 1;
       form.elements.machineName.dataset.locked = material && machines.length === 1 ? 'true' : 'false';
+      const models = productionModelsFor(material);
+      form.elements.productionModelName.innerHTML = models.length
+        ? models.map(model => `<option value="${escapeHtml(model.name)}">${escapeHtml(model.name)}</option>`).join('')
+        : '<option value="">Sem modelo</option>';
+      form.elements.productionModelName.disabled = !material || models.length <= 1;
+      form.elements.productionModelName.dataset.locked = material && models.length <= 1 ? 'true' : 'false';
       updatePeopleOptions();
     }
 
@@ -305,6 +316,7 @@ export function PlanningPage() {
         lunchHours,
         shiftStartTime: form.elements.shiftStartTime.value,
         shiftEndTime: form.elements.shiftEndTime.value,
+        productionModelName: form.elements.productionModelName.value,
         operationOverrides
       };
     }
@@ -328,7 +340,7 @@ export function PlanningPage() {
       ];
       summaryGrid.innerHTML = cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${value}</strong></article>`).join('');
       timelineTarget.innerHTML = '';
-      timelineTarget.appendChild(CalendarTimeline(result.days, result.operations));
+      timelineTarget.appendChild(CalendarTimeline(result.days, result.operations, result.summary));
     }
 
     async function simulate() {
@@ -413,7 +425,7 @@ Deseja continuar mesmo assim?`)) return null;
         ...(operationOverrides[event.detail.materialId] || {}),
         machineName: event.detail.machineName,
         peopleCount: Number(event.detail.peopleCount),
-        productionModelMaterialId: event.detail.productionModelMaterialId ? Number(event.detail.productionModelMaterialId) : null
+        productionModelName: event.detail.productionModelName || null
       };
       try {
         await simulate();

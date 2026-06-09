@@ -35,7 +35,7 @@ function normalizedMaterialKey(operation) {
   return [
     materialKey,
     operation.machineName || '',
-    operation.productionModelMaterialId || '',
+    operation.productionModelName || '',
     operation.productionOrder || 0
   ].join('|');
 }
@@ -131,21 +131,34 @@ function stockForMaterial(material, stockRows, inventoryRows, productionRows) {
 function selectedInputs(material, inputsByMaterialId, operationOverrides = {}) {
   const allInputs = inputsByMaterialId.get(String(material.id)) || [];
   const override = overrideForMaterial(operationOverrides, material);
-  const selectedModelId = override?.productionModelMaterialId ? String(override.productionModelMaterialId) : null;
-  return selectedModelId
-    ? allInputs.filter(input => String(input.input_material_id) === selectedModelId)
+  const selectedModelName = override?.productionModelName ? String(override.productionModelName) : null;
+  if (selectedModelName) {
+    return allInputs.filter(input => String(input.production_model_name || 'Modelo padrão') === selectedModelName);
+  }
+  const options = productionModelOptions(material, inputsByMaterialId, new Map());
+  const defaultModelName = options[0]?.modelName || null;
+  return defaultModelName
+    ? allInputs.filter(input => String(input.production_model_name || 'Modelo padrão') === defaultModelName)
     : allInputs;
 }
 
 function productionModelOptions(material, inputsByMaterialId, materialsById) {
-  return (inputsByMaterialId.get(String(material.id)) || []).map(input => {
+  const grouped = new Map();
+  for (const input of inputsByMaterialId.get(String(material.id)) || []) {
+    const modelName = String(input.production_model_name || 'Modelo padrão').trim() || 'Modelo padrão';
+    if (!grouped.has(modelName)) grouped.set(modelName, []);
     const inputMaterial = materialsById.get(String(input.input_material_id));
-    return inputMaterial ? {
-      materialId: inputMaterial.id,
-      materialName: inputMaterial.name,
+    grouped.get(modelName).push({
+      materialId: input.input_material_id,
+      materialName: inputMaterial?.name || `Material ${input.input_material_id}`,
       qtyPerOutput: toNumber(input.qty_per_output || 1)
-    } : null;
-  }).filter(Boolean);
+    });
+  }
+  return [...grouped.entries()].map(([modelName, inputs]) => ({
+    modelName,
+    inputs,
+    label: `${modelName} (${inputs.map(input => input.materialName).join(' + ')})`
+  }));
 }
 
 function operationForMaterial(material, requiredQty, productionOrder, context, requestedMachine, requestedPeople, operationOverrides = {}) {
@@ -155,7 +168,7 @@ function operationForMaterial(material, requiredQty, productionOrder, context, r
   const matrix = resolveMatrix(material, context.matrixRows, override?.machineName || requestedMachine, override?.peopleCount || requestedPeople);
   const inputs = selectedInputs(material, context.inputsByMaterialId, operationOverrides);
   const modelOptions = productionModelOptions(material, context.inputsByMaterialId, context.materialsById);
-  const productionModelMaterialId = inputs[0]?.input_material_id || null;
+  const productionModelName = inputs[0]?.production_model_name || modelOptions[0]?.modelName || null;
   return {
     materialId: material.id,
     materialName: material.name,
@@ -166,10 +179,7 @@ function operationForMaterial(material, requiredQty, productionOrder, context, r
     unit: material.primary_unit,
     status: produceQty <= 0 ? 'Estoque suficiente' : 'Produzir diferenÃ§a',
     isInitialRawMaterial: material.is_initial_raw_material === true,
-    productionModelMaterialId,
-    productionModelName: productionModelMaterialId
-      ? context.materialsById.get(String(productionModelMaterialId))?.name || null
-      : null,
+    productionModelName,
     productionModelOptions: modelOptions,
     machineName: matrix?.machine_name || null,
     peopleCount: matrix?.people_count || null,
@@ -205,10 +215,7 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
   }
 
   const inputs = selectedInputs(material, inputsByMaterialId, operationOverrides);
-  node.productionModelMaterialId = inputs[0]?.input_material_id || null;
-  node.productionModelName = node.productionModelMaterialId
-    ? materialsById.get(String(node.productionModelMaterialId))?.name || null
-    : null;
+  node.productionModelName = inputs[0]?.production_model_name || productionModelOptions(material, inputsByMaterialId, materialsById)[0]?.modelName || null;
   node.productionModelOptions = productionModelOptions(material, inputsByMaterialId, materialsById);
   node.children = inputs.map(input => {
     const inputMaterial = materialsById.get(String(input.input_material_id));
@@ -621,6 +628,13 @@ export function buildPlan(payload, context) {
     error.status = 404;
     throw error;
   }
+  const operationOverrides = { ...(payload.operationOverrides || {}) };
+  if (payload.productionModelName) {
+    operationOverrides[String(material.id)] = {
+      ...(operationOverrides[String(material.id)] || {}),
+      productionModelName: payload.productionModelName
+    };
+  }
 
   const tree = buildRequirementTree({
     material,
@@ -633,7 +647,7 @@ export function buildPlan(payload, context) {
     matrixRows: context.matrixRows,
     requestedMachine: payload.machineName,
     requestedPeople: payload.peopleCount,
-    operationOverrides: payload.operationOverrides || {}
+    operationOverrides
   });
   const aggregatedOperations = buildAggregatedOperations({
     material,
@@ -641,7 +655,7 @@ export function buildPlan(payload, context) {
     context,
     requestedMachine: payload.machineName,
     requestedPeople: payload.peopleCount,
-    operationOverrides: payload.operationOverrides || {}
+    operationOverrides
   });
   const operations = scheduleOperations(aggregatedOperations, context.matrixRows, {
     dateMode: payload.dateMode,
@@ -650,7 +664,7 @@ export function buildPlan(payload, context) {
     shiftStartTime: payload.shiftStartTime,
     shiftEndTime: payload.shiftEndTime,
     lunchHours: payload.lunchHours,
-    operationOverrides: payload.operationOverrides || {}
+    operationOverrides
   });
   const days = buildDays(operations, material.primary_unit);
   const hoursPerDay = Math.max(toOperationalHours(payload.hoursPerDay || 8), 1 / 60);
