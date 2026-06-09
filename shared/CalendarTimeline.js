@@ -63,14 +63,29 @@ function dispatchConfig(wrapper, operation, modal) {
   const peopleSelect = modal.querySelector('[name="peopleMachine"]');
   const [machineName, peopleCount] = (peopleSelect?.value || machineSelect?.value || '').split('||');
   const modelSelect = modal.querySelector('[name="productionModel"]');
+  const productionModelMaterialId = modelSelect?.value || null;
+  if (
+    machineName === operation.machineName
+    && Number(peopleCount || 0) === Number(operation.peopleCount || 0)
+    && String(productionModelMaterialId || '') === String(operation.productionModelMaterialId || '')
+  ) return;
   wrapper.dispatchEvent(new CustomEvent('operation-config-change', {
     bubbles: true,
     detail: {
       materialId: String(operation.materialId),
       machineName,
       peopleCount: Number(peopleCount || 0),
-      productionModelMaterialId: modelSelect?.value || null
+      productionModelMaterialId
     }
+  }));
+}
+
+function dispatchDate(wrapper, operation, modal) {
+  const startDate = modal.querySelector('[name="operationStartDate"]')?.value;
+  if (!startDate || startDate === operation.startDate) return;
+  wrapper.dispatchEvent(new CustomEvent('operation-date-change', {
+    bubbles: true,
+    detail: { materialId: String(operation.materialId), startDate }
   }));
 }
 
@@ -78,8 +93,8 @@ function showOperationModal(wrapper, operation) {
   const machineOptions = operation.productivityOptions || [];
   const models = modelOptions(operation);
   const selectedModel = operation.productionModelMaterialId || models[0]?.materialId || '';
-  const startTime = safeTime(operation.startTime, '00:00');
-  const endTime = safeTime(operation.endTime, '00:00');
+  const startTime = safeTime(operation.startTime, '--:--');
+  const endTime = safeTime(operation.endTime, '--:--');
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   backdrop.innerHTML = `
@@ -108,14 +123,16 @@ function showOperationModal(wrapper, operation) {
             </select>
           </label>
           <article><span>Produtividade</span><strong>${formatQty(operation.outputQty)} ${operation.outputUnit || ''} em ${formatQty(operation.timeSeconds)}s</strong></article>
-          <article><span>Data inicial</span><strong>${formatDate(operation.startDate)}</strong></article>
+          <label>Data inicial
+            <input name="operationStartDate" type="date" value="${operation.startDate || ''}" required />
+          </label>
           <article><span>Hora inicial</span><strong>${startTime}</strong></article>
           <article><span>Data final</span><strong>${formatDate(operation.endDate)}</strong></article>
           <article><span>Hora final</span><strong>${endTime}</strong></article>
         </div>
         <div class="form-actions modal-actions">
           <button class="secondary-button close-modal" type="button">Cancelar</button>
-          <button class="primary-button" type="submit">Salvar</button>
+          <button class="primary-button" type="submit">Recalcular</button>
         </div>
       </form>
     </div>
@@ -131,6 +148,7 @@ function showOperationModal(wrapper, operation) {
   });
   backdrop.querySelector('form').addEventListener('submit', event => {
     event.preventDefault();
+    dispatchDate(wrapper, operation, backdrop);
     dispatchConfig(wrapper, operation, backdrop);
     backdrop.remove();
   });
@@ -147,7 +165,7 @@ export function CalendarTimeline(days = [], operations = []) {
   }
 
   const knownDates = operations.flatMap(operation => [operation.startDate, operation.endDate]).filter(Boolean).sort();
-  const dates = eachDate(knownDates[0], knownDates[knownDates.length - 1]);
+  const dates = eachDate(addDays(knownDates[0], -15), addDays(knownDates[knownDates.length - 1], 15));
 
   wrapper.innerHTML = `
     <div class="gantt-board gantt-board-full" style="--calendar-days: ${dates.length}">
@@ -160,8 +178,8 @@ export function CalendarTimeline(days = [], operations = []) {
         `).join('')}
       </div>
       ${operations.map(operation => {
-        const startTime = safeTime(operation.startTime, '00:00');
-        const endTime = safeTime(operation.endTime, '00:00');
+        const startTime = safeTime(operation.startTime, '--:--');
+        const endTime = safeTime(operation.endTime, '--:--');
         return `
           <div class="gantt-row" data-row-operation="${operation.materialId}">
             <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, dates)}">

@@ -34,6 +34,15 @@ function parsePtBrDecimal(value, fallback = NaN) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 function formatPtBrDecimal(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '';
@@ -140,7 +149,9 @@ export function PlanningPage() {
   }
 
   function currentDateMode(form) {
-    return form.querySelector('[name="dateModeChoice"][value="end"]').checked ? 'end' : 'start';
+    const startChecked = form.querySelector('[name="dateModeChoice"][value="start"]').checked;
+    const endChecked = form.querySelector('[name="dateModeChoice"][value="end"]').checked;
+    return endChecked && !startChecked ? 'end' : 'start';
   }
 
   function matchingMatrix(material) {
@@ -166,9 +177,11 @@ export function PlanningPage() {
           </fieldset>
           <label>Data<input name="selectedDate" type="date" required /></label>
           <label>Material
-            <input name="materialSearch" type="search" list="planning-material-options" autocomplete="off" placeholder="Digite para pesquisar" required />
+            <div class="material-autocomplete">
+              <input name="materialSearch" type="search" autocomplete="off" placeholder="Digite para pesquisar" required />
+              <div class="material-suggestions" hidden></div>
+            </div>
             <input name="materialId" type="hidden" />
-            <datalist id="planning-material-options"></datalist>
           </label>
           <div class="readonly-field">
             <span>Código</span>
@@ -212,9 +225,43 @@ export function PlanningPage() {
     const resultsTarget = target.querySelector('.planning-results');
     const summaryGrid = target.querySelector('.summary-grid');
     const timelineTarget = target.querySelector('.timeline-target');
+    const suggestionsTarget = target.querySelector('.material-suggestions');
     form.elements.selectedDate.value = today();
-    target.querySelector('#planning-material-options').innerHTML = materials.map(material => `<option value="${materialLabel(material)}"></option>`).join('');
     timelineTarget.appendChild(CalendarTimeline([]));
+
+    function materialMatches(material, searchValue) {
+      const haystack = [
+        material.name,
+        ...(material.codes || [])
+      ].map(value => String(value || '').toLowerCase());
+      return haystack.some(value => value.includes(searchValue));
+    }
+
+    function selectMaterial(material) {
+      form.elements.materialSearch.value = materialLabel(material);
+      form.elements.materialId.value = material?.id || '';
+      suggestionsTarget.hidden = true;
+      form.elements.materialId.dispatchEvent(new Event('change'));
+    }
+
+    function renderMaterialSuggestions() {
+      const searchValue = form.elements.materialSearch.value.trim().toLowerCase();
+      if (!searchValue) {
+        suggestionsTarget.hidden = true;
+        suggestionsTarget.innerHTML = '';
+        return;
+      }
+      const matches = materials.filter(material => materialMatches(material, searchValue)).slice(0, 12);
+      suggestionsTarget.innerHTML = matches.length
+        ? matches.map(material => `
+            <button type="button" data-material-id="${material.id}">
+              <strong>${escapeHtml(materialLabel(material))}</strong>
+              <span>${escapeHtml((material.codes || []).join(' | '))}</span>
+            </button>
+          `).join('')
+        : '<div class="material-suggestion-empty">Nenhum material encontrado.</div>';
+      suggestionsTarget.hidden = false;
+    }
 
     function updateMaterialFields() {
       const material = selectedMaterial(form);
@@ -275,8 +322,8 @@ export function PlanningPage() {
         ['Per&iacute;odo estimado', `${formatDateOnly(result.summary.startDate)} ${firstOperation?.startTime || ''} at&eacute; ${formatDateOnly(result.summary.endDate)} ${lastOperation?.endTime || ''}`],
         ['Total de opera&ccedil;&otilde;es', result.operations.length],
         ['Total de dias', result.summary.daysNeeded],
-        ['Horas/dia', formatPtBrDecimal(result.summary.hoursPerDay)],
-        ['Almo&ccedil;o', formatPtBrDecimal(result.summary.lunchHours)],
+        ['Horas/dia', form.elements.hoursPerDay.value],
+        ['Almo&ccedil;o', form.elements.lunchHours.value],
         ['Turno', `${result.summary.shiftStartTime || form.elements.shiftStartTime.value} at&eacute; ${result.summary.shiftEndTime || form.elements.shiftEndTime.value}`]
       ];
       summaryGrid.innerHTML = cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${value}</strong></article>`).join('');
@@ -304,8 +351,6 @@ export function PlanningPage() {
         form.reportValidity();
         return null;
       }
-      form.elements.hoursPerDay.value = formatPtBrDecimal(hoursPerDay);
-      form.elements.lunchHours.value = formatPtBrDecimal(lunchHours);
       lastPayload = payload();
       const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
       if (result.summary.hasPastStart && !confirm(`ATENCAO
@@ -340,7 +385,23 @@ Deseja continuar mesmo assim?`)) return null;
         || (item.codes || []).some(code => String(code).toLowerCase() === searchValue)
       );
       form.elements.materialId.value = material?.id || '';
-      form.elements.materialId.dispatchEvent(new Event('change'));
+      if (material) form.elements.materialId.dispatchEvent(new Event('change'));
+      else {
+        updateMaterialFields();
+        resultsTarget.hidden = true;
+        saveButton.disabled = true;
+      }
+      renderMaterialSuggestions();
+    });
+    suggestionsTarget.addEventListener('mousedown', event => {
+      const button = event.target.closest('[data-material-id]');
+      if (!button) return;
+      event.preventDefault();
+      selectMaterial(materials.find(material => String(material.id) === String(button.dataset.materialId)));
+    });
+    form.elements.materialSearch.addEventListener('focus', renderMaterialSuggestions);
+    form.elements.materialSearch.addEventListener('blur', () => {
+      setTimeout(() => { suggestionsTarget.hidden = true; }, 120);
     });
     form.elements.machineName.addEventListener('change', updatePeopleOptions);
     form.elements.hoursPerDay.addEventListener('input', () => form.elements.hoursPerDay.setCustomValidity(''));

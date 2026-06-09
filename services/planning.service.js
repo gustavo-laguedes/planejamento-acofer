@@ -17,6 +17,15 @@ function toNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function toOperationalHours(value) {
+  const rawValue = String(value ?? '').trim();
+  const durationValue = rawValue.match(/^(\d+),(\d{2})$/);
+  if (durationValue && Number(durationValue[2]) <= 59) {
+    return Number(durationValue[1]) + (Number(durationValue[2]) / 60);
+  }
+  return toNumber(value);
+}
+
 function normalizedMaterialKey(operation) {
   return [
     String(operation.materialName || '').trim().toLowerCase(),
@@ -188,12 +197,10 @@ function groupOperations(operations) {
     }
     const current = grouped.get(key);
     current.requiredQty = Number((toNumber(current.requiredQty) + toNumber(operation.requiredQty)).toFixed(3));
+    current.produceQty = Number((toNumber(current.produceQty) + toNumber(operation.produceQty)).toFixed(3));
     current.stockQty = Number(Math.max(toNumber(current.stockQty), toNumber(operation.stockQty)).toFixed(3));
   }
-  return [...grouped.values()].map(operation => ({
-    ...operation,
-    produceQty: Number(Math.max(toNumber(operation.requiredQty) - toNumber(operation.stockQty), 0).toFixed(3))
-  })).filter(operation => operation.produceQty > 0);
+  return [...grouped.values()].filter(operation => operation.produceQty > 0);
 }
 
 function parseTime(value, fallback) {
@@ -288,9 +295,9 @@ function segmentsForOperation(operation, shiftStart, shiftEnd) {
 function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, operationOverrides = {} }) {
   const shiftStart = parseTime(shiftStartTime, '07:12');
   const requestedShiftEnd = Math.max(parseTime(shiftEndTime, '16:00'), shiftStart + 1);
-  const lunchMinutes = Math.max(toNumber(lunchHours || 0), 0) * 60;
+  const lunchMinutes = Math.max(toOperationalHours(lunchHours || 0), 0) * 60;
   const shiftAvailableMinutes = Math.max(requestedShiftEnd - shiftStart - lunchMinutes, 1);
-  const dailyMinutes = Math.min(Math.max(toNumber(hoursPerDay || 8), 1 / 60) * 60, shiftAvailableMinutes);
+  const dailyMinutes = Math.min(Math.max(toOperationalHours(hoursPerDay || 8), 1 / 60) * 60, shiftAvailableMinutes);
   const shiftEnd = Math.min(requestedShiftEnd, shiftStart + dailyMinutes);
   const scheduled = [];
   const source = groupOperations(operations);
@@ -344,7 +351,7 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     for (const operation of source) {
       const override = overrideForMaterial(operationOverrides, operation);
       const overrideCursor = splitDateTime(override?.startDate, cursor.date, shiftStart);
-      if (override?.startDate && compareCursor(overrideCursor, cursor) > 0) cursor = overrideCursor;
+      if (override?.startDate) cursor = overrideCursor;
       const item = enrich(operation);
       const slot = scheduleForward(cursor, item.totalMinutes, shiftStart, shiftEnd);
       scheduled.push({
@@ -423,7 +430,7 @@ export function buildPlan(payload, context) {
     operationOverrides: payload.operationOverrides || {}
   });
   const days = buildDays(operations, material.primary_unit);
-  const hoursPerDay = Math.max(toNumber(payload.hoursPerDay || 8), 1 / 60);
+  const hoursPerDay = Math.max(toOperationalHours(payload.hoursPerDay || 8), 1 / 60);
   const startDate = operations.length ? operations[0].startDate : payload.selectedDate || payload.startDate;
   const endDate = operations.length ? operations[operations.length - 1].endDate : payload.selectedDate || payload.startDate;
   const finalOperation = operations[operations.length - 1];
@@ -444,7 +451,7 @@ export function buildPlan(payload, context) {
       hoursPerDay,
       shiftStartTime: payload.shiftStartTime || '07:12',
       shiftEndTime: payload.shiftEndTime || '16:00',
-      lunchHours: toNumber(payload.lunchHours || 0),
+      lunchHours: toOperationalHours(payload.lunchHours || 0),
       startDate,
       endDate,
       daysNeeded: uniqueDaysNeeded,
