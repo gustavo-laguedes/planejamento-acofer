@@ -1239,7 +1239,7 @@ thead tr:nth-child(2) th {
 .gantt-row {
   display: grid;
   width: max(100%, calc(var(--calendar-days) * 150px));
-  min-width: max-content;
+  min-width: calc(var(--calendar-days) * 150px);
   grid-template-columns: repeat(var(--calendar-days), minmax(150px, 1fr));
 }
 

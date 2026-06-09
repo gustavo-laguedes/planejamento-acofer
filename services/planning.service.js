@@ -453,21 +453,38 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     };
   };
 
+  const scheduledItem = (item, slot) => ({
+    ...item,
+    daysNeeded: eachSegmentDayCount(slot.start.date, slot.end.date),
+    startDate: slot.start.date,
+    startTime: minutesToTime(slot.start.minutes),
+    endDate: slot.end.date,
+    endTime: minutesToTime(slot.end.minutes),
+    segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, shiftStart, shiftEnd)
+  });
+
   if (dateMode === 'end') {
     let cursor = { date: selectedDate, minutes: shiftEnd };
+    const baseline = [];
     for (const operation of [...source].reverse()) {
       const item = enrich(operation);
       const slot = scheduleBackward(cursor, item.totalMinutes, shiftStart, shiftEnd);
-      scheduled.unshift({
-        ...item,
-        daysNeeded: eachSegmentDayCount(slot.start.date, slot.end.date),
-        startDate: slot.start.date,
-        startTime: minutesToTime(slot.start.minutes),
-        endDate: slot.end.date,
-        endTime: minutesToTime(slot.end.minutes),
-        segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, shiftStart, shiftEnd)
-      });
+      baseline.unshift(scheduledItem(item, slot));
       cursor = slot.start;
+    }
+    const firstMovedIndex = baseline.findIndex(operation => overrideForMaterial(operationOverrides, operation)?.startDate);
+    if (firstMovedIndex < 0) return baseline;
+    scheduled.push(...baseline.slice(0, firstMovedIndex));
+    cursor = firstMovedIndex > 0
+      ? { date: baseline[firstMovedIndex - 1].endDate, minutes: parseTime(baseline[firstMovedIndex - 1].endTime, minutesToTime(shiftStart)) }
+      : { date: baseline[firstMovedIndex].startDate, minutes: shiftStart };
+    for (const operation of baseline.slice(firstMovedIndex)) {
+      const override = overrideForMaterial(operationOverrides, operation);
+      const overrideCursor = splitDateTime(override?.startDate, cursor.date, shiftStart);
+      if (override?.startDate && (!scheduled.length || compareCursor(overrideCursor, cursor) > 0)) cursor = overrideCursor;
+      const slot = scheduleForward(cursor, operation.totalMinutes, shiftStart, shiftEnd);
+      scheduled.push(scheduledItem(operation, slot));
+      cursor = slot.end;
     }
   } else {
     let cursor = { date: selectedDate, minutes: shiftStart };
@@ -477,15 +494,7 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       if (override?.startDate && (!scheduled.length || compareCursor(overrideCursor, cursor) > 0)) cursor = overrideCursor;
       const item = enrich(operation);
       const slot = scheduleForward(cursor, item.totalMinutes, shiftStart, shiftEnd);
-      scheduled.push({
-        ...item,
-        daysNeeded: eachSegmentDayCount(slot.start.date, slot.end.date),
-        startDate: slot.start.date,
-        startTime: minutesToTime(slot.start.minutes),
-        endDate: slot.end.date,
-        endTime: minutesToTime(slot.end.minutes),
-        segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, shiftStart, shiftEnd)
-      });
+      scheduled.push(scheduledItem(item, slot));
       cursor = slot.end;
     }
   }

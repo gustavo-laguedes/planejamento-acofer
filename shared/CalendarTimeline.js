@@ -14,6 +14,12 @@ function eachDate(startDate, endDate) {
   return dates;
 }
 
+function dayDiff(startDate, endDate) {
+  const start = Date.UTC(...startDate.split('-').map((part, index) => index === 1 ? Number(part) - 1 : Number(part)));
+  const end = Date.UTC(...endDate.split('-').map((part, index) => index === 1 ? Number(part) - 1 : Number(part)));
+  return Math.round((end - start) / 86400000);
+}
+
 function formatDate(date) {
   return date ? new Date(`${date}T00:00:00`).toLocaleDateString('pt-BR') : '';
 }
@@ -59,9 +65,10 @@ function productionModelFallback(operation) {
   return operation.isInitialRawMaterial ? 'Mat&eacute;ria-prima inicial' : 'Sem origem';
 }
 
-function barStyle(operation, dates) {
-  const startIndex = Math.max(dates.indexOf(operation.startDate), 0);
-  const endIndex = Math.max(dates.indexOf(operation.endDate), startIndex);
+function barStyle(operation, calendarStartDate, calendarEndDate) {
+  const maxIndex = Math.max(dayDiff(calendarStartDate, calendarEndDate), 0);
+  const startIndex = Math.max(0, Math.min(dayDiff(calendarStartDate, operation.startDate), maxIndex));
+  const endIndex = Math.max(startIndex, Math.min(dayDiff(calendarStartDate, operation.endDate), maxIndex));
   return `--bar-start: ${startIndex + 1}; --bar-span: ${endIndex - startIndex + 1};`;
 }
 
@@ -106,10 +113,12 @@ function dispatchConfig(wrapper, operation, modal) {
 
 function dispatchDate(wrapper, operation, modal) {
   const startDate = modal.querySelector('[name="operationStartDate"]')?.value;
-  if (!startDate || startDate === operation.startDate) return;
+  const startTime = modal.querySelector('[name="operationStartTime"]')?.value || operationStartTime(operation);
+  const currentTime = operationStartTime(operation);
+  if (!startDate || (startDate === operation.startDate && startTime === currentTime)) return;
   wrapper.dispatchEvent(new CustomEvent('operation-date-change', {
     bubbles: true,
-    detail: { materialId: String(operation.materialId), startDate }
+    detail: { materialId: String(operation.materialId), startDate: `${startDate}T${startTime || currentTime || '00:00'}` }
   }));
 }
 
@@ -150,7 +159,9 @@ function showOperationModal(wrapper, operation) {
           <label>Data inicial
             <input name="operationStartDate" type="date" value="${operation.startDate || ''}" required />
           </label>
-          <article><span>Hora inicial</span><strong>${startTime}</strong></article>
+          <label>Hora inicial
+            <input name="operationStartTime" type="time" value="${startTime}" required />
+          </label>
           <article><span>Data final</span><strong>${formatDate(operation.endDate)}</strong></article>
           <article><span>Hora final</span><strong>${endTime}</strong></article>
         </div>
@@ -189,7 +200,9 @@ export function CalendarTimeline(days = [], operations = []) {
   }
 
   const knownDates = operations.flatMap(operation => [operation.startDate, operation.endDate]).filter(Boolean).sort();
-  const dates = eachDate(addDays(knownDates[0], -15), addDays(knownDates[knownDates.length - 1], 15));
+  const calendarStartDate = addDays(knownDates[0], -15);
+  const calendarEndDate = addDays(knownDates[knownDates.length - 1], 15);
+  const dates = eachDate(calendarStartDate, calendarEndDate);
 
   wrapper.innerHTML = `
     <div class="gantt-board gantt-board-full" style="--calendar-days: ${dates.length}">
@@ -206,10 +219,10 @@ export function CalendarTimeline(days = [], operations = []) {
         const endTime = operationEndTime(operation);
         return `
           <div class="gantt-row" data-row-operation="${operation.materialId}">
-            <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, dates)}">
+            <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, calendarStartDate, calendarEndDate)}">
               <strong>${operation.materialName}</strong>
               <span>${formatQty(operation.produceQty)} ${operation.unit || ''} | ${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
-              <small>${formatDate(operation.startDate)} ${startTime} - ${formatDate(operation.endDate)} ${endTime}</small>
+              <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
             </button>
           </div>
         `;
