@@ -30,8 +30,17 @@ function formatQty(value) {
   return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 }
 
-function safeTime(value, fallback) {
-  return value || fallback;
+function safeTime(value) {
+  return value || '';
+}
+
+function operationStartTime(operation) {
+  return safeTime(operation.startTime || operation.segments?.[0]?.startTime);
+}
+
+function operationEndTime(operation) {
+  const segments = operation.segments || [];
+  return safeTime(operation.endTime || segments[segments.length - 1]?.endTime);
 }
 
 function optionValue(option) {
@@ -56,6 +65,17 @@ function dateFromDrop(event, row, dates) {
   const rect = row.getBoundingClientRect();
   const ratio = Math.max(0, Math.min(0.999, (event.clientX - rect.left) / rect.width));
   return dates[Math.floor(ratio * dates.length)] || dates[0];
+}
+
+function focusFirstOperation(wrapper, dates, operations) {
+  const firstOperation = operations.find(operation => operation.startDate);
+  const firstIndex = firstOperation ? dates.indexOf(firstOperation.startDate) : -1;
+  if (firstIndex <= 0) return;
+  requestAnimationFrame(() => {
+    const board = wrapper.querySelector('.gantt-board');
+    if (!board || !board.scrollWidth || !dates.length) return;
+    board.scrollLeft = (board.scrollWidth / dates.length) * firstIndex;
+  });
 }
 
 function dispatchConfig(wrapper, operation, modal) {
@@ -93,8 +113,8 @@ function showOperationModal(wrapper, operation) {
   const machineOptions = operation.productivityOptions || [];
   const models = modelOptions(operation);
   const selectedModel = operation.productionModelMaterialId || models[0]?.materialId || '';
-  const startTime = safeTime(operation.startTime, '--:--');
-  const endTime = safeTime(operation.endTime, '--:--');
+  const startTime = operationStartTime(operation);
+  const endTime = operationEndTime(operation);
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   backdrop.innerHTML = `
@@ -178,8 +198,8 @@ export function CalendarTimeline(days = [], operations = []) {
         `).join('')}
       </div>
       ${operations.map(operation => {
-        const startTime = safeTime(operation.startTime, '--:--');
-        const endTime = safeTime(operation.endTime, '--:--');
+        const startTime = operationStartTime(operation);
+        const endTime = operationEndTime(operation);
         return `
           <div class="gantt-row" data-row-operation="${operation.materialId}">
             <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, dates)}">
@@ -226,6 +246,8 @@ export function CalendarTimeline(days = [], operations = []) {
       }));
     });
   });
+
+  focusFirstOperation(wrapper, dates, operations);
 
   return wrapper;
 }

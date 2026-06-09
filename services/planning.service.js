@@ -27,6 +27,7 @@ function toOperationalHours(value) {
 }
 
 function normalizedMaterialKey(operation) {
+  if (operation.materialId) return String(operation.materialId);
   return [
     String(operation.materialName || '').trim().toLowerCase(),
     operation.materialCode || '',
@@ -184,7 +185,9 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
 
 function flattenOperations(tree, operations = []) {
   for (const child of tree.children || []) flattenOperations(child, operations);
-  if (tree.produceQty > 0 && !tree.isInitialRawMaterial) operations.push(tree);
+  if (tree.produceQty > 0 && !tree.isInitialRawMaterial) {
+    operations.push({ ...tree, productionOrder: operations.length });
+  }
   return operations;
 }
 
@@ -197,10 +200,16 @@ function groupOperations(operations) {
     }
     const current = grouped.get(key);
     current.requiredQty = Number((toNumber(current.requiredQty) + toNumber(operation.requiredQty)).toFixed(3));
-    current.produceQty = Number((toNumber(current.produceQty) + toNumber(operation.produceQty)).toFixed(3));
+    current.productionOrder = Math.min(toNumber(current.productionOrder), toNumber(operation.productionOrder));
     current.stockQty = Number(Math.max(toNumber(current.stockQty), toNumber(operation.stockQty)).toFixed(3));
   }
-  return [...grouped.values()].filter(operation => operation.produceQty > 0);
+  return [...grouped.values()]
+    .map(operation => ({
+      ...operation,
+      produceQty: Number(Math.max(toNumber(operation.requiredQty) - toNumber(operation.stockQty), 0).toFixed(3))
+    }))
+    .filter(operation => operation.produceQty > 0)
+    .sort((left, right) => toNumber(left.productionOrder) - toNumber(right.productionOrder));
 }
 
 function parseTime(value, fallback) {
@@ -351,7 +360,7 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     for (const operation of source) {
       const override = overrideForMaterial(operationOverrides, operation);
       const overrideCursor = splitDateTime(override?.startDate, cursor.date, shiftStart);
-      if (override?.startDate) cursor = overrideCursor;
+      if (override?.startDate && (!scheduled.length || compareCursor(overrideCursor, cursor) > 0)) cursor = overrideCursor;
       const item = enrich(operation);
       const slot = scheduleForward(cursor, item.totalMinutes, shiftStart, shiftEnd);
       scheduled.push({

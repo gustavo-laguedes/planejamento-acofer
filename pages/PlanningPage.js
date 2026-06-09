@@ -195,9 +195,9 @@ export function PlanningPage() {
           <label>Máquina<select name="machineName" required></select></label>
           <label>Pessoas<select name="peopleCount" required></select></label>
           <label>Horas/dia<input name="hoursPerDay" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="8,48" /></label>
-          <label>Come&ccedil;o do turno<input name="shiftStartTime" type="time" value="07:12" required /></label>
-          <label>Horas de almo&ccedil;o<input name="lunchHours" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="1,00" /></label>
-          <label>Final do turno<input name="shiftEndTime" type="time" value="16:00" required /></label>
+          <label>Come&ccedil;o do turno<input name="shiftStartTime" type="time" value="07:00" required /></label>
+          <label>Horas de almo&ccedil;o<input name="lunchHours" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="1,12" /></label>
+          <label>Final do turno<input name="shiftEndTime" type="time" value="17:00" required /></label>
           <div class="form-actions">
             <button class="primary-button" name="simulate" type="submit">Simular</button>
             <button class="secondary-button" name="save" type="button" disabled>Salvar planejamento</button>
