@@ -225,7 +225,7 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
 
 function flattenOperations(tree, operations = []) {
   for (const child of tree.children || []) flattenOperations(child, operations);
-  if (tree.produceQty > 0) {
+  if (tree.produceQty > 0 && !tree.isInitialRawMaterial) {
     operations.push({ ...tree, productionOrder: operations.length });
   }
   return operations;
@@ -284,6 +284,7 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
   }
 
   return [...states.values()]
+    .filter(state => state.material.is_initial_raw_material !== true)
     .map(state => {
       const rank = operationRank(state.material, context, operationOverrides);
       return operationForMaterial(
