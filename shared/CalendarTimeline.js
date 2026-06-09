@@ -109,13 +109,21 @@ function productionModelFallback(operation) {
 }
 
 function focusFirstOperation(wrapper, dates, operations) {
-  const firstOperation = operations.find(operation => operation.startDate);
+  const firstOperation = operations
+    .filter(operation => operation.startDate)
+    .sort((first, second) => dateTimeMs(first.startDate, operationStartTime(first)) - dateTimeMs(second.startDate, operationStartTime(second)))[0];
   const firstIndex = firstOperation ? dates.indexOf(firstOperation.startDate) : -1;
-  if (firstIndex <= 0) return;
+  if (firstIndex < 0) return;
   requestAnimationFrame(() => {
     const board = wrapper.querySelector('.gantt-board');
     if (!board || !board.scrollWidth || !dates.length) return;
-    board.scrollLeft = (board.scrollWidth / dates.length) * firstIndex;
+    const timeAxisWidth = board.querySelector('.agenda-time-axis')?.offsetWidth || 0;
+    const dayWidth = (board.scrollWidth - timeAxisWidth) / dates.length;
+    const hourHeight = Number(board.style.getPropertyValue('--calendar-hour-height').replace('px', '')) || 58;
+    const topPad = Number(board.style.getPropertyValue('--calendar-top-pad').replace('px', '')) || 0;
+    const startMinutes = parseTime(operationStartTime(firstOperation), '00:00');
+    board.scrollLeft = Math.max(0, dayWidth * (firstIndex - 0.5));
+    board.scrollTop = Math.max(0, topPad + ((Math.max(startMinutes - 60, 0)) / 60) * hourHeight);
   });
 }
 
@@ -136,27 +144,32 @@ function clampMinutes(minutes, start, end) {
 }
 
 const MATERIAL_COLORS = [
-  { bg: '#0f4c5c', border: '#1f7a8c', text: '#ffffff' },
-  { bg: '#7a3e2f', border: '#b85743', text: '#ffffff' },
-  { bg: '#2f5d50', border: '#4c9a82', text: '#ffffff' },
-  { bg: '#5b4b8a', border: '#8270c8', text: '#ffffff' },
-  { bg: '#7b5d1e', border: '#c18a25', text: '#ffffff' },
-  { bg: '#24547a', border: '#3f88c5', text: '#ffffff' },
-  { bg: '#6f3d66', border: '#aa63a0', text: '#ffffff' },
-  { bg: '#4f5f2f', border: '#83994a', text: '#ffffff' },
-  { bg: '#344054', border: '#667085', text: '#ffffff' },
-  { bg: '#6941c6', border: '#9e77ed', text: '#ffffff' },
-  { bg: '#175cd3', border: '#528bff', text: '#ffffff' },
-  { bg: '#a15c07', border: '#dc8a1f', text: '#ffffff' }
+  { bg: '#d9f0f4', border: '#51a6b6', text: '#123942' },
+  { bg: '#ffe4d6', border: '#e58a63', text: '#5c2716' },
+  { bg: '#dff3ea', border: '#5fb58d', text: '#173d2e' },
+  { bg: '#e9e4fb', border: '#9b8be0', text: '#32245d' },
+  { bg: '#fff0bf', border: '#d3a832', text: '#4d3a07' },
+  { bg: '#dcebfb', border: '#6aa8df', text: '#183b5d' },
+  { bg: '#f6dff0', border: '#d579bc', text: '#552345' },
+  { bg: '#e7efcf', border: '#97b95c', text: '#344514' },
+  { bg: '#e5e7eb', border: '#94a3b8', text: '#263142' },
+  { bg: '#e5ddff', border: '#a98cf0', text: '#3b236f' },
+  { bg: '#dce8ff', border: '#76a7f2', text: '#173b7a' },
+  { bg: '#ffe1bd', border: '#e29a45', text: '#5b3510' }
 ];
 
-function segmentStyle(segment, dayStart, dayEnd, hourHeight) {
+function segmentMinutes(segment, dayStart, dayEnd) {
   const start = clampMinutes(parseTime(segment.startTime, minutesToTime(dayStart)), dayStart, dayEnd);
   const end = clampMinutes(parseTime(segment.endTime, minutesToTime(dayEnd)), dayStart, dayEnd);
+  return { start, end };
+}
+
+function segmentStyle(segment, dayStart, dayEnd, hourHeight) {
+  const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
   const top = ((start - dayStart) / 60) * hourHeight;
   const rawHeight = ((Math.max(end - start, 1)) / 60) * hourHeight;
   const height = Math.max(rawHeight - 4, 1);
-  return `--event-top: ${top + 2}px; --event-height: ${height}px;`;
+  return `--event-top: calc(var(--calendar-top-pad, 0px) + ${top + 2}px); --event-height: ${height}px;`;
 }
 
 function laneStyle(lane, laneCount) {
@@ -173,7 +186,7 @@ function lunchStyle(lunchStart, lunchEnd, dayStart, dayEnd, hourHeight) {
   const end = clampMinutes(lunchEnd, dayStart, dayEnd);
   const top = ((start - dayStart) / 60) * hourHeight;
   const height = Math.max(((Math.max(end - start, 0)) / 60) * hourHeight, 0);
-  return `--lunch-top: ${top}px; --lunch-height: ${height}px;`;
+  return `--lunch-top: calc(var(--calendar-top-pad, 0px) + ${top}px); --lunch-height: ${height}px;`;
 }
 
 function overlaps(first, second) {
@@ -238,6 +251,7 @@ function operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart
     endTime: operationEndTime(operation)
   }];
   const byDate = new Map(dates.map(date => [date, []]));
+  const visualSegments = [];
   baseSegments.forEach(segment => {
     const startDate = segment.date || operation.startDate;
     const endDate = segment.endDate || segment.date || operation.endDate;
@@ -247,9 +261,14 @@ function operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart
       const startTime = date === startDate ? segment.startTime : minutesToTime(shiftStart);
       const endTime = date === endDate ? segment.endTime : minutesToTime(shiftEnd);
       splitSegmentByLunch({ ...segment, date, startTime, endDate: date, endTime }, lunchStart, lunchEnd, shiftStart, shiftEnd)
-        .forEach(part => byDate.get(date).push(part));
+        .forEach(part => visualSegments.push(part));
     });
   });
+  visualSegments
+    .sort((first, second) => dateTimeMs(first.date, first.startTime) - dateTimeMs(second.date, second.startTime))
+    .forEach((part, index) => {
+      byDate.get(part.date)?.push({ ...part, visualIndex: index });
+    });
   return byDate;
 }
 
@@ -390,7 +409,8 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     { dayWidth: 320, hourHeight: 108 },
     { dayWidth: 390, hourHeight: 132 }
   ];
-  let zoomIndex = 2;
+  const topPad = 18;
+  let zoomIndex = 0;
 
   if (!operations.length) {
     wrapper.innerHTML = '<div class="empty-state">Simule um planejamento para visualizar o calend&aacute;rio.</div>';
@@ -463,13 +483,14 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   function renderBoard() {
     const zoom = zoomLevels[zoomIndex];
     const totalMinutes = dayEnd - dayStart;
-    const bodyHeight = (totalMinutes / 60) * zoom.hourHeight;
+    const bodyHeight = topPad + (totalMinutes / 60) * zoom.hourHeight;
     const lunchVisible = lunchMinutes > 0 && lunchEnd > dayStart && lunchStart < dayEnd;
     const board = wrapper.querySelector('.gantt-board');
     board.style.setProperty('--calendar-days', String(dates.length));
     board.style.setProperty('--calendar-day-width', `${zoom.dayWidth}px`);
     board.style.setProperty('--calendar-hour-height', `${zoom.hourHeight}px`);
     board.style.setProperty('--calendar-body-height', `${bodyHeight}px`);
+    board.style.setProperty('--calendar-top-pad', `${topPad}px`);
     board.innerHTML = `
       <div class="agenda-grid">
         <div class="agenda-corner">
@@ -486,7 +507,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         </div>
         <div class="agenda-time-axis">
           ${hourMarks.map(minutes => `
-            <span style="--time-top: ${((minutes - dayStart) / 60) * zoom.hourHeight}px">${formatHour(minutes)}</span>
+            <span style="--time-top: calc(var(--calendar-top-pad) + ${((minutes - dayStart) / 60) * zoom.hourHeight}px)">${formatHour(minutes)}</span>
           `).join('')}
         </div>
         <div class="agenda-days">
@@ -501,19 +522,23 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const endTime = operationEndTime(operation);
               const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
               const materialKey = String(operation.materialId || operation.materialName || '');
+              const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
+              const shouldShowText = segment.visualIndex === 0 && ((end - start) / 60) * zoom.hourHeight >= 62;
               return `
-                <button class="gantt-bar" type="button" data-operation-material="${operation.materialId}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(materialColors.get(materialKey))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
-                  <strong>${operation.materialName}</strong>
-                  <span>${quantity || '-'}</span>
-                  <span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
-                  <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
+                <button class="gantt-bar${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-material="${operation.materialId}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(materialColors.get(materialKey))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+                  ${shouldShowText ? `
+                    <strong>${operation.materialName}</strong>
+                    <span>${quantity || '-'}</span>
+                    <span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
+                    <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
+                  ` : ''}
                 </button>
               `;
             }).join('');
             return `
               <div class="agenda-day-column" data-date="${date}">
                 ${hourMarks.map(minutes => `
-                  <span class="agenda-hour-line" style="--time-top: ${((minutes - dayStart) / 60) * zoom.hourHeight}px"></span>
+                  <span class="agenda-hour-line" style="--time-top: calc(var(--calendar-top-pad) + ${((minutes - dayStart) / 60) * zoom.hourHeight}px)"></span>
                 `).join('')}
                 ${lunchVisible ? `<span class="gantt-lunch-band" style="${lunchStyle(lunchStart, lunchEnd, dayStart, dayEnd, zoom.hourHeight)}">Almo&ccedil;o</span>` : ''}
                 ${dayOperations}
