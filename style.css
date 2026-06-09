@@ -1301,6 +1301,17 @@ thead tr:nth-child(2) th {
   border-right: 1px solid var(--line);
 }
 
+.gantt-date-lunch {
+  background: #e3e6ea;
+  color: #344054;
+  text-align: center;
+}
+
+.gantt-date-lunch strong {
+  font-size: 11px;
+  line-height: 1.1;
+}
+
 .gantt-date span {
   color: var(--muted);
   font-size: 11px;
@@ -1366,8 +1377,24 @@ thead tr:nth-child(2) th {
   color: #ffffff;
   padding: 8px 12px;
   text-align: left;
-  cursor: grab;
+  cursor: pointer;
   box-shadow: 0 10px 24px rgba(15, 76, 92, 0.22);
+}
+
+.gantt-lunch-band {
+  position: absolute;
+  left: var(--slot-left);
+  top: 0;
+  bottom: 0;
+  width: var(--slot-width);
+  display: grid;
+  place-items: center;
+  background: rgba(152, 162, 179, 0.24);
+  color: #667085;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  pointer-events: none;
 }
 
 .gantt-bar:hover::after,
@@ -1380,20 +1407,16 @@ thead tr:nth-child(2) th {
   width: max-content;
   max-width: min(320px, 80vw);
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
-  background: #ffffff;
-  color: var(--ink);
-  box-shadow: 0 14px 34px rgba(16, 24, 40, 0.18);
+  background: #101828;
+  color: #ffffff;
+  box-shadow: 0 14px 34px rgba(16, 24, 40, 0.26);
   font-size: 12px;
   font-weight: 700;
   line-height: 1.45;
   white-space: pre-line;
   pointer-events: none;
-}
-
-.gantt-bar:active {
-  cursor: grabbing;
 }
 
 .gantt-bar span,

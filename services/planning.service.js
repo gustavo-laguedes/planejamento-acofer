@@ -405,56 +405,120 @@ function minCursor(...cursors) {
   ), null);
 }
 
-function nextWorkStart(cursor, shiftStart, shiftEnd) {
-  if (cursor.minutes < shiftStart) return { date: cursor.date, minutes: shiftStart };
-  if (cursor.minutes >= shiftEnd) return { date: addDays(cursor.date, 1), minutes: shiftStart };
+function workWindowsForDate(date, shiftStart, shiftEnd, lunchStart, lunchEnd, dailyMinutes) {
+  const rawWindows = [];
+  if (lunchEnd <= shiftStart || lunchStart >= shiftEnd || lunchEnd <= lunchStart) {
+    rawWindows.push({ date, start: shiftStart, end: shiftEnd });
+  } else {
+    if (shiftStart < lunchStart) rawWindows.push({ date, start: shiftStart, end: Math.min(lunchStart, shiftEnd) });
+    if (lunchEnd < shiftEnd) rawWindows.push({ date, start: Math.max(lunchEnd, shiftStart), end: shiftEnd });
+  }
+
+  const windows = [];
+  let remaining = Math.max(dailyMinutes, 1);
+  for (const window of rawWindows) {
+    if (remaining <= 0) break;
+    const minutes = Math.max(window.end - window.start, 0);
+    if (!minutes) continue;
+    const used = Math.min(minutes, remaining);
+    windows.push({ ...window, end: window.start + used });
+    remaining -= used;
+  }
+  return windows;
+}
+
+function firstWindow(date, calendar) {
+  return workWindowsForDate(date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes)[0];
+}
+
+function nextWorkStart(cursor, calendar) {
+  let date = cursor.date;
+  let minutes = cursor.minutes;
+  for (let guard = 0; guard < 370; guard += 1) {
+    const windows = workWindowsForDate(date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes);
+    for (const window of windows) {
+      if (minutes <= window.start) return { date, minutes: window.start };
+      if (minutes < window.end) return { date, minutes };
+    }
+    date = addDays(date, 1);
+    minutes = 0;
+  }
   return cursor;
 }
 
-function previousWorkEnd(cursor, shiftStart, shiftEnd) {
-  if (cursor.minutes > shiftEnd) return { date: cursor.date, minutes: shiftEnd };
-  if (cursor.minutes <= shiftStart) return { date: addDays(cursor.date, -1), minutes: shiftEnd };
+function previousWorkEnd(cursor, calendar) {
+  let date = cursor.date;
+  let minutes = cursor.minutes;
+  for (let guard = 0; guard < 370; guard += 1) {
+    const windows = workWindowsForDate(date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes);
+    for (const window of [...windows].reverse()) {
+      if (minutes >= window.end) return { date, minutes: window.end };
+      if (minutes > window.start) return { date, minutes };
+    }
+    date = addDays(date, -1);
+    minutes = 24 * 60;
+  }
   return cursor;
 }
 
-function scheduleForward(cursor, durationMinutes, shiftStart, shiftEnd) {
-  const start = nextWorkStart(cursor, shiftStart, shiftEnd);
+function windowForCursor(cursor, calendar) {
+  return workWindowsForDate(cursor.date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes)
+    .find(window => cursor.minutes >= window.start && cursor.minutes < window.end);
+}
+
+function scheduleForward(cursor, durationMinutes, calendar) {
+  const start = nextWorkStart(cursor, calendar);
   let current = { ...start };
   let remaining = durationMinutes;
   while (remaining > 0) {
-    current = nextWorkStart(current, shiftStart, shiftEnd);
-    const available = shiftEnd - current.minutes;
+    current = nextWorkStart(current, calendar);
+    const window = windowForCursor(current, calendar);
+    if (!window) {
+      const next = firstWindow(addDays(current.date, 1), calendar);
+      current = { date: next.date, minutes: next.start };
+      continue;
+    }
+    const available = window.end - current.minutes;
     const used = Math.min(remaining, available);
     current = { date: current.date, minutes: current.minutes + used };
     remaining -= used;
-    if (remaining > 0) current = { date: addDays(current.date, 1), minutes: shiftStart };
+    if (remaining > 0) current = nextWorkStart({ date: current.date, minutes: current.minutes }, calendar);
   }
   return { start, end: current };
 }
 
-function scheduleBackward(cursor, durationMinutes, shiftStart, shiftEnd) {
-  const end = previousWorkEnd(cursor, shiftStart, shiftEnd);
+function scheduleBackward(cursor, durationMinutes, calendar) {
+  const end = previousWorkEnd(cursor, calendar);
   let current = { ...end };
   let remaining = durationMinutes;
   while (remaining > 0) {
-    current = previousWorkEnd(current, shiftStart, shiftEnd);
-    const available = current.minutes - shiftStart;
+    current = previousWorkEnd(current, calendar);
+    const window = workWindowsForDate(current.date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes)
+      .find(item => current.minutes > item.start && current.minutes <= item.end);
+    if (!window) {
+      const previous = workWindowsForDate(addDays(current.date, -1), calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes).at(-1);
+      current = { date: previous.date, minutes: previous.end };
+      continue;
+    }
+    const available = current.minutes - window.start;
     const used = Math.min(remaining, available);
     current = { date: current.date, minutes: current.minutes - used };
     remaining -= used;
-    if (remaining > 0) current = { date: addDays(current.date, -1), minutes: shiftEnd };
+    if (remaining > 0) current = previousWorkEnd({ date: current.date, minutes: current.minutes }, calendar);
   }
   return { start: current, end };
 }
 
-function segmentsForOperation(operation, shiftStart, shiftEnd) {
+function segmentsForOperation(operation, calendar) {
   const segments = [];
   let cursor = { date: operation.startDate, minutes: parseTime(operation.startTime, '07:12') };
   const end = { date: operation.endDate, minutes: parseTime(operation.endTime, '16:00') };
   while (compareCursor(cursor, end) < 0) {
-    cursor = nextWorkStart(cursor, shiftStart, shiftEnd);
+    cursor = nextWorkStart(cursor, calendar);
     if (compareCursor(cursor, end) >= 0) break;
-    const segmentEndMinutes = cursor.date === end.date ? Math.min(end.minutes, shiftEnd) : shiftEnd;
+    const window = windowForCursor(cursor, calendar);
+    if (!window) break;
+    const segmentEndMinutes = cursor.date === end.date ? Math.min(end.minutes, window.end) : window.end;
     const minutes = Math.max(segmentEndMinutes - cursor.minutes, 0);
     if (minutes > 0) {
       segments.push({
@@ -464,7 +528,7 @@ function segmentsForOperation(operation, shiftStart, shiftEnd) {
         minutes
       });
     }
-    cursor = { date: addDays(cursor.date, 1), minutes: shiftStart };
+    cursor = { date: cursor.date, minutes: segmentEndMinutes };
   }
   return segments;
 }
@@ -473,9 +537,13 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
   const shiftStart = parseTime(shiftStartTime, '07:12');
   const requestedShiftEnd = Math.max(parseTime(shiftEndTime, '16:00'), shiftStart + 1);
   const lunchMinutes = Math.max(toOperationalHours(lunchHours || 0), 0) * 60;
-  const shiftAvailableMinutes = Math.max(requestedShiftEnd - shiftStart - lunchMinutes, 1);
+  const lunchStart = 12 * 60;
+  const lunchEnd = lunchStart + lunchMinutes;
+  const lunchOverlap = Math.max(Math.min(requestedShiftEnd, lunchEnd) - Math.max(shiftStart, lunchStart), 0);
+  const shiftAvailableMinutes = Math.max(requestedShiftEnd - shiftStart - lunchOverlap, 1);
   const dailyMinutes = Math.min(Math.max(toOperationalHours(hoursPerDay || 8), 1 / 60) * 60, shiftAvailableMinutes);
-  const shiftEnd = Math.min(requestedShiftEnd, shiftStart + dailyMinutes);
+  const shiftEnd = requestedShiftEnd;
+  const calendar = { shiftStart, shiftEnd, lunchStart, lunchEnd, dailyMinutes };
   const scheduled = [];
   const source = groupOperations(operations);
 
@@ -514,7 +582,7 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     startTime: minutesToTime(slot.start.minutes),
     endDate: slot.end.date,
     endTime: minutesToTime(slot.end.minutes),
-    segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, shiftStart, shiftEnd)
+    segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, calendar)
   });
 
   const enriched = source.map(enrich);
@@ -547,7 +615,7 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       const override = overrideForMaterial(operationOverrides, operation);
       const overrideCursor = override?.startDate ? splitDateTime(override.startDate, startCursor.date, shiftStart) : null;
       const cursor = maxCursor(startCursor, dependencyEnd, machineCursor, overrideCursor);
-      const slot = scheduleForward(cursor, operation.totalMinutes, shiftStart, shiftEnd);
+      const slot = scheduleForward(cursor, operation.totalMinutes, calendar);
       const item = scheduledItem(operation, slot);
       scheduledByMaterialId.set(String(operation.materialId), item);
       byMachine.set(operation.machineName || '', slot.end);
@@ -569,7 +637,7 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
         .map(item => ({ date: item.startDate, minutes: parseTime(item.startTime, minutesToTime(shiftStart)) })));
       const machineCursor = reverseMachine.get(operation.machineName || '') || endCursor;
       const cursor = minCursor(endCursor, successorStart, machineCursor);
-      const slot = scheduleBackward(cursor, operation.totalMinutes, shiftStart, shiftEnd);
+      const slot = scheduleBackward(cursor, operation.totalMinutes, calendar);
       const item = scheduledItem(operation, slot);
       scheduledByMaterialId.set(String(operation.materialId), item);
       reverseMachine.set(operation.machineName || '', slot.start);

@@ -116,15 +116,32 @@ function barStyle(operation, timelineStartMs, timelineEndMs) {
   return `--bar-left: ${left}%; --bar-width: ${width}%;`;
 }
 
-function dateTimeFromDrop(event, row, slots) {
-  const rect = row.getBoundingClientRect();
-  const ratio = Math.max(0, Math.min(0.999, (event.clientX - rect.left) / rect.width));
-  const startMs = dateTimeMs(slots[0].date, slots[0].startTime);
-  const lastSlot = slots[slots.length - 1];
-  const endMs = dateTimeMs(lastSlot.endDate || lastSlot.date, lastSlot.endTime);
-  const droppedAt = snapMinutes(new Date(startMs + ((endMs - startMs) * ratio)), 60);
-  const parts = dateTimeParts(droppedAt);
-  return `${parts.date}T${parts.time}`;
+function slotPosition(slots, date, time, fallback) {
+  const targetMs = dateTimeMs(date, time);
+  for (let index = 0; index < slots.length; index += 1) {
+    const slot = slots[index];
+    const startMs = dateTimeMs(slot.date, slot.startTime);
+    const endMs = dateTimeMs(slot.endDate || slot.date, slot.endTime);
+    if (targetMs >= startMs && targetMs < endMs) {
+      return index + ((targetMs - startMs) / Math.max(endMs - startMs, 1));
+    }
+    if (targetMs === endMs) return index + 1;
+  }
+  return fallback;
+}
+
+function segmentStyle(segment, slots) {
+  const start = slotPosition(slots, segment.date, segment.startTime, 0);
+  const end = slotPosition(slots, segment.endDate || segment.date, segment.endTime, slots.length);
+  const left = (Math.max(0, Math.min(start, slots.length)) / Math.max(slots.length, 1)) * 100;
+  const width = (Math.max(end - start, 0.05) / Math.max(slots.length, 1)) * 100;
+  return `--bar-left: ${left}%; --bar-width: ${width}%;`;
+}
+
+function slotStyle(index, total) {
+  const left = (index / Math.max(total, 1)) * 100;
+  const width = (1 / Math.max(total, 1)) * 100;
+  return `--slot-left: ${left}%; --slot-width: ${width}%;`;
 }
 
 function focusFirstOperation(wrapper, dates, operations) {
@@ -162,6 +179,18 @@ function dispatchConfig(wrapper, operation, modal) {
 
 function tooltipText(operation) {
   const people = Number(operation.peopleCount || 0);
+  const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
+  return [
+    `Material: ${operation.materialName || '-'}`,
+    `Quantidade: ${quantity || '-'}`,
+    `Maquina: ${operation.machineName || '-'}`,
+    `Pessoas: ${people || '-'}`,
+    '',
+    `Data inicial: ${formatDate(operation.startDate)}`,
+    `Hora inicial: ${operationStartTime(operation)}`,
+    `Data final: ${formatDate(operation.endDate)}`,
+    `Hora final: ${operationEndTime(operation)}`
+  ].join('\n');
   return [
     operation.materialName,
     `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim(),
@@ -270,20 +299,56 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   const dates = eachDate(calendarStartDate, calendarEndDate);
   const shiftStart = parseTime(config.shiftStartTime || '07:00', '07:00');
   const shiftEnd = Math.max(parseTime(config.shiftEndTime || '17:00', '17:00'), shiftStart + 60);
+  const lunchStart = 12 * 60;
+  const lunchHours = String(config.lunchHours ?? '0').includes(',')
+    ? Number(String(config.lunchHours).replace(/\./g, '').replace(',', '.'))
+    : Number(config.lunchHours || 0);
+  const lunchMinutes = Math.max(Number.isFinite(lunchHours) ? lunchHours * 60 : 0, 0);
+  const lunchEnd = lunchStart + lunchMinutes;
 
   function buildSlots() {
     if (zoomIndex >= 4) {
       return dates.flatMap(date => {
         const slots = [];
-        for (let minutes = shiftStart; minutes < shiftEnd; minutes += 60) {
+        for (let minutes = shiftStart; minutes < shiftEnd;) {
+          if (lunchMinutes > 0 && minutes <= lunchStart && lunchStart < shiftEnd && lunchStart >= shiftStart) {
+            if (minutes < lunchStart) {
+              const end = Math.min(lunchStart, shiftEnd);
+              slots.push({
+                date,
+                startTime: minutesToTime(minutes),
+                endDate: date,
+                endTime: minutesToTime(end),
+                label: formatHour(minutes),
+                sublabel: formatDate(date)
+              });
+              minutes = end;
+              continue;
+            }
+            const end = Math.min(lunchEnd, shiftEnd);
+            slots.push({
+              date,
+              startTime: minutesToTime(lunchStart),
+              endDate: date,
+              endTime: minutesToTime(end),
+              label: 'Almo&ccedil;o',
+              sublabel: `${minutesToTime(lunchStart)}-${minutesToTime(end)}`,
+              isLunch: true
+            });
+            minutes = end;
+            continue;
+          }
+          const nextLunchStart = lunchMinutes > 0 && minutes < lunchStart ? lunchStart : shiftEnd;
+          const end = Math.min(minutes + 60, shiftEnd, nextLunchStart);
           slots.push({
             date,
             startTime: minutesToTime(minutes),
             endDate: date,
-            endTime: minutesToTime(Math.min(minutes + 60, shiftEnd)),
+            endTime: minutesToTime(end),
             label: formatHour(minutes),
             sublabel: formatDate(date)
           });
+          minutes = end;
         }
         return slots;
       });
@@ -334,7 +399,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     board.innerHTML = `
       <div class="gantt-dates">
         ${slots.map(slot => `
-          <div class="gantt-date" data-date="${slot.date}" data-start-time="${slot.startTime}">
+          <div class="gantt-date ${slot.isLunch ? 'gantt-date-lunch' : ''}" data-date="${slot.date}" data-start-time="${slot.startTime}">
             <strong>${slot.label}</strong>
             <span>${slot.sublabel}</span>
           </div>
@@ -343,18 +408,31 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
       ${operations.map(operation => {
         const startTime = operationStartTime(operation);
         const endTime = operationEndTime(operation);
+        const visualSegments = (operation.segments?.length ? operation.segments : [{
+          date: operation.startDate,
+          startTime,
+          endDate: operation.endDate,
+          endTime
+        }]).map(segment => ({ ...segment, endDate: segment.endDate || segment.date }));
+        const lunchBands = slots
+          .map((slot, index) => ({ slot, index }))
+          .filter(item => item.slot.isLunch)
+          .map(item => `<span class="gantt-lunch-band" style="${slotStyle(item.index, slots.length)}">Almo&ccedil;o</span>`)
+          .join('');
         return `
           <div class="gantt-row" data-row-operation="${operation.materialId}">
-            <button class="gantt-bar" type="button" draggable="true" data-operation-material="${operation.materialId}" style="${barStyle(operation, timelineStartMs, timelineEndMs)}" title="${escapeAttr(tooltipText(operation))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
-              <strong>${operation.materialName}</strong>
-              <span>${formatQty(operation.produceQty)} ${operation.unit || ''} | ${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
-              <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
-            </button>
+            ${lunchBands}
+            ${visualSegments.map(segment => `
+              <button class="gantt-bar" type="button" data-operation-material="${operation.materialId}" style="${segmentStyle(segment, slots)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+                <strong>${operation.materialName}</strong>
+                <span>${formatQty(operation.produceQty)} ${operation.unit || ''} | ${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
+                <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
+              </button>
+            `).join('')}
           </div>
         `;
       }).join('')}
     `;
-    bindDropTargets(board, slots);
   }
 
   wrapper.addEventListener('click', event => {
@@ -366,37 +444,6 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
 
   wrapper.querySelector('[data-zoom-out]')?.addEventListener('click', () => setZoom(zoomIndex - 1));
   wrapper.querySelector('[data-zoom-in]')?.addEventListener('click', () => setZoom(zoomIndex + 1));
-
-  wrapper.addEventListener('dragstart', event => {
-    const bar = event.target.closest('.gantt-bar');
-    if (!bar) return;
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', bar.dataset.operationMaterial);
-  });
-
-  function bindDropTargets(board, slots) {
-    board.querySelectorAll('.gantt-row, .gantt-date').forEach(dropTarget => {
-      dropTarget.addEventListener('dragover', event => {
-        event.preventDefault();
-        event.dataTransfer.dropEffect = 'move';
-      });
-      dropTarget.addEventListener('drop', event => {
-        event.preventDefault();
-        const materialId = event.dataTransfer.getData('text/plain');
-        if (!materialId) return;
-        const row = event.currentTarget.classList.contains('gantt-row')
-          ? event.currentTarget
-          : wrapper.querySelector(`.gantt-row[data-row-operation="${materialId}"]`);
-        const startDate = event.currentTarget.dataset.date
-          ? `${event.currentTarget.dataset.date}T${event.currentTarget.dataset.startTime || '00:00'}`
-          : dateTimeFromDrop(event, row, slots);
-        wrapper.dispatchEvent(new CustomEvent('operation-date-change', {
-          bubbles: true,
-          detail: { materialId, startDate }
-        }));
-      });
-    });
-  }
 
   setZoom(zoomIndex);
   focusFirstOperation(wrapper, dates, operations);
