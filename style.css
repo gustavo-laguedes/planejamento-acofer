@@ -1215,10 +1215,12 @@ thead tr:nth-child(2) th {
   max-width: 100%;
   min-width: 0;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;
+  max-height: min(78vh, 820px);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
+  position: relative;
 }
 
 .gantt-board-full {
@@ -1240,54 +1242,21 @@ thead tr:nth-child(2) th {
   line-height: 1;
 }
 
-.gantt-header {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  min-height: 62px;
-  background: #eef5f7;
-  color: var(--petroleum-dark);
-  border-bottom: 1px solid var(--line);
-  font-size: 12px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.gantt-left {
-  position: sticky;
-  left: 0;
-  z-index: 2;
+.agenda-grid {
+  --agenda-time-width: 78px;
   display: grid;
-  grid-template-columns: minmax(150px, 1.25fr) minmax(120px, 0.9fr) minmax(86px, 0.6fr) minmax(96px, 0.75fr);
-  gap: 10px;
-  align-items: center;
-  border-right: 1px solid var(--line);
-  background: #ffffff;
-}
-
-.gantt-left.gantt-header {
-  z-index: 4;
-  padding: 0 12px;
-  background: #eef5f7;
-}
-
-.gantt-right {
-  min-width: calc(var(--calendar-days) * var(--calendar-day-width, 180px));
-}
-
-.gantt-dates,
-.gantt-row {
-  display: grid;
-  width: max(100%, calc(var(--calendar-days) * var(--calendar-day-width, 180px)));
-  min-width: calc(var(--calendar-days) * var(--calendar-day-width, 180px));
-  grid-template-columns: repeat(var(--calendar-days), minmax(var(--calendar-day-width, 180px), 1fr));
+  grid-template-columns: var(--agenda-time-width) max(100%, calc(var(--calendar-days) * var(--calendar-day-width, 260px)));
+  grid-template-rows: 64px var(--calendar-body-height, 880px);
+  width: max(100%, calc(var(--agenda-time-width) + (var(--calendar-days) * var(--calendar-day-width, 260px))));
+  min-width: max(100%, calc(var(--agenda-time-width) + (var(--calendar-days) * var(--calendar-day-width, 260px))));
 }
 
 .gantt-dates {
+  display: grid;
+  grid-template-columns: repeat(var(--calendar-days), minmax(var(--calendar-day-width, 260px), 1fr));
   position: sticky;
   top: 0;
-  z-index: 3;
-  min-height: 62px;
+  z-index: 8;
   background: #eef5f7;
   border-bottom: 1px solid var(--line);
 }
@@ -1296,20 +1265,9 @@ thead tr:nth-child(2) th {
   display: grid;
   gap: 2px;
   align-content: center;
-  min-height: 62px;
+  min-height: 64px;
   padding: 9px 10px;
   border-right: 1px solid var(--line);
-}
-
-.gantt-date-lunch {
-  background: #e3e6ea;
-  color: #344054;
-  text-align: center;
-}
-
-.gantt-date-lunch strong {
-  font-size: 11px;
-  line-height: 1.1;
 }
 
 .gantt-date span {
@@ -1317,59 +1275,86 @@ thead tr:nth-child(2) th {
   font-size: 11px;
 }
 
-.gantt-row-controls,
-.gantt-row {
-  min-height: 86px;
+.agenda-corner {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 10;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-height: 64px;
+  padding: 9px 10px;
+  border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
+  background: #eef5f7;
+  color: var(--petroleum-dark);
 }
 
-.gantt-row-controls {
-  padding: 10px 12px;
+.agenda-corner span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
 }
 
-.gantt-row-controls strong,
-.gantt-row-controls span {
-  min-width: 0;
-  overflow-wrap: anywhere;
+.agenda-time-axis {
+  position: sticky;
+  left: 0;
+  z-index: 7;
+  height: var(--calendar-body-height, 880px);
+  border-right: 1px solid var(--line);
+  background: #ffffff;
 }
 
-.gantt-row-controls select {
-  min-width: 0;
-  padding: 8px 9px;
+.agenda-time-axis span {
+  position: absolute;
+  top: var(--time-top);
+  right: 10px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
-.production-model-control {
-  grid-column: 1 / -1;
-  grid-template-columns: 70px minmax(0, 1fr);
-  align-items: center;
+.agenda-days {
+  display: grid;
+  grid-template-columns: repeat(var(--calendar-days), minmax(var(--calendar-day-width, 260px), 1fr));
+  height: var(--calendar-body-height, 880px);
+  background: #ffffff;
 }
 
-.gantt-row {
+.agenda-day-column {
   position: relative;
-  align-items: center;
-  min-height: 88px;
-  border-bottom: 1px solid var(--line);
-  background:
-    repeating-linear-gradient(
-      to right,
-      transparent 0,
-      transparent calc((100% / var(--calendar-days)) - 1px),
-      rgba(15, 76, 92, 0.08) calc((100% / var(--calendar-days)) - 1px),
-      rgba(15, 76, 92, 0.08) calc(100% / var(--calendar-days))
-    );
+  min-width: var(--calendar-day-width, 260px);
+  height: var(--calendar-body-height, 880px);
+  border-right: 1px solid var(--line);
+  background: #fbfcfd;
+}
+
+.agenda-day-column:last-child {
+  border-right: 0;
+}
+
+.agenda-hour-line {
+  position: absolute;
+  top: var(--time-top);
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(15, 76, 92, 0.1);
+  pointer-events: none;
 }
 
 .gantt-bar {
   position: absolute;
-  left: var(--bar-left);
-  width: max(var(--bar-width), 18px);
-  min-height: 58px;
+  left: 8px;
+  right: 8px;
+  top: var(--event-top);
+  min-height: var(--event-height);
   margin: 0;
   display: grid;
   gap: 3px;
   align-content: center;
-  top: 50%;
-  transform: translateY(-50%);
   border: 0;
   border-left: 5px solid var(--accent);
   border-radius: 6px;
@@ -1379,31 +1364,31 @@ thead tr:nth-child(2) th {
   text-align: left;
   cursor: pointer;
   box-shadow: 0 10px 24px rgba(15, 76, 92, 0.22);
+  z-index: 4;
 }
 
 .gantt-lunch-band {
   position: absolute;
-  left: var(--slot-left);
-  top: 0;
-  bottom: 0;
-  width: var(--slot-width);
+  top: var(--lunch-top);
+  left: 0;
+  right: 0;
+  height: var(--lunch-height);
   display: grid;
   place-items: center;
-  background: rgba(152, 162, 179, 0.24);
+  border-top: 1px solid rgba(102, 112, 133, 0.22);
+  border-bottom: 1px solid rgba(102, 112, 133, 0.22);
+  background: rgba(152, 162, 179, 0.26);
   color: #667085;
   font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;
   pointer-events: none;
+  z-index: 2;
 }
 
-.gantt-bar:hover::after,
-.gantt-bar:focus-visible::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  z-index: 5;
+.calendar-tooltip {
+  position: fixed;
+  z-index: 9999;
   width: max-content;
   max-width: min(320px, 80vw);
   padding: 10px 12px;
@@ -1417,6 +1402,10 @@ thead tr:nth-child(2) th {
   line-height: 1.45;
   white-space: pre-line;
   pointer-events: none;
+}
+
+.calendar-tooltip[hidden] {
+  display: none;
 }
 
 .gantt-bar span,

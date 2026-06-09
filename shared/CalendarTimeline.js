@@ -51,7 +51,7 @@ function minutesToTime(minutes) {
 }
 
 function formatHour(minutes) {
-  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}h`;
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 }
 
 function formatDate(date) {
@@ -107,43 +107,6 @@ function productionModelFallback(operation) {
   return operation.isInitialRawMaterial ? 'Mat&eacute;ria-prima inicial' : 'Sem origem';
 }
 
-function barStyle(operation, timelineStartMs, timelineEndMs) {
-  const totalMs = Math.max(timelineEndMs - timelineStartMs, 1);
-  const startMs = Math.max(timelineStartMs, Math.min(dateTimeMs(operation.startDate, operationStartTime(operation)), timelineEndMs));
-  const endMs = Math.max(startMs, Math.min(dateTimeMs(operation.endDate, operationEndTime(operation)), timelineEndMs));
-  const left = ((startMs - timelineStartMs) / totalMs) * 100;
-  const width = Math.max(((endMs - startMs) / totalMs) * 100, 0.25);
-  return `--bar-left: ${left}%; --bar-width: ${width}%;`;
-}
-
-function slotPosition(slots, date, time, fallback) {
-  const targetMs = dateTimeMs(date, time);
-  for (let index = 0; index < slots.length; index += 1) {
-    const slot = slots[index];
-    const startMs = dateTimeMs(slot.date, slot.startTime);
-    const endMs = dateTimeMs(slot.endDate || slot.date, slot.endTime);
-    if (targetMs >= startMs && targetMs < endMs) {
-      return index + ((targetMs - startMs) / Math.max(endMs - startMs, 1));
-    }
-    if (targetMs === endMs) return index + 1;
-  }
-  return fallback;
-}
-
-function segmentStyle(segment, slots) {
-  const start = slotPosition(slots, segment.date, segment.startTime, 0);
-  const end = slotPosition(slots, segment.endDate || segment.date, segment.endTime, slots.length);
-  const left = (Math.max(0, Math.min(start, slots.length)) / Math.max(slots.length, 1)) * 100;
-  const width = (Math.max(end - start, 0.05) / Math.max(slots.length, 1)) * 100;
-  return `--bar-left: ${left}%; --bar-width: ${width}%;`;
-}
-
-function slotStyle(index, total) {
-  const left = (index / Math.max(total, 1)) * 100;
-  const width = (1 / Math.max(total, 1)) * 100;
-  return `--slot-left: ${left}%; --slot-width: ${width}%;`;
-}
-
 function focusFirstOperation(wrapper, dates, operations) {
   const firstOperation = operations.find(operation => operation.startDate);
   const firstIndex = firstOperation ? dates.indexOf(firstOperation.startDate) : -1;
@@ -153,6 +116,74 @@ function focusFirstOperation(wrapper, dates, operations) {
     if (!board || !board.scrollWidth || !dates.length) return;
     board.scrollLeft = (board.scrollWidth / dates.length) * firstIndex;
   });
+}
+
+function parseLunchMinutes(value) {
+  const raw = String(value ?? '0').trim();
+  const duration = raw.match(/^(\d+)([,.])(\d{1,2})$/);
+  if (duration) {
+    const hours = Number(duration[1]);
+    const minutes = Number(duration[3].padEnd(2, '0'));
+    return (hours * 60) + Math.min(minutes, 59);
+  }
+  const hours = Number(raw.replace(/\./g, '').replace(',', '.'));
+  return Math.max(Number.isFinite(hours) ? hours * 60 : 0, 0);
+}
+
+function clampMinutes(minutes, shiftStart, shiftEnd) {
+  return Math.max(shiftStart, Math.min(minutes, shiftEnd));
+}
+
+function segmentStyle(segment, shiftStart, shiftEnd, hourHeight) {
+  const start = clampMinutes(parseTime(segment.startTime, minutesToTime(shiftStart)), shiftStart, shiftEnd);
+  const end = clampMinutes(parseTime(segment.endTime, minutesToTime(shiftEnd)), shiftStart, shiftEnd);
+  const top = ((start - shiftStart) / 60) * hourHeight;
+  const height = Math.max(((Math.max(end - start, 1)) / 60) * hourHeight, 62);
+  return `--event-top: ${top}px; --event-height: ${height}px;`;
+}
+
+function lunchStyle(lunchStart, lunchEnd, shiftStart, shiftEnd, hourHeight) {
+  const start = clampMinutes(lunchStart, shiftStart, shiftEnd);
+  const end = clampMinutes(lunchEnd, shiftStart, shiftEnd);
+  const top = ((start - shiftStart) / 60) * hourHeight;
+  const height = Math.max(((Math.max(end - start, 0)) / 60) * hourHeight, 0);
+  return `--lunch-top: ${top}px; --lunch-height: ${height}px;`;
+}
+
+function splitSegmentByLunch(segment, lunchStart, lunchEnd, shiftStart, shiftEnd) {
+  const start = clampMinutes(parseTime(segment.startTime, minutesToTime(shiftStart)), shiftStart, shiftEnd);
+  const end = clampMinutes(parseTime(segment.endTime, minutesToTime(shiftEnd)), shiftStart, shiftEnd);
+  if (end <= start) return [];
+  if (lunchEnd <= lunchStart || end <= lunchStart || start >= lunchEnd) {
+    return [{ ...segment, startTime: minutesToTime(start), endTime: minutesToTime(end) }];
+  }
+  return [
+    start < lunchStart ? { ...segment, startTime: minutesToTime(start), endTime: minutesToTime(lunchStart) } : null,
+    end > lunchEnd ? { ...segment, startTime: minutesToTime(lunchEnd), endTime: minutesToTime(end) } : null
+  ].filter(Boolean);
+}
+
+function operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart, lunchEnd) {
+  const baseSegments = operation.segments?.length ? operation.segments : [{
+    date: operation.startDate,
+    startTime: operationStartTime(operation),
+    endDate: operation.endDate,
+    endTime: operationEndTime(operation)
+  }];
+  const byDate = new Map(dates.map(date => [date, []]));
+  baseSegments.forEach(segment => {
+    const startDate = segment.date || operation.startDate;
+    const endDate = segment.endDate || segment.date || operation.endDate;
+    if (!startDate || !endDate) return;
+    eachDate(startDate, endDate).forEach(date => {
+      if (!byDate.has(date)) return;
+      const startTime = date === startDate ? segment.startTime : minutesToTime(shiftStart);
+      const endTime = date === endDate ? segment.endTime : minutesToTime(shiftEnd);
+      splitSegmentByLunch({ ...segment, date, startTime, endDate: date, endTime }, lunchStart, lunchEnd, shiftStart, shiftEnd)
+        .forEach(part => byDate.get(date).push(part));
+    });
+  });
+  return byDate;
 }
 
 function dispatchConfig(wrapper, operation, modal) {
@@ -285,7 +316,13 @@ function showOperationModal(wrapper, operation) {
 export function CalendarTimeline(days = [], operations = [], config = {}) {
   const wrapper = document.createElement('section');
   wrapper.className = 'calendar-gantt';
-  const zoomWidths = [90, 130, 180, 84, 62];
+  const zoomLevels = [
+    { dayWidth: 170, hourHeight: 58 },
+    { dayWidth: 210, hourHeight: 72 },
+    { dayWidth: 260, hourHeight: 88 },
+    { dayWidth: 320, hourHeight: 108 },
+    { dayWidth: 390, hourHeight: 132 }
+  ];
   let zoomIndex = 2;
 
   if (!operations.length) {
@@ -300,85 +337,14 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   const shiftStart = parseTime(config.shiftStartTime || '07:00', '07:00');
   const shiftEnd = Math.max(parseTime(config.shiftEndTime || '17:00', '17:00'), shiftStart + 60);
   const lunchStart = 12 * 60;
-  const lunchHours = String(config.lunchHours ?? '0').includes(',')
-    ? Number(String(config.lunchHours).replace(/\./g, '').replace(',', '.'))
-    : Number(config.lunchHours || 0);
-  const lunchMinutes = Math.max(Number.isFinite(lunchHours) ? lunchHours * 60 : 0, 0);
+  const lunchMinutes = parseLunchMinutes(config.lunchHours);
   const lunchEnd = lunchStart + lunchMinutes;
-
-  function buildSlots() {
-    if (zoomIndex >= 4) {
-      return dates.flatMap(date => {
-        const slots = [];
-        for (let minutes = shiftStart; minutes < shiftEnd;) {
-          if (lunchMinutes > 0 && minutes <= lunchStart && lunchStart < shiftEnd && lunchStart >= shiftStart) {
-            if (minutes < lunchStart) {
-              const end = Math.min(lunchStart, shiftEnd);
-              slots.push({
-                date,
-                startTime: minutesToTime(minutes),
-                endDate: date,
-                endTime: minutesToTime(end),
-                label: formatHour(minutes),
-                sublabel: formatDate(date)
-              });
-              minutes = end;
-              continue;
-            }
-            const end = Math.min(lunchEnd, shiftEnd);
-            slots.push({
-              date,
-              startTime: minutesToTime(lunchStart),
-              endDate: date,
-              endTime: minutesToTime(end),
-              label: 'Almo&ccedil;o',
-              sublabel: `${minutesToTime(lunchStart)}-${minutesToTime(end)}`,
-              isLunch: true
-            });
-            minutes = end;
-            continue;
-          }
-          const nextLunchStart = lunchMinutes > 0 && minutes < lunchStart ? lunchStart : shiftEnd;
-          const end = Math.min(minutes + 60, shiftEnd, nextLunchStart);
-          slots.push({
-            date,
-            startTime: minutesToTime(minutes),
-            endDate: date,
-            endTime: minutesToTime(end),
-            label: formatHour(minutes),
-            sublabel: formatDate(date)
-          });
-          minutes = end;
-        }
-        return slots;
-      });
-    }
-    if (zoomIndex >= 3) {
-      return dates.map(date => ({
-        date,
-        startTime: minutesToTime(shiftStart),
-        endDate: date,
-        endTime: minutesToTime(shiftEnd),
-        label: formatDateLabel(date),
-        sublabel: `${formatHour(shiftStart)}-${formatHour(shiftEnd)}`
-      }));
-    }
-    return dates.map(date => ({
-      date,
-      startTime: '00:00',
-      endDate: addDays(date, 1),
-      endTime: '00:00',
-      label: formatDateLabel(date),
-      sublabel: formatDate(date)
-    }));
+  const hourMarks = [];
+  for (let minutes = Math.ceil(shiftStart / 60) * 60; minutes <= shiftEnd; minutes += 60) {
+    hourMarks.push(minutes);
   }
-
-  function setZoom(nextIndex) {
-    zoomIndex = Math.max(0, Math.min(zoomWidths.length - 1, nextIndex));
-    wrapper.querySelector('[data-zoom-out]')?.toggleAttribute('disabled', zoomIndex === 0);
-    wrapper.querySelector('[data-zoom-in]')?.toggleAttribute('disabled', zoomIndex === zoomWidths.length - 1);
-    renderBoard();
-  }
+  if (!hourMarks.includes(shiftStart)) hourMarks.unshift(shiftStart);
+  if (!hourMarks.includes(shiftEnd)) hourMarks.push(shiftEnd);
 
   wrapper.innerHTML = `
     <div class="gantt-zoom-controls" aria-label="Zoom do calend&aacute;rio">
@@ -386,55 +352,122 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
       <button class="secondary-button" type="button" data-zoom-in aria-label="Aumentar zoom">+</button>
     </div>
     <div class="gantt-board gantt-board-full"></div>
+    <div class="calendar-tooltip" hidden></div>
   `;
 
+  const tooltip = wrapper.querySelector('.calendar-tooltip');
+
+  function showTooltip(event, text) {
+    tooltip.textContent = text;
+    tooltip.hidden = false;
+    moveTooltip(event);
+  }
+
+  function moveTooltip(event) {
+    if (tooltip.hidden) return;
+    const padding = 12;
+    const rect = tooltip.getBoundingClientRect();
+    let left = event.clientX + 14;
+    let top = event.clientY + 14;
+    if (left + rect.width > window.innerWidth - padding) left = event.clientX - rect.width - 14;
+    if (top + rect.height > window.innerHeight - padding) top = event.clientY - rect.height - 14;
+    tooltip.style.left = `${Math.max(padding, left)}px`;
+    tooltip.style.top = `${Math.max(padding, top)}px`;
+  }
+
+  function hideTooltip() {
+    tooltip.hidden = true;
+  }
+
+  function setZoom(nextIndex) {
+    zoomIndex = Math.max(0, Math.min(zoomLevels.length - 1, nextIndex));
+    wrapper.querySelector('[data-zoom-out]')?.toggleAttribute('disabled', zoomIndex === 0);
+    wrapper.querySelector('[data-zoom-in]')?.toggleAttribute('disabled', zoomIndex === zoomLevels.length - 1);
+    renderBoard();
+  }
+
   function renderBoard() {
-    const slots = buildSlots();
-    const timelineStartMs = dateTimeMs(slots[0].date, slots[0].startTime);
-    const lastSlot = slots[slots.length - 1];
-    const timelineEndMs = dateTimeMs(lastSlot.endDate || lastSlot.date, lastSlot.endTime);
+    const zoom = zoomLevels[zoomIndex];
+    const totalMinutes = shiftEnd - shiftStart;
+    const bodyHeight = (totalMinutes / 60) * zoom.hourHeight;
+    const lunchVisible = lunchMinutes > 0 && lunchEnd > shiftStart && lunchStart < shiftEnd;
     const board = wrapper.querySelector('.gantt-board');
-    board.style.setProperty('--calendar-days', String(slots.length));
-    board.style.setProperty('--calendar-day-width', `${zoomWidths[zoomIndex]}px`);
+    board.style.setProperty('--calendar-days', String(dates.length));
+    board.style.setProperty('--calendar-day-width', `${zoom.dayWidth}px`);
+    board.style.setProperty('--calendar-hour-height', `${zoom.hourHeight}px`);
+    board.style.setProperty('--calendar-body-height', `${bodyHeight}px`);
     board.innerHTML = `
-      <div class="gantt-dates">
-        ${slots.map(slot => `
-          <div class="gantt-date ${slot.isLunch ? 'gantt-date-lunch' : ''}" data-date="${slot.date}" data-start-time="${slot.startTime}">
-            <strong>${slot.label}</strong>
-            <span>${slot.sublabel}</span>
-          </div>
-        `).join('')}
+      <div class="agenda-grid">
+        <div class="agenda-corner">
+          <strong>Hor&aacute;rio</strong>
+          <span>${minutesToTime(shiftStart)}-${minutesToTime(shiftEnd)}</span>
+        </div>
+        <div class="gantt-dates">
+          ${dates.map(date => `
+            <div class="gantt-date" data-date="${date}">
+              <strong>${formatDateLabel(date)}</strong>
+              <span>${formatDate(date)}</span>
+            </div>
+          `).join('')}
+        </div>
+        <div class="agenda-time-axis">
+          ${hourMarks.map(minutes => `
+            <span style="--time-top: ${((minutes - shiftStart) / 60) * zoom.hourHeight}px">${formatHour(minutes)}</span>
+          `).join('')}
+        </div>
+        <div class="agenda-days">
+          ${dates.map(date => {
+            const dayOperations = operations.flatMap(operation => {
+              const segments = operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart, lunchEnd).get(date) || [];
+              const startTime = operationStartTime(operation);
+              const endTime = operationEndTime(operation);
+              const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
+              return segments.map(segment => `
+                <button class="gantt-bar" type="button" data-operation-material="${operation.materialId}" style="${segmentStyle(segment, shiftStart, shiftEnd, zoom.hourHeight)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+                  <strong>${operation.materialName}</strong>
+                  <span>${quantity || '-'}</span>
+                  <span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
+                  <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
+                </button>
+              `);
+            }).join('');
+            return `
+              <div class="agenda-day-column" data-date="${date}">
+                ${hourMarks.map(minutes => `
+                  <span class="agenda-hour-line" style="--time-top: ${((minutes - shiftStart) / 60) * zoom.hourHeight}px"></span>
+                `).join('')}
+                ${lunchVisible ? `<span class="gantt-lunch-band" style="${lunchStyle(lunchStart, lunchEnd, shiftStart, shiftEnd, zoom.hourHeight)}">Almo&ccedil;o</span>` : ''}
+                ${dayOperations}
+              </div>
+            `;
+          }).join('')}
+        </div>
       </div>
-      ${operations.map(operation => {
-        const startTime = operationStartTime(operation);
-        const endTime = operationEndTime(operation);
-        const visualSegments = (operation.segments?.length ? operation.segments : [{
-          date: operation.startDate,
-          startTime,
-          endDate: operation.endDate,
-          endTime
-        }]).map(segment => ({ ...segment, endDate: segment.endDate || segment.date }));
-        const lunchBands = slots
-          .map((slot, index) => ({ slot, index }))
-          .filter(item => item.slot.isLunch)
-          .map(item => `<span class="gantt-lunch-band" style="${slotStyle(item.index, slots.length)}">Almo&ccedil;o</span>`)
-          .join('');
-        return `
-          <div class="gantt-row" data-row-operation="${operation.materialId}">
-            ${lunchBands}
-            ${visualSegments.map(segment => `
-              <button class="gantt-bar" type="button" data-operation-material="${operation.materialId}" style="${segmentStyle(segment, slots)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
-                <strong>${operation.materialName}</strong>
-                <span>${formatQty(operation.produceQty)} ${operation.unit || ''} | ${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
-                <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
-              </button>
-            `).join('')}
-          </div>
-        `;
-      }).join('')}
     `;
   }
 
+  wrapper.addEventListener('mouseover', event => {
+    const bar = event.target.closest('.gantt-bar');
+    if (!bar) return;
+    showTooltip(event, bar.dataset.tooltip || '');
+  });
+  wrapper.addEventListener('mousemove', event => {
+    if (event.target.closest('.gantt-bar')) moveTooltip(event);
+  });
+  wrapper.addEventListener('mouseout', event => {
+    const bar = event.target.closest('.gantt-bar');
+    if (!bar || bar.contains(event.relatedTarget)) return;
+    hideTooltip();
+  });
+  wrapper.addEventListener('focusin', event => {
+    const bar = event.target.closest('.gantt-bar');
+    if (!bar) return;
+    const rect = bar.getBoundingClientRect();
+    showTooltip({ clientX: rect.left + 8, clientY: rect.top + 8 }, bar.dataset.tooltip || '');
+  });
+  wrapper.addEventListener('focusout', event => {
+    if (event.target.closest('.gantt-bar')) hideTooltip();
+  });
   wrapper.addEventListener('click', event => {
     const bar = event.target.closest('.gantt-bar');
     if (!bar) return;
