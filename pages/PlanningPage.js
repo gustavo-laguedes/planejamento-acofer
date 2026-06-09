@@ -330,10 +330,16 @@ export function PlanningPage() {
       return operationStartDateTime(left).localeCompare(operationStartDateTime(right));
     }
 
+    function earliestOperationDate(...values) {
+      return values.filter(Boolean).sort()[0] || '';
+    }
+
     function manualPayload(editedMaterialId = null) {
       const currentOperations = currentSimulation?.operations || [];
       const editedOperation = currentOperations.find(operation => String(operation.materialId) === String(editedMaterialId));
       const anchorOperation = [...currentOperations].sort(compareOperationStart)[0];
+      const editedOverride = editedOperation ? operationOverrides[String(editedOperation.materialId)] : null;
+      const editedStartDate = editedOverride?.startDate?.split('T')[0] || editedOperation?.startDate;
       const previousOperations = editedOperation
         ? currentOperations.filter(operation => compareOperationStart(operation, editedOperation) < 0)
         : [];
@@ -344,11 +350,18 @@ export function PlanningPage() {
           startDate: operationStartDateTime(operation)
         };
       });
+      const previousAnchorDate = earliestOperationDate(...previousOperations.map(operation => operation.startDate));
+      const simulationAnchorDate = earliestOperationDate(
+        previousAnchorDate,
+        editedStartDate,
+        anchorOperation?.startDate,
+        currentSimulation?.summary?.startDate
+      );
       return {
         ...(lastPayload || payload()),
         dateMode: 'start',
-        selectedDate: anchorOperation?.startDate || currentSimulation?.summary?.startDate || lastPayload?.selectedDate,
-        startDate: anchorOperation?.startDate || currentSimulation?.summary?.startDate || lastPayload?.startDate,
+        selectedDate: simulationAnchorDate,
+        startDate: simulationAnchorDate,
         operationOverrides: manualOverrides
       };
     }
