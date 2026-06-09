@@ -125,6 +125,7 @@ export function PlanningPage() {
   let materials = [];
   let matrix = [];
   let lastPayload = null;
+  let currentSimulation = null;
   let operationOverrides = {};
 
   function toast(error) {
@@ -321,7 +322,39 @@ export function PlanningPage() {
       };
     }
 
+    function operationStartDateTime(operation) {
+      return `${operation.startDate}T${operation.startTime || '00:00'}`;
+    }
+
+    function compareOperationStart(left, right) {
+      return operationStartDateTime(left).localeCompare(operationStartDateTime(right));
+    }
+
+    function manualPayload(editedMaterialId = null) {
+      const currentOperations = currentSimulation?.operations || [];
+      const editedOperation = currentOperations.find(operation => String(operation.materialId) === String(editedMaterialId));
+      const anchorOperation = [...currentOperations].sort(compareOperationStart)[0];
+      const previousOperations = editedOperation
+        ? currentOperations.filter(operation => compareOperationStart(operation, editedOperation) < 0)
+        : [];
+      const manualOverrides = { ...operationOverrides };
+      previousOperations.forEach(operation => {
+        manualOverrides[String(operation.materialId)] = {
+          ...(manualOverrides[String(operation.materialId)] || {}),
+          startDate: operationStartDateTime(operation)
+        };
+      });
+      return {
+        ...(lastPayload || payload()),
+        dateMode: 'start',
+        selectedDate: anchorOperation?.startDate || currentSimulation?.summary?.startDate || lastPayload?.selectedDate,
+        startDate: anchorOperation?.startDate || currentSimulation?.summary?.startDate || lastPayload?.startDate,
+        operationOverrides: manualOverrides
+      };
+    }
+
     function renderSimulation(result) {
+      currentSimulation = result;
       resultsTarget.hidden = false;
       const firstOperation = result.operations[0];
       const lastOperation = result.operations[result.operations.length - 1];
@@ -375,6 +408,16 @@ Deseja continuar mesmo assim?`)) return null;
       return result;
     }
 
+    async function recalculateManual(editedMaterialId = null) {
+      if (!currentSimulation || !lastPayload) return simulate();
+      lastPayload = manualPayload(editedMaterialId);
+      operationOverrides = { ...(lastPayload.operationOverrides || {}) };
+      const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
+      renderSimulation(result);
+      saveButton.disabled = false;
+      return result;
+    }
+
     form.querySelectorAll('[name="dateModeChoice"]').forEach(input => {
       input.addEventListener('change', () => {
         form.querySelectorAll('[name="dateModeChoice"]').forEach(option => {
@@ -385,6 +428,7 @@ Deseja continuar mesmo assim?`)) return null;
     form.elements.materialId.addEventListener('change', () => {
       operationOverrides = {};
       lastPayload = null;
+      currentSimulation = null;
       updateMaterialFields();
       resultsTarget.hidden = true;
       saveButton.disabled = true;
@@ -401,6 +445,7 @@ Deseja continuar mesmo assim?`)) return null;
       if (material) form.elements.materialId.dispatchEvent(new Event('change'));
       else {
         lastPayload = null;
+        currentSimulation = null;
         updateMaterialFields();
         resultsTarget.hidden = true;
         saveButton.disabled = true;
@@ -420,6 +465,23 @@ Deseja continuar mesmo assim?`)) return null;
     form.elements.machineName.addEventListener('change', updatePeopleOptions);
     form.elements.hoursPerDay.addEventListener('input', () => form.elements.hoursPerDay.setCustomValidity(''));
     form.elements.lunchHours.addEventListener('input', () => form.elements.lunchHours.setCustomValidity(''));
+    let manualRecalculateTimer = null;
+    let pendingEditedMaterialId = null;
+
+    function queueManualRecalculate(materialId) {
+      pendingEditedMaterialId = pendingEditedMaterialId || materialId;
+      clearTimeout(manualRecalculateTimer);
+      manualRecalculateTimer = setTimeout(async () => {
+        const editedMaterialId = pendingEditedMaterialId;
+        pendingEditedMaterialId = null;
+        try {
+          await recalculateManual(editedMaterialId);
+        } catch (error) {
+          toast(error);
+        }
+      }, 0);
+    }
+
     timelineTarget.addEventListener('operation-config-change', async event => {
       operationOverrides[event.detail.materialId] = {
         ...(operationOverrides[event.detail.materialId] || {}),
@@ -427,22 +489,14 @@ Deseja continuar mesmo assim?`)) return null;
         peopleCount: Number(event.detail.peopleCount),
         productionModelName: event.detail.productionModelName || null
       };
-      try {
-        await simulate();
-      } catch (error) {
-        toast(error);
-      }
+      queueManualRecalculate(event.detail.materialId);
     });
     timelineTarget.addEventListener('operation-date-change', async event => {
       operationOverrides[event.detail.materialId] = {
         ...(operationOverrides[event.detail.materialId] || {}),
         startDate: event.detail.startDate
       };
-      try {
-        await simulate();
-      } catch (error) {
-        toast(error);
-      }
+      queueManualRecalculate(event.detail.materialId);
     });
     updateMaterialFields();
 
