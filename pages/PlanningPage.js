@@ -3,13 +3,21 @@ import { CalendarTimeline } from '../shared/CalendarTimeline.js';
 import { DataTable } from '../shared/DataTable.js';
 import { InternalTabs } from '../shared/InternalTabs.js';
 
+const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
+
 const planningTabs = [
-  { id: 'simulation', label: 'Simulação' },
-  { id: 'history', label: 'Histórico de Planejamentos' }
+  { id: 'simulation', label: 'Simulacao' },
+  { id: 'history', label: 'Historico de Planejamentos' }
 ];
 
 function today() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function addDays(value, days) {
+  const date = new Date(`${value}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function formatDate(value) {
@@ -53,56 +61,109 @@ function formatPtBrDecimal(value) {
   });
 }
 
-function formatMinutes(value) {
-  const minutes = Number(value || 0);
-  if (!Number.isFinite(minutes) || minutes <= 0) return '-';
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = Math.round(minutes % 60);
-  if (!hours) return `${remainingMinutes}min`;
-  return remainingMinutes ? `${hours}h ${remainingMinutes}min` : `${hours}h`;
-}
-
 function matrixSecondsPerUnit(row) {
   const timeSeconds = Number(row.time_seconds || Number(row.time_minutes || 0) * 60);
   return timeSeconds / Math.max(Number(row.output_qty || 1), 1);
 }
 
-function chips(values = [], emptyText = 'Sem informação') {
+function chips(values = [], emptyText = 'Sem informa&ccedil;&atilde;o') {
   const items = values.filter(Boolean);
   return items.length
-    ? items.map(value => `<span class="code-pill">${value}</span>`).join('')
+    ? items.map(value => `<span class="code-pill">${escapeHtml(value)}</span>`).join('')
     : `<span class="muted-text">${emptyText}</span>`;
 }
 
-function productivityLabel(option) {
-  if (!option) return '-';
-  return `${formatPtBrDecimal(option.outputQty)} ${option.outputUnit} em ${formatPtBrDecimal(option.timeSeconds)}s`;
+function materialLabel(material) {
+  return material?.name || '';
 }
 
-function renderTreeLevels(node, level = 0, levels = []) {
-  if (!node) return levels;
-  levels[level] ||= [];
-  levels[level].push(node);
-  for (const child of node.children || []) renderTreeLevels(child, level + 1, levels);
-  return levels;
+function productionModelsFor(material) {
+  return Array.isArray(material?.production_models) ? material.production_models.filter(model => (model.inputMaterials || []).length) : [];
 }
 
-function renderEngineeringTree(node) {
-  const levels = renderTreeLevels(node).reverse();
-  return levels.map((items, index) => `
-    <div class="engineering-level">
-      <span class="engineering-level-label">${index === 0 ? 'Matéria-prima / início' : index === levels.length - 1 ? 'Material final' : 'Intermediário'}</span>
-      <div class="engineering-level-items">
-        ${items.map(item => `
-          <article class="engineering-node">
-            <strong>${item.materialName}</strong>
-            <span>Necessário: ${formatPtBrDecimal(item.requiredQty)} ${item.unit || ''}</span>
-            <span>Produzir: ${formatPtBrDecimal(item.produceQty)} ${item.unit || ''}</span>
-          </article>
-        `).join('')}
-      </div>
-    </div>
-  `).join('');
+function minutesToTime(minutes) {
+  const normalized = ((Math.round(minutes) % (24 * 60)) + (24 * 60)) % (24 * 60);
+  const hours = Math.floor(normalized / 60);
+  const mins = normalized % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
+function timeToMinutes(value) {
+  const [hours, minutes] = String(value || '00:00').split(':').map(Number);
+  return (Number(hours) || 0) * 60 + (Number(minutes) || 0);
+}
+
+function defaultShift(index = 0, startTime = null) {
+  const shiftStartTime = startTime || (index === 0 ? '07:00' : '17:00');
+  const hoursPerDay = '8,48';
+  const pauseHours = '1,12';
+  const shiftEndMinutes = timeToMinutes(shiftStartTime)
+    + (parsePtBrDecimal(hoursPerDay, 8.8) * 60)
+    + (parsePtBrDecimal(pauseHours, 1.2) * 60);
+  return {
+    id: `shift-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    label: `Turno ${index + 1}`,
+    hoursPerDay,
+    shiftStartTime,
+    pauseLabel: index === 0 ? 'Horas de almo&ccedil;o' : 'Horas de janta',
+    pauseHours,
+    shiftEndTime: minutesToTime(shiftEndMinutes)
+  };
+}
+
+function emptyProduction(index = 0) {
+  return {
+    id: `production-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    title: `Produ&ccedil;&atilde;o ${index + 1}`,
+    materialId: '',
+    materialSearch: '',
+    productionModelName: '',
+    plannedQty: '',
+    machineName: '',
+    peopleCount: ''
+  };
+}
+
+function defaultDraft() {
+  const start = today();
+  return {
+    planningStartDate: start,
+    planningEndDate: addDays(start, 7),
+    shifts: [defaultShift(0)],
+    productions: [emptyProduction(0)]
+  };
+}
+
+function normalizeDraft(rawDraft) {
+  const draft = rawDraft && typeof rawDraft === 'object' ? rawDraft : {};
+  const normalized = {
+    ...defaultDraft(),
+    ...draft,
+    shifts: Array.isArray(draft.shifts) && draft.shifts.length ? draft.shifts : [defaultShift(0)],
+    productions: Array.isArray(draft.productions) && draft.productions.length ? draft.productions : [emptyProduction(0)]
+  };
+  normalized.shifts = normalized.shifts.map((shift, index) => ({
+    ...defaultShift(index, shift.shiftStartTime),
+    ...shift,
+    id: shift.id || `shift-${index}-${Date.now()}`,
+    label: `Turno ${index + 1}`,
+    pauseLabel: shift.pauseLabel || (index === 0 ? 'Horas de almo&ccedil;o' : 'Horas de janta')
+  }));
+  normalized.productions = normalized.productions.map((production, index) => ({
+    ...emptyProduction(index),
+    ...production,
+    id: production.id || `production-${index}-${Date.now()}`,
+    title: `Produ&ccedil;&atilde;o ${index + 1}`
+  }));
+  return normalized;
+}
+
+function loadDraft() {
+  try {
+    return normalizeDraft(JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'));
+  } catch {
+    return defaultDraft();
+  }
 }
 
 export function PlanningPage() {
@@ -112,7 +173,7 @@ export function PlanningPage() {
     <div class="page-header">
       <div>
         <h1>Planejamento</h1>
-        <p>Simule prazos a partir da engenharia cadastrada, estoque e matriz de produtividade.</p>
+        <p>Monte o plano por per&iacute;odo, com turnos e v&aacute;rias produ&ccedil;&otilde;es.</p>
       </div>
     </div>
     <div class="internal-tabs-target"></div>
@@ -124,9 +185,10 @@ export function PlanningPage() {
   let activeTab = sessionStorage.getItem('planejamento_planning_tab') || 'simulation';
   let materials = [];
   let matrix = [];
+  let draft = loadDraft();
   let lastPayload = null;
   let currentSimulation = null;
-  let operationOverrides = {};
+  let autosaveTimer = null;
 
   function toast(error) {
     window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message || error }));
@@ -141,18 +203,17 @@ export function PlanningPage() {
     }));
   }
 
-  function selectedMaterial(form) {
-    return materials.find(material => String(material.id) === String(form.elements.materialId.value));
+  function saveDraftNow() {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
   }
 
-  function materialLabel(material) {
-    return material.name || '';
+  function queueAutosave() {
+    clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(saveDraftNow, 80);
   }
 
-  function currentDateMode(form) {
-    const startChecked = form.querySelector('[name="dateModeChoice"][value="start"]').checked;
-    const endChecked = form.querySelector('[name="dateModeChoice"][value="end"]').checked;
-    return endChecked && !startChecked ? 'end' : 'start';
+  function materialById(id) {
+    return materials.find(material => String(material.id) === String(id));
   }
 
   function matchingMatrix(material) {
@@ -162,48 +223,233 @@ export function PlanningPage() {
       .sort((left, right) => matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right));
   }
 
-  function productionModelsFor(material) {
-    return Array.isArray(material?.production_models) ? material.production_models.filter(model => (model.inputMaterials || []).length) : [];
+  function hydrateProductionDefaults(production) {
+    const material = materialById(production.materialId);
+    if (!material) return;
+    const models = productionModelsFor(material);
+    if (!production.productionModelName && models[0]) production.productionModelName = models[0].name;
+    const rows = matchingMatrix(material);
+    const machines = [...new Set(rows.map(row => row.machine_name).filter(Boolean))];
+    if (!production.machineName && machines[0]) production.machineName = machines[0];
+    const people = [...new Set(rows
+      .filter(row => !production.machineName || row.machine_name === production.machineName)
+      .map(row => row.people_count)
+      .filter(Boolean))];
+    if (!production.peopleCount && people[0]) production.peopleCount = String(people[0]);
   }
 
   async function loadLookups() {
     [materials, matrix] = await Promise.all([api('/materials'), api('/productivity')]);
   }
 
-  async function renderSimulationTab() {
-    await loadLookups();
-    target.innerHTML = `
-      <div class="panel">
-        <form class="grid-form planning-form">
-          <fieldset class="date-mode-field">
-            <legend>Tipo de data</legend>
-            <label class="choice-pill"><input name="dateModeChoice" type="checkbox" value="start" checked /> Come&ccedil;ar produ&ccedil;&atilde;o em</label>
-            <label class="choice-pill"><input name="dateModeChoice" type="checkbox" value="end" /> Terminar produ&ccedil;&atilde;o em</label>
-          </fieldset>
-          <label>Data<input name="selectedDate" type="date" required /></label>
+  function productionPayload() {
+    return draft.productions.map(production => {
+      hydrateProductionDefaults(production);
+      const material = materialById(production.materialId);
+      return {
+        materialId: Number(production.materialId),
+        materialCode: material?.codes?.[0] || '',
+        plannedQty: Number(production.plannedQty),
+        plannedUnit: material?.primary_unit || 'un',
+        machineName: production.machineName,
+        peopleCount: Number(production.peopleCount),
+        productionModelName: production.productionModelName
+      };
+    });
+  }
+
+  function payload() {
+    const firstProduction = draft.productions[0] || {};
+    const firstMaterial = materialById(firstProduction.materialId);
+    return {
+      dateMode: 'start',
+      selectedDate: draft.planningStartDate,
+      startDate: draft.planningStartDate,
+      planningStartDate: draft.planningStartDate,
+      planningEndDate: draft.planningEndDate,
+      materialId: Number(firstProduction.materialId),
+      materialCode: firstMaterial?.codes?.[0] || '',
+      plannedQty: Number(firstProduction.plannedQty),
+      plannedUnit: firstMaterial?.primary_unit || 'un',
+      machineName: firstProduction.machineName,
+      peopleCount: Number(firstProduction.peopleCount),
+      productionModelName: firstProduction.productionModelName,
+      shifts: draft.shifts.map(shift => ({
+        label: shift.label,
+        hoursPerDay: parsePtBrDecimal(shift.hoursPerDay, 8),
+        shiftStartTime: shift.shiftStartTime,
+        pauseLabel: shift.pauseLabel,
+        pauseHours: parsePtBrDecimal(shift.pauseHours, 0),
+        shiftEndTime: shift.shiftEndTime
+      })),
+      productions: productionPayload()
+    };
+  }
+
+  function validateDraft(form) {
+    if (!draft.planningStartDate || !draft.planningEndDate) {
+      form.reportValidity();
+      return false;
+    }
+    if (draft.planningEndDate < draft.planningStartDate) {
+      form.elements.planningEndDate.setCustomValidity('A data final deve ser maior ou igual a data inicial.');
+      form.reportValidity();
+      return false;
+    }
+    form.elements.planningEndDate.setCustomValidity('');
+    const invalidProduction = draft.productions.find(production => !materialById(production.materialId) || !(Number(production.plannedQty) > 0));
+    if (invalidProduction) {
+      toast('Selecione material e quantidade maior que zero em todas as producoes.');
+      return false;
+    }
+    const invalidShift = draft.shifts.find(shift =>
+      !(parsePtBrDecimal(shift.hoursPerDay, 0) > 0)
+      || !(parsePtBrDecimal(shift.pauseHours, -1) >= 0)
+      || !shift.shiftStartTime
+      || !shift.shiftEndTime
+    );
+    if (invalidShift) {
+      toast('Revise os horarios e pausas dos turnos.');
+      return false;
+    }
+    return true;
+  }
+
+  function materialMatches(material, searchValue) {
+    const haystack = [
+      material.name,
+      ...(material.codes || [])
+    ].map(value => String(value || '').toLowerCase());
+    return haystack.some(value => value.includes(searchValue));
+  }
+
+  function renderShift(shift, index) {
+    return `
+      <article class="planning-subcard shift-card" data-shift-id="${shift.id}">
+        <div class="planning-subcard-header">
+          <h3>Turno ${index + 1}</h3>
+          ${index > 0 ? '<button class="link-button danger remove-shift" type="button">Excluir turno</button>' : ''}
+        </div>
+        <div class="grid-form planning-inner-grid">
+          <label>Horas/dia<input name="hoursPerDay" type="text" inputmode="decimal" value="${escapeHtml(shift.hoursPerDay)}" /></label>
+          <label>Come&ccedil;o do turno<input name="shiftStartTime" type="time" value="${escapeHtml(shift.shiftStartTime)}" required /></label>
+          <label>${shift.pauseLabel || 'Horas de pausa'}<input name="pauseHours" type="text" inputmode="decimal" value="${escapeHtml(shift.pauseHours)}" /></label>
+          <label>Final do turno<input name="shiftEndTime" type="time" value="${escapeHtml(shift.shiftEndTime)}" required /></label>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderProduction(production, index) {
+    hydrateProductionDefaults(production);
+    const material = materialById(production.materialId);
+    const rows = matchingMatrix(material);
+    const machines = [...new Set(rows.map(row => row.machine_name).filter(Boolean))];
+    const people = [...new Set(rows
+      .filter(row => !production.machineName || row.machine_name === production.machineName)
+      .map(row => row.people_count)
+      .filter(Boolean))];
+    const models = productionModelsFor(material);
+    return `
+      <article class="planning-subcard production-block" data-production-id="${production.id}">
+        <div class="planning-subcard-header">
+          <h3>Produ&ccedil;&atilde;o ${index + 1}</h3>
+          ${draft.productions.length > 1 ? '<button class="link-button danger remove-production" type="button">Excluir produ&ccedil;&atilde;o</button>' : ''}
+        </div>
+        <div class="grid-form planning-inner-grid">
           <label>Material
             <div class="material-autocomplete">
-              <input name="materialSearch" type="search" autocomplete="off" placeholder="Digite para pesquisar" required />
+              <input name="materialSearch" type="search" autocomplete="off" placeholder="Digite para pesquisar" value="${escapeHtml(production.materialSearch || materialLabel(material))}" required />
               <div class="material-suggestions" hidden></div>
             </div>
-            <input name="materialId" type="hidden" />
+            <input name="materialId" type="hidden" value="${escapeHtml(production.materialId)}" />
           </label>
           <div class="readonly-field">
-            <span>Código</span>
-            <div class="material-codes readonly-chip-list"></div>
+            <span>C&oacute;digo</span>
+            <div class="material-codes readonly-chip-list">${chips(material?.codes || [], 'Sem c&oacute;digos')}</div>
           </div>
           <div class="readonly-field">
             <span>Unidade</span>
-            <div class="material-unit readonly-chip-list"></div>
+            <div class="material-unit readonly-chip-list">${chips([material?.primary_unit])}</div>
           </div>
-          <label>Modelo de produ&ccedil;&atilde;o<select name="productionModelName"></select></label>
-          <label>Quantidade<input name="plannedQty" type="number" step="0.001" required /></label>
-          <label>Máquina<select name="machineName" required></select></label>
-          <label>Pessoas<select name="peopleCount" required></select></label>
-          <label>Horas/dia<input name="hoursPerDay" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="8,48" /></label>
-          <label>Come&ccedil;o do turno<input name="shiftStartTime" type="time" value="07:00" required /></label>
-          <label>Horas de almo&ccedil;o<input name="lunchHours" type="text" inputmode="decimal" pattern="[0-9]+([,.][0-9]+)?" value="1,12" /></label>
-          <label>Final do turno<input name="shiftEndTime" type="time" value="17:00" required /></label>
+          <label>Modelo de produ&ccedil;&atilde;o
+            <select name="productionModelName" ${!material || models.length <= 1 ? 'disabled data-locked="true"' : ''}>
+              ${models.length
+                ? models.map(model => `<option value="${escapeHtml(model.name)}" ${String(model.name) === String(production.productionModelName) ? 'selected' : ''}>${escapeHtml(model.name)}</option>`).join('')
+                : '<option value="">Sem modelo</option>'}
+            </select>
+          </label>
+          <label>Quantidade<input name="plannedQty" type="number" step="0.001" value="${escapeHtml(production.plannedQty)}" required /></label>
+          <label>M&aacute;quina
+            <select name="machineName" ${!material || machines.length <= 1 ? 'disabled data-locked="true"' : ''}>
+              ${machines.length
+                ? machines.map(machine => `<option value="${escapeHtml(machine)}" ${String(machine) === String(production.machineName) ? 'selected' : ''}>${escapeHtml(machine)}</option>`).join('')
+                : '<option value="">Selecione um material</option>'}
+            </select>
+          </label>
+          <label>Pessoas
+            <select name="peopleCount" ${!material || people.length <= 1 ? 'disabled data-locked="true"' : ''}>
+              ${people.length
+                ? people.map(value => `<option value="${value}" ${String(value) === String(production.peopleCount) ? 'selected' : ''}>${value}</option>`).join('')
+                : '<option value="">Selecione um material</option>'}
+            </select>
+          </label>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderSimulation(result, form) {
+    currentSimulation = result;
+    const resultsTarget = target.querySelector('.planning-results');
+    const summaryGrid = target.querySelector('.summary-grid');
+    const timelineTarget = target.querySelector('.timeline-target');
+    const firstOperation = result.operations[0];
+    const lastOperation = result.operations[result.operations.length - 1];
+    const cards = [
+      ['C&oacute;digo previsto', result.code],
+      ['Plano', result.summary.materialName],
+      ['Produ&ccedil;&otilde;es', result.summary.productions?.length || draft.productions.length],
+      ['Range informado', `${formatDateOnly(result.summary.planningStartDate || draft.planningStartDate)} at&eacute; ${formatDateOnly(result.summary.planningEndDate || draft.planningEndDate)}`],
+      ['Per&iacute;odo estimado', `${formatDateOnly(result.summary.startDate)} ${firstOperation?.startTime || ''} at&eacute; ${formatDateOnly(result.summary.endDate)} ${lastOperation?.endTime || ''}`],
+      ['Total de opera&ccedil;&otilde;es', result.operations.length],
+      ['Total de dias', result.summary.daysNeeded],
+      ['Turnos', draft.shifts.length],
+      ['Horas/dia', formatPtBrDecimal(result.summary.hoursPerDay)]
+    ];
+    summaryGrid.innerHTML = cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${value}</strong></article>`).join('');
+    timelineTarget.innerHTML = '';
+    timelineTarget.appendChild(CalendarTimeline(result.days, result.operations, result.summary));
+    resultsTarget.hidden = false;
+    form.elements.save.disabled = false;
+  }
+
+  async function renderSimulationTab() {
+    await loadLookups();
+    target.innerHTML = `
+      <div class="panel planning-builder-panel">
+        <form class="planning-form">
+          <div class="section-heading">
+            <h2>Range do planejamento</h2>
+            <button class="secondary-button clear-planning" type="button">Limpar planejamento</button>
+          </div>
+          <div class="grid-form planning-inner-grid">
+            <label>Data inicial do planejamento<input name="planningStartDate" type="date" value="${escapeHtml(draft.planningStartDate)}" required /></label>
+            <label>Data final do planejamento<input name="planningEndDate" type="date" value="${escapeHtml(draft.planningEndDate)}" required /></label>
+          </div>
+
+          <div class="section-heading planning-section-heading">
+            <h2>Turnos</h2>
+            <button class="secondary-button add-shift" type="button">+ Adicionar turno</button>
+          </div>
+          <div class="shifts-target">${draft.shifts.map(renderShift).join('')}</div>
+
+          <div class="section-heading planning-section-heading">
+            <h2>Produ&ccedil;&otilde;es</h2>
+            <button class="secondary-button add-production" type="button">+ Adicionar produ&ccedil;&atilde;o</button>
+          </div>
+          <div class="productions-target">${draft.productions.map(renderProduction).join('')}</div>
+
           <div class="form-actions">
             <button class="primary-button" name="simulate" type="submit">Simular</button>
             <button class="secondary-button" name="save" type="button" disabled>Salvar planejamento</button>
@@ -227,31 +473,75 @@ export function PlanningPage() {
     `;
 
     const form = target.querySelector('form');
-    const saveButton = target.querySelector('[name="save"]');
-    const resultsTarget = target.querySelector('.planning-results');
-    const summaryGrid = target.querySelector('.summary-grid');
-    const timelineTarget = target.querySelector('.timeline-target');
-    const suggestionsTarget = target.querySelector('.material-suggestions');
-    form.elements.selectedDate.value = today();
-    timelineTarget.appendChild(CalendarTimeline([]));
+    const shiftsTarget = target.querySelector('.shifts-target');
+    const productionsTarget = target.querySelector('.productions-target');
+    target.querySelector('.timeline-target').appendChild(CalendarTimeline([]));
 
-    function materialMatches(material, searchValue) {
-      const haystack = [
-        material.name,
-        ...(material.codes || [])
-      ].map(value => String(value || '').toLowerCase());
-      return haystack.some(value => value.includes(searchValue));
+    function rerenderBuilder() {
+      saveDraftNow();
+      renderSimulationTab().catch(toast);
     }
 
-    function selectMaterial(material) {
-      form.elements.materialSearch.value = materialLabel(material);
-      form.elements.materialId.value = material?.id || '';
-      suggestionsTarget.hidden = true;
-      form.elements.materialId.dispatchEvent(new Event('change'));
+    function updateDraftFromGeneral() {
+      draft.planningStartDate = form.elements.planningStartDate.value;
+      draft.planningEndDate = form.elements.planningEndDate.value;
+      queueAutosave();
     }
 
-    function renderMaterialSuggestions() {
-      const searchValue = form.elements.materialSearch.value.trim().toLowerCase();
+    form.elements.planningStartDate.addEventListener('input', updateDraftFromGeneral);
+    form.elements.planningEndDate.addEventListener('input', updateDraftFromGeneral);
+
+    shiftsTarget.addEventListener('input', event => {
+      const card = event.target.closest('[data-shift-id]');
+      if (!card) return;
+      const shift = draft.shifts.find(item => item.id === card.dataset.shiftId);
+      if (!shift || !event.target.name) return;
+      shift[event.target.name] = event.target.value;
+      queueAutosave();
+    });
+
+    shiftsTarget.addEventListener('click', event => {
+      const card = event.target.closest('[data-shift-id]');
+      if (!card || !event.target.classList.contains('remove-shift')) return;
+      draft.shifts = draft.shifts.filter(shift => shift.id !== card.dataset.shiftId);
+      rerenderBuilder();
+    });
+
+    productionsTarget.addEventListener('input', event => {
+      const card = event.target.closest('[data-production-id]');
+      if (!card) return;
+      const production = draft.productions.find(item => item.id === card.dataset.productionId);
+      if (!production || !event.target.name) return;
+      production[event.target.name] = event.target.value;
+      if (event.target.name === 'materialSearch') {
+        const searchValue = event.target.value.trim().toLowerCase();
+        const material = materials.find(item =>
+          materialLabel(item).toLowerCase() === searchValue
+          || (item.codes || []).some(code => String(code).toLowerCase() === searchValue)
+        );
+        production.materialId = material?.id || '';
+        production.productionModelName = '';
+        production.machineName = '';
+        production.peopleCount = '';
+        renderMaterialSuggestions(card, production);
+        if (material) rerenderBuilder();
+      }
+      queueAutosave();
+    });
+
+    productionsTarget.addEventListener('change', event => {
+      const card = event.target.closest('[data-production-id]');
+      if (!card) return;
+      const production = draft.productions.find(item => item.id === card.dataset.productionId);
+      if (!production || !event.target.name) return;
+      production[event.target.name] = event.target.value;
+      if (event.target.name === 'machineName') production.peopleCount = '';
+      rerenderBuilder();
+    });
+
+    function renderMaterialSuggestions(card, production) {
+      const suggestionsTarget = card.querySelector('.material-suggestions');
+      const searchValue = String(production.materialSearch || '').trim().toLowerCase();
       if (!searchValue) {
         suggestionsTarget.hidden = true;
         suggestionsTarget.innerHTML = '';
@@ -269,270 +559,83 @@ export function PlanningPage() {
       suggestionsTarget.hidden = false;
     }
 
-    function updateMaterialFields() {
-      const material = selectedMaterial(form);
-      target.querySelector('.material-codes').innerHTML = chips(material?.codes || [], 'Sem códigos');
-      target.querySelector('.material-unit').innerHTML = chips([material?.primary_unit]);
-      const rows = matchingMatrix(material);
-      const machines = [...new Set(rows.map(row => row.machine_name).filter(Boolean))];
-      form.elements.machineName.innerHTML = machines.length
-        ? machines.map(machine => `<option value="${machine}">${machine}</option>`).join('')
-        : '<option value="">Selecione um material</option>';
-      form.elements.machineName.disabled = !material || machines.length === 1;
-      form.elements.machineName.dataset.locked = material && machines.length === 1 ? 'true' : 'false';
-      const models = productionModelsFor(material);
-      form.elements.productionModelName.innerHTML = models.length
-        ? models.map(model => `<option value="${escapeHtml(model.name)}">${escapeHtml(model.name)}</option>`).join('')
-        : '<option value="">Sem modelo</option>';
-      form.elements.productionModelName.disabled = !material || models.length <= 1;
-      form.elements.productionModelName.dataset.locked = material && models.length <= 1 ? 'true' : 'false';
-      updatePeopleOptions();
-    }
-
-    function updatePeopleOptions() {
-      const rows = matchingMatrix(selectedMaterial(form)).filter(row => !form.elements.machineName.value || row.machine_name === form.elements.machineName.value);
-      const people = [...new Set(rows.map(row => row.people_count).filter(Boolean))];
-      form.elements.peopleCount.innerHTML = people.length
-        ? people.map(value => `<option value="${value}">${value}</option>`).join('')
-        : '<option value="">Selecione um material</option>';
-      form.elements.peopleCount.disabled = !selectedMaterial(form) || people.length === 1;
-      form.elements.peopleCount.dataset.locked = selectedMaterial(form) && people.length === 1 ? 'true' : 'false';
-    }
-
-    function payload() {
-      const material = selectedMaterial(form);
-      const hoursPerDay = parsePtBrDecimal(form.elements.hoursPerDay.value, 8);
-      const lunchHours = parsePtBrDecimal(form.elements.lunchHours.value, 1);
-      return {
-        dateMode: currentDateMode(form),
-        selectedDate: form.elements.selectedDate.value,
-        startDate: form.elements.selectedDate.value,
-        materialId: Number(form.elements.materialId.value),
-        materialCode: material?.codes?.[0] || '',
-        plannedQty: Number(form.elements.plannedQty.value),
-        plannedUnit: material?.primary_unit || 'un',
-        machineName: form.elements.machineName.value,
-        peopleCount: Number(form.elements.peopleCount.value),
-        hoursPerDay,
-        lunchHours,
-        shiftStartTime: form.elements.shiftStartTime.value,
-        shiftEndTime: form.elements.shiftEndTime.value,
-        productionModelName: form.elements.productionModelName.value,
-        operationOverrides
-      };
-    }
-
-    function operationStartDateTime(operation) {
-      return `${operation.startDate}T${operation.startTime || '00:00'}`;
-    }
-
-    function overrideDateTime(override) {
-      if (!override?.startDate) return null;
-      if (String(override.startDate).includes('T')) return override.startDate;
-      return `${override.startDate}T${override.startTime || '00:00'}`;
-    }
-
-    function compareOperationStart(left, right) {
-      return operationStartDateTime(left).localeCompare(operationStartDateTime(right));
-    }
-
-    function earliestOperationDate(...values) {
-      return values.filter(Boolean).sort()[0] || '';
-    }
-
-    function manualPayload(editedMaterialId = null) {
-      const currentOperations = currentSimulation?.operations || [];
-      const editedOperation = currentOperations.find(operation => String(operation.materialId) === String(editedMaterialId));
-      const anchorOperation = [...currentOperations].sort(compareOperationStart)[0];
-      const editedOverride = editedOperation ? operationOverrides[String(editedOperation.materialId)] : null;
-      const editedStartDate = overrideDateTime(editedOverride)?.split('T')[0] || editedOperation?.startDate;
-      const previousOperations = editedOperation
-        ? currentOperations.filter(operation => compareOperationStart(operation, editedOperation) < 0)
-        : [];
-      const manualOverrides = { ...operationOverrides };
-      previousOperations.forEach(operation => {
-        manualOverrides[String(operation.materialId)] = {
-          ...(manualOverrides[String(operation.materialId)] || {}),
-          startDate: operationStartDateTime(operation)
-        };
-      });
-      const previousAnchorDate = earliestOperationDate(...previousOperations.map(operation => operation.startDate));
-      const simulationAnchorDate = earliestOperationDate(
-        previousAnchorDate,
-        editedStartDate,
-        anchorOperation?.startDate,
-        currentSimulation?.summary?.startDate
-      );
-      return {
-        ...(lastPayload || payload()),
-        dateMode: 'start',
-        selectedDate: simulationAnchorDate,
-        startDate: simulationAnchorDate,
-        operationOverrides: manualOverrides
-      };
-    }
-
-    function renderSimulation(result) {
-      currentSimulation = result;
-      resultsTarget.hidden = false;
-      const firstOperation = result.operations[0];
-      const lastOperation = result.operations[result.operations.length - 1];
-      const cards = [
-        ['C&oacute;digo previsto', result.code],
-        ['Material final', result.summary.materialName],
-        ['Quantidade final', `${formatPtBrDecimal(result.summary.plannedQty)} ${result.summary.plannedUnit}`],
-        ['Tipo de data', result.summary.dateMode === 'end' ? 'Terminar produ&ccedil;&atilde;o em' : 'Come&ccedil;ar produ&ccedil;&atilde;o em'],
-        ['Data informada', formatDateOnly(result.summary.selectedDate || form.elements.selectedDate.value)],
-        ['Per&iacute;odo estimado', `${formatDateOnly(result.summary.startDate)} ${firstOperation?.startTime || ''} at&eacute; ${formatDateOnly(result.summary.endDate)} ${lastOperation?.endTime || ''}`],
-        ['Total de opera&ccedil;&otilde;es', result.operations.length],
-        ['Total de dias', result.summary.daysNeeded],
-        ['Horas/dia', form.elements.hoursPerDay.value],
-        ['Almo&ccedil;o', form.elements.lunchHours.value],
-        ['Turno', `${result.summary.shiftStartTime || form.elements.shiftStartTime.value} at&eacute; ${result.summary.shiftEndTime || form.elements.shiftEndTime.value}`]
-      ];
-      summaryGrid.innerHTML = cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${value}</strong></article>`).join('');
-      timelineTarget.innerHTML = '';
-      timelineTarget.appendChild(CalendarTimeline(result.days, result.operations, result.summary));
-    }
-
-    async function simulate() {
-      if (!selectedMaterial(form)) {
-        form.elements.materialSearch.setCustomValidity('Selecione um material cadastrado.');
-        form.reportValidity();
-        return null;
-      }
-      const hoursPerDay = parsePtBrDecimal(form.elements.hoursPerDay.value, 8);
-      const lunchHours = parsePtBrDecimal(form.elements.lunchHours.value, 1);
-      form.elements.hoursPerDay.setCustomValidity('');
-      form.elements.lunchHours.setCustomValidity('');
-      if (!Number.isFinite(hoursPerDay) || hoursPerDay <= 0) {
-        form.elements.hoursPerDay.setCustomValidity('Informe as horas por dia com valor maior que zero.');
-        form.reportValidity();
-        return null;
-      }
-      if (!Number.isFinite(lunchHours) || lunchHours < 0) {
-        form.elements.lunchHours.setCustomValidity('Informe as horas de almoço com valor igual ou maior que zero.');
-        form.reportValidity();
-        return null;
-      }
-      lastPayload = payload();
-      const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
-      if (result.summary.hasPastStart && !confirm(`ATENCAO
-
-Para terminar em ${formatDateOnly(result.summary.selectedDate)} seria necessario iniciar em ${formatDateOnly(result.summary.startDate)}.
-
-Deseja continuar mesmo assim?`)) return null;
-      renderSimulation(result);
-      saveButton.disabled = false;
-      return result;
-    }
-
-    async function recalculateManual(editedMaterialId = null) {
-      if (!currentSimulation || !lastPayload) return simulate();
-      lastPayload = manualPayload(editedMaterialId);
-      operationOverrides = { ...(lastPayload.operationOverrides || {}) };
-      const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
-      renderSimulation(result);
-      saveButton.disabled = false;
-      return result;
-    }
-
-    form.querySelectorAll('[name="dateModeChoice"]').forEach(input => {
-      input.addEventListener('change', () => {
-        form.querySelectorAll('[name="dateModeChoice"]').forEach(option => {
-          option.checked = option === input;
-        });
-      });
+    productionsTarget.addEventListener('focusin', event => {
+      const card = event.target.closest('[data-production-id]');
+      if (!card || event.target.name !== 'materialSearch') return;
+      const production = draft.productions.find(item => item.id === card.dataset.productionId);
+      renderMaterialSuggestions(card, production);
     });
-    form.elements.materialId.addEventListener('change', () => {
-      operationOverrides = {};
+
+    productionsTarget.addEventListener('focusout', event => {
+      if (event.target.name !== 'materialSearch') return;
+      const card = event.target.closest('[data-production-id]');
+      setTimeout(() => {
+        const suggestionsTarget = card?.querySelector('.material-suggestions');
+        if (suggestionsTarget) suggestionsTarget.hidden = true;
+      }, 120);
+    });
+
+    productionsTarget.addEventListener('mousedown', event => {
+      const button = event.target.closest('[data-material-id]');
+      const card = event.target.closest('[data-production-id]');
+      if (!button || !card) return;
+      event.preventDefault();
+      const production = draft.productions.find(item => item.id === card.dataset.productionId);
+      const material = materialById(button.dataset.materialId);
+      production.materialId = material?.id || '';
+      production.materialSearch = materialLabel(material);
+      production.productionModelName = '';
+      production.machineName = '';
+      production.peopleCount = '';
+      rerenderBuilder();
+    });
+
+    productionsTarget.addEventListener('click', event => {
+      const card = event.target.closest('[data-production-id]');
+      if (!card || !event.target.classList.contains('remove-production')) return;
+      draft.productions = draft.productions.filter(production => production.id !== card.dataset.productionId);
       lastPayload = null;
       currentSimulation = null;
-      updateMaterialFields();
-      resultsTarget.hidden = true;
-      saveButton.disabled = true;
+      rerenderBuilder();
     });
-    form.elements.materialSearch.addEventListener('input', () => {
-      form.elements.materialSearch.setCustomValidity('');
-      const searchValue = form.elements.materialSearch.value.trim().toLowerCase();
-      const material = materials.find(item =>
-        materialLabel(item).toLowerCase() === searchValue
-        || item.name.toLowerCase() === searchValue
-        || (item.codes || []).some(code => String(code).toLowerCase() === searchValue)
-      );
-      form.elements.materialId.value = material?.id || '';
-      if (material) form.elements.materialId.dispatchEvent(new Event('change'));
-      else {
-        lastPayload = null;
-        currentSimulation = null;
-        updateMaterialFields();
-        resultsTarget.hidden = true;
-        saveButton.disabled = true;
-      }
-      renderMaterialSuggestions();
-    });
-    suggestionsTarget.addEventListener('mousedown', event => {
-      const button = event.target.closest('[data-material-id]');
-      if (!button) return;
-      event.preventDefault();
-      selectMaterial(materials.find(material => String(material.id) === String(button.dataset.materialId)));
-    });
-    form.elements.materialSearch.addEventListener('focus', renderMaterialSuggestions);
-    form.elements.materialSearch.addEventListener('blur', () => {
-      setTimeout(() => { suggestionsTarget.hidden = true; }, 120);
-    });
-    form.elements.machineName.addEventListener('change', updatePeopleOptions);
-    form.elements.hoursPerDay.addEventListener('input', () => form.elements.hoursPerDay.setCustomValidity(''));
-    form.elements.lunchHours.addEventListener('input', () => form.elements.lunchHours.setCustomValidity(''));
-    let manualRecalculateTimer = null;
-    let pendingEditedMaterialId = null;
 
-    function queueManualRecalculate(materialId) {
-      pendingEditedMaterialId = pendingEditedMaterialId || materialId;
-      clearTimeout(manualRecalculateTimer);
-      manualRecalculateTimer = setTimeout(async () => {
-        const editedMaterialId = pendingEditedMaterialId;
-        pendingEditedMaterialId = null;
-        try {
-          await recalculateManual(editedMaterialId);
-        } catch (error) {
-          toast(error);
-        }
-      }, 0);
-    }
+    target.querySelector('.add-shift').addEventListener('click', () => {
+      const previous = draft.shifts.at(-1);
+      draft.shifts.push(defaultShift(draft.shifts.length, previous?.shiftEndTime || '17:00'));
+      rerenderBuilder();
+    });
 
-    timelineTarget.addEventListener('operation-config-change', async event => {
-      operationOverrides[event.detail.materialId] = {
-        ...(operationOverrides[event.detail.materialId] || {}),
-        machineName: event.detail.machineName,
-        peopleCount: Number(event.detail.peopleCount),
-        productionModelName: event.detail.productionModelName || null
-      };
-      queueManualRecalculate(event.detail.materialId);
+    target.querySelector('.add-production').addEventListener('click', () => {
+      draft.productions.push(emptyProduction(draft.productions.length));
+      rerenderBuilder();
     });
-    timelineTarget.addEventListener('operation-date-change', async event => {
-      operationOverrides[event.detail.materialId] = {
-        ...(operationOverrides[event.detail.materialId] || {}),
-        startDate: event.detail.startDate,
-        startTime: event.detail.startTime
-      };
-      queueManualRecalculate(event.detail.materialId);
+
+    target.querySelector('.clear-planning').addEventListener('click', () => {
+      if (!confirm('Limpar o planejamento atual e apagar o rascunho local?')) return;
+      localStorage.removeItem(DRAFT_KEY);
+      draft = defaultDraft();
+      lastPayload = null;
+      currentSimulation = null;
+      rerenderBuilder();
     });
-    updateMaterialFields();
 
     form.addEventListener('submit', async event => {
       event.preventDefault();
+      updateDraftFromGeneral();
+      if (!validateDraft(form)) return;
       try {
-        await simulate();
+        lastPayload = payload();
+        const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
+        renderSimulation(result, form);
       } catch (error) {
         toast(error);
       }
     });
 
-    saveButton.addEventListener('click', async () => {
+    form.elements.save.addEventListener('click', async () => {
       try {
         const saved = await api('/planning/plans', { method: 'POST', body: lastPayload || payload() });
-        saveButton.disabled = true;
+        form.elements.save.disabled = true;
         window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Planejamento ${saved.plan.code || saved.plan.id} salvo.` }));
       } catch (error) {
         toast(error);
@@ -544,7 +647,7 @@ Deseja continuar mesmo assim?`)) return null;
     target.innerHTML = `
       <div class="panel planning-history-panel">
         <div class="section-heading">
-          <h2>Histórico de Planejamentos</h2>
+          <h2>Hist&oacute;rico de Planejamentos</h2>
           <button class="secondary-button refresh-history" type="button">Atualizar</button>
         </div>
         <div class="planning-history-target"></div>
@@ -557,15 +660,15 @@ Deseja continuar mesmo assim?`)) return null;
       historyTarget.innerHTML = '';
       historyTarget.appendChild(DataTable({
         columns: [
-          { label: 'Código do planejamento', key: 'code' },
+          { label: 'C&oacute;digo do planejamento', key: 'code' },
           { label: 'Material', key: 'material_name' },
           { label: 'Quantidade', render: row => `${row.planned_qty} ${row.planned_unit}` },
           { label: 'Horas/dia', render: row => formatPtBrDecimal(row.hours_per_day), sortValue: row => Number(row.hours_per_day || 0) },
-          { label: 'Data de criação', render: row => formatDate(row.created_at), sortValue: row => row.created_at },
-          { label: 'Início', render: row => formatDateOnly(row.start_date), sortValue: row => row.start_date },
+          { label: 'Data de cria&ccedil;&atilde;o', render: row => formatDate(row.created_at), sortValue: row => row.created_at },
+          { label: 'In&iacute;cio', render: row => formatDateOnly(row.start_date), sortValue: row => row.start_date },
           { label: 'Fim', render: row => formatDateOnly(row.end_date), sortValue: row => row.end_date },
           { label: 'Status', key: 'status' },
-          { label: 'Ações', render: row => `
+          { label: 'A&ccedil;&otilde;es', render: row => `
             <button class="link-button" data-view="${row.id}">Visualizar</button>
             <button class="link-button" data-pdf="${row.id}">Gerar PDF</button>
             <button class="link-button danger" data-cancel="${row.id}">Cancelar</button>
@@ -587,7 +690,7 @@ Deseja continuar mesmo assim?`)) return null;
 
     async function cancelPlan(id) {
       if (!confirm('Confirma o cancelamento deste planejamento?')) return;
-      await api(`/planning/plans/${id}/cancel`, { method: 'POST', body: { reason: 'Cancelado pelo usuário' } });
+      await api(`/planning/plans/${id}/cancel`, { method: 'POST', body: { reason: 'Cancelado pelo usuario' } });
       await loadHistory();
     }
 
@@ -606,10 +709,10 @@ Deseja continuar mesmo assim?`)) return null;
       backdrop.innerHTML = `
         <div class="modal" role="dialog" aria-modal="true">
           <div class="modal-header">
-            <h2>${detail.plan.code || detail.plan.id}</h2>
+            <h2>${escapeHtml(detail.plan.code || detail.plan.id)}</h2>
             <button class="link-button close-modal" type="button">Fechar</button>
           </div>
-          <pre class="plan-json">${JSON.stringify({ horasPorDia: formatPtBrDecimal(detail.plan.hours_per_day), operacoes: operations }, null, 2)}</pre>
+          <pre class="plan-json">${escapeHtml(JSON.stringify({ horasPorDia: formatPtBrDecimal(detail.plan.hours_per_day), operacoes: operations }, null, 2))}</pre>
         </div>
       `;
       backdrop.addEventListener('click', event => {

@@ -429,7 +429,7 @@ function minCursor(...cursors) {
   ), null);
 }
 
-function workWindowsForDate(date, shiftStart, shiftEnd, lunchStart, lunchEnd, dailyMinutes) {
+function workWindowsForShift(date, shiftStart, shiftEnd, lunchStart, lunchEnd, dailyMinutes) {
   const rawWindows = [];
   if (lunchEnd <= shiftStart || lunchStart >= shiftEnd || lunchEnd <= lunchStart) {
     rawWindows.push({ date, start: shiftStart, end: shiftEnd });
@@ -451,15 +451,64 @@ function workWindowsForDate(date, shiftStart, shiftEnd, lunchStart, lunchEnd, da
   return windows;
 }
 
+function normalizeShift(shift = {}, index = 0) {
+  const defaultStart = index === 0 ? '07:00' : '17:00';
+  const shiftStart = parseTime(shift.shiftStartTime, defaultStart);
+  const pauseMinutes = Math.max(toOperationalHours(shift.pauseHours ?? shift.lunchHours ?? 0), 0) * 60;
+  const dailyMinutes = Math.max(toOperationalHours(shift.hoursPerDay || 8), 1 / 60) * 60;
+  const calculatedEnd = shiftStart + dailyMinutes + pauseMinutes;
+  let shiftEnd = parseTime(shift.shiftEndTime, minutesToTime(calculatedEnd));
+  if (shiftEnd <= shiftStart) shiftEnd += 24 * 60;
+  shiftEnd = Math.max(shiftEnd, shiftStart + 1);
+  const pauseStart = shift.pauseStartTime
+    ? parseTime(shift.pauseStartTime, minutesToTime(shiftStart + Math.floor((shiftEnd - shiftStart - pauseMinutes) / 2)))
+    : index === 0 ? 12 * 60 : shiftStart + Math.max(Math.floor((shiftEnd - shiftStart - pauseMinutes) / 2), 0);
+  const pauseEnd = pauseStart + pauseMinutes;
+  const pauseOverlap = Math.max(Math.min(shiftEnd, pauseEnd) - Math.max(shiftStart, pauseStart), 0);
+  const availableMinutes = Math.max(shiftEnd - shiftStart - pauseOverlap, 1);
+  return {
+    shiftStart,
+    shiftEnd,
+    lunchStart: pauseStart,
+    lunchEnd: pauseEnd,
+    dailyMinutes: Math.min(dailyMinutes, availableMinutes),
+    label: shift.label || `Turno ${index + 1}`
+  };
+}
+
+function calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours }) {
+  const normalizedShifts = (Array.isArray(shifts) && shifts.length ? shifts : [{
+    hoursPerDay,
+    shiftStartTime,
+    shiftEndTime,
+    pauseHours: lunchHours,
+    pauseStartTime: '12:00',
+    label: 'Turno 1'
+  }]).map(normalizeShift);
+  const shiftStart = Math.min(...normalizedShifts.map(shift => shift.shiftStart));
+  const shiftEnd = Math.max(...normalizedShifts.map(shift => shift.shiftEnd));
+  const dailyMinutes = normalizedShifts.reduce((sum, shift) => sum + shift.dailyMinutes, 0);
+  return { shifts: normalizedShifts, shiftStart, shiftEnd, dailyMinutes };
+}
+
+function workWindowsForDate(date, calendar) {
+  if (Array.isArray(calendar.shifts)) {
+    return calendar.shifts
+      .flatMap(shift => workWindowsForShift(date, shift.shiftStart, shift.shiftEnd, shift.lunchStart, shift.lunchEnd, shift.dailyMinutes))
+      .sort((left, right) => left.start - right.start);
+  }
+  return workWindowsForShift(date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes);
+}
+
 function firstWindow(date, calendar) {
-  return workWindowsForDate(date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes)[0];
+  return workWindowsForDate(date, calendar)[0];
 }
 
 function nextWorkStart(cursor, calendar) {
   let date = cursor.date;
   let minutes = cursor.minutes;
   for (let guard = 0; guard < 370; guard += 1) {
-    const windows = workWindowsForDate(date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes);
+    const windows = workWindowsForDate(date, calendar);
     for (const window of windows) {
       if (minutes <= window.start) return { date, minutes: window.start };
       if (minutes < window.end) return { date, minutes };
@@ -474,7 +523,7 @@ function previousWorkEnd(cursor, calendar) {
   let date = cursor.date;
   let minutes = cursor.minutes;
   for (let guard = 0; guard < 370; guard += 1) {
-    const windows = workWindowsForDate(date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes);
+    const windows = workWindowsForDate(date, calendar);
     for (const window of [...windows].reverse()) {
       if (minutes >= window.end) return { date, minutes: window.end };
       if (minutes > window.start) return { date, minutes };
@@ -486,7 +535,7 @@ function previousWorkEnd(cursor, calendar) {
 }
 
 function windowForCursor(cursor, calendar) {
-  return workWindowsForDate(cursor.date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes)
+  return workWindowsForDate(cursor.date, calendar)
     .find(window => cursor.minutes >= window.start && cursor.minutes < window.end);
 }
 
@@ -517,10 +566,10 @@ function scheduleBackward(cursor, durationMinutes, calendar) {
   let remaining = durationMinutes;
   while (remaining > 0) {
     current = previousWorkEnd(current, calendar);
-    const window = workWindowsForDate(current.date, calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes)
+    const window = workWindowsForDate(current.date, calendar)
       .find(item => current.minutes > item.start && current.minutes <= item.end);
     if (!window) {
-      const previous = workWindowsForDate(addDays(current.date, -1), calendar.shiftStart, calendar.shiftEnd, calendar.lunchStart, calendar.lunchEnd, calendar.dailyMinutes).at(-1);
+      const previous = workWindowsForDate(addDays(current.date, -1), calendar).at(-1);
       current = { date: previous.date, minutes: previous.end };
       continue;
     }
@@ -557,17 +606,9 @@ function segmentsForOperation(operation, calendar) {
   return segments;
 }
 
-function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, operationOverrides = {} }) {
-  const shiftStart = parseTime(shiftStartTime, '07:12');
-  const requestedShiftEnd = Math.max(parseTime(shiftEndTime, '16:00'), shiftStart + 1);
-  const lunchMinutes = Math.max(toOperationalHours(lunchHours || 0), 0) * 60;
-  const lunchStart = 12 * 60;
-  const lunchEnd = lunchStart + lunchMinutes;
-  const lunchOverlap = Math.max(Math.min(requestedShiftEnd, lunchEnd) - Math.max(shiftStart, lunchStart), 0);
-  const shiftAvailableMinutes = Math.max(requestedShiftEnd - shiftStart - lunchOverlap, 1);
-  const dailyMinutes = Math.min(Math.max(toOperationalHours(hoursPerDay || 8), 1 / 60) * 60, shiftAvailableMinutes);
-  const shiftEnd = requestedShiftEnd;
-  const calendar = { shiftStart, shiftEnd, lunchStart, lunchEnd, dailyMinutes };
+function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, shifts, operationOverrides = {} }) {
+  const calendar = calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours });
+  const { shiftStart, shiftEnd } = calendar;
   const scheduled = [];
   const source = groupOperations(operations);
 
@@ -713,7 +754,7 @@ function buildDays(operations, plannedUnit) {
   });
 }
 
-export function buildPlan(payload, context) {
+function buildSinglePlan(payload, context) {
   const material = context.material;
   if (!material) {
     const error = new Error('Material cadastrado não encontrado.');
@@ -785,6 +826,134 @@ export function buildPlan(payload, context) {
       endDate,
       daysNeeded: uniqueDaysNeeded,
       hasPastStart: (payload.dateMode || 'start') === 'end' && new Date(`${startDate}T00:00:00`) < new Date(`${dateKey(new Date())}T00:00:00`)
+    },
+    tree,
+    operations,
+    days
+  };
+}
+
+function productionEntries(payload, context) {
+  const source = Array.isArray(payload.productions) && payload.productions.length ? payload.productions : [payload];
+  return source.map((production, index) => {
+    const materialId = Number(production.materialId);
+    const material = materialId ? context.materialsById.get(String(materialId)) : index === 0 ? context.material : null;
+    if (!material) {
+      const error = new Error(`Material da Producao ${index + 1} nao encontrado.`);
+      error.status = 404;
+      throw error;
+    }
+    return {
+      ...production,
+      material,
+      plannedQty: toNumber(production.plannedQty),
+      productionIndex: index
+    };
+  }).filter(production => production.plannedQty > 0);
+}
+
+export function buildPlan(payload, context) {
+  if (!Array.isArray(payload.productions) && !Array.isArray(payload.shifts) && !payload.planningStartDate && !payload.planningEndDate) {
+    return buildSinglePlan(payload, context);
+  }
+
+  const productions = productionEntries(payload, context);
+  if (!productions.length) {
+    const error = new Error('Informe pelo menos uma producao com quantidade maior que zero.');
+    error.status = 400;
+    throw error;
+  }
+
+  const operationOverrides = { ...(payload.operationOverrides || {}) };
+  for (const production of productions) {
+    if (!production.productionModelName) continue;
+    operationOverrides[String(production.material.id)] = {
+      ...(operationOverrides[String(production.material.id)] || {}),
+      productionModelName: production.productionModelName
+    };
+  }
+
+  const trees = productions.map(production => buildRequirementTree({
+    material: production.material,
+    quantity: production.plannedQty,
+    materialsById: context.materialsById,
+    inputsByMaterialId: context.inputsByMaterialId,
+    stockRows: context.stockRows,
+    inventoryRows: context.inventoryRows,
+    productionRows: context.productionRows,
+    matrixRows: context.matrixRows,
+    requestedMachine: production.machineName,
+    requestedPeople: production.peopleCount,
+    operationOverrides
+  }));
+  const tree = trees.length === 1 ? trees[0] : { materialName: 'Plano de producao', children: trees };
+  const aggregatedOperations = productions.flatMap(production => buildAggregatedOperations({
+    material: production.material,
+    quantity: production.plannedQty,
+    context,
+    requestedMachine: production.machineName,
+    requestedPeople: production.peopleCount,
+    operationOverrides
+  }).map(operation => ({
+    ...operation,
+    productionOrder: operation.productionOrder + (production.productionIndex * 1000)
+  })));
+  const operations = scheduleOperations(aggregatedOperations, context.matrixRows, {
+    dateMode: 'start',
+    selectedDate: payload.planningStartDate || payload.selectedDate || payload.startDate,
+    hoursPerDay: payload.hoursPerDay,
+    shiftStartTime: payload.shiftStartTime,
+    shiftEndTime: payload.shiftEndTime,
+    lunchHours: payload.lunchHours,
+    shifts: payload.shifts,
+    operationOverrides
+  });
+  const firstMaterial = productions[0].material;
+  const days = buildDays(operations, firstMaterial.primary_unit);
+  const shifts = Array.isArray(payload.shifts) && payload.shifts.length
+    ? payload.shifts
+    : [{ hoursPerDay: payload.hoursPerDay, shiftStartTime: payload.shiftStartTime, shiftEndTime: payload.shiftEndTime, pauseHours: payload.lunchHours }];
+  const hoursPerDay = shifts.reduce((sum, shift) => sum + Math.max(toOperationalHours(shift.hoursPerDay || 0), 0), 0) || Math.max(toOperationalHours(payload.hoursPerDay || 8), 1 / 60);
+  const selectedDate = payload.planningStartDate || payload.selectedDate || payload.startDate;
+  const startDate = operations.length ? operations[0].startDate : selectedDate;
+  const endDate = operations.length ? operations[operations.length - 1].endDate : payload.planningEndDate || selectedDate;
+  const finalOperation = operations[operations.length - 1];
+  const uniqueDaysNeeded = new Set(days.map(day => day.planned_date)).size;
+  const plannedQty = productions.reduce((sum, production) => sum + production.plannedQty, 0);
+
+  return {
+    code: codeForPlan(),
+    summary: {
+      materialId: firstMaterial.id,
+      materialName: productions.length === 1 ? firstMaterial.name : `${productions.length} producoes`,
+      materialCode: productions.length === 1 ? materialCode(firstMaterial) : '',
+      plannedQty,
+      plannedUnit: productions.length === 1 ? firstMaterial.primary_unit : 'itens',
+      machineName: finalOperation?.machineName || null,
+      peopleCount: finalOperation?.peopleCount ? Number(finalOperation.peopleCount) : null,
+      dateMode: 'start',
+      selectedDate,
+      hoursPerDay,
+      shiftStartTime: shifts[0]?.shiftStartTime || '07:00',
+      shiftEndTime: shifts.at(-1)?.shiftEndTime || '17:00',
+      lunchHours: shifts.reduce((sum, shift) => sum + toOperationalHours(shift.pauseHours ?? shift.lunchHours ?? 0), 0),
+      planningStartDate: payload.planningStartDate || selectedDate,
+      planningEndDate: payload.planningEndDate || endDate,
+      shifts,
+      productions: productions.map(production => ({
+        materialId: production.material.id,
+        materialName: production.material.name,
+        materialCode: materialCode(production.material),
+        plannedQty: production.plannedQty,
+        plannedUnit: production.material.primary_unit,
+        machineName: production.machineName || null,
+        peopleCount: Number(production.peopleCount || 0) || null,
+        productionModelName: production.productionModelName || null
+      })),
+      startDate,
+      endDate,
+      daysNeeded: uniqueDaysNeeded,
+      hasPastStart: false
     },
     tree,
     operations,
