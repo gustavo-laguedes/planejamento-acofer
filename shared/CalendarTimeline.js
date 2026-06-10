@@ -428,11 +428,11 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   const calendarStartDate = addDays(knownDates[0], -15);
   const calendarEndDate = addDays(knownDates[knownDates.length - 1], 15);
   const dates = eachDate(calendarStartDate, calendarEndDate);
-  const materialColors = new Map();
+  const productionColors = new Map();
   operations.forEach(operation => {
-    const key = String(operation.materialId || operation.materialName || '');
-    if (!materialColors.has(key)) {
-      materialColors.set(key, MATERIAL_COLORS[materialColors.size % MATERIAL_COLORS.length]);
+    const key = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
+    if (!productionColors.has(key)) {
+      productionColors.set(key, MATERIAL_COLORS[productionColors.size % MATERIAL_COLORS.length]);
     }
   });
   const shiftStart = parseTime(config.shiftStartTime || '07:00', '07:00');
@@ -528,11 +528,11 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const startTime = operationStartTime(operation);
               const endTime = operationEndTime(operation);
               const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
-              const materialKey = String(operation.materialId || operation.materialName || '');
+              const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
               const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
               const shouldShowText = segment.visualIndex === 0 && ((end - start) / 60) * zoom.hourHeight >= 62;
               return `
-                <button class="gantt-bar${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-material="${operation.materialId}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(materialColors.get(materialKey))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+                <button class="gantt-bar${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(productionColors.get(productionKey))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
                   ${shouldShowText ? `
                     <strong>${operation.materialName}</strong>
                     <span>${quantity || '-'}</span>
@@ -582,7 +582,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   wrapper.addEventListener('click', event => {
     const bar = event.target.closest('.gantt-bar');
     if (!bar) return;
-    const operation = operations.find(item => String(item.materialId) === String(bar.dataset.operationMaterial));
+    const operation = operations.find(item => String(item.operationId || item.materialId) === String(bar.dataset.operationId));
     if (operation) showOperationModal(wrapper, operation);
   });
 

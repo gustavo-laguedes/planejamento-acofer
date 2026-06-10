@@ -1086,6 +1086,99 @@ thead tr:nth-child(2) th {
   font-size: 16px;
 }
 
+.planning-subcard-header h3 span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.production-flows-target {
+  display: grid;
+  gap: 12px;
+}
+
+.production-flow-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 14px;
+}
+
+.production-flow-tree,
+.production-flow-tree ul {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.production-flow-tree ul {
+  margin-left: 18px;
+  padding-left: 14px;
+  border-left: 2px solid #d8e2e8;
+}
+
+.production-flow-node {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) minmax(220px, auto);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #d8e2e8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.production-flow-node.stock-covered {
+  border-color: #b9ddcc;
+  background: #f4fbf7;
+}
+
+.production-flow-node.needs-production {
+  border-color: #edd0a3;
+  background: #fffaf0;
+}
+
+.production-flow-node strong,
+.production-flow-node span {
+  overflow-wrap: anywhere;
+}
+
+.production-flow-node > div:first-child span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.production-flow-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 6px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.production-flow-metrics strong {
+  color: var(--ink);
+}
+
+.stock-only-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.stock-only-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
 .operation-config-target {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -1543,6 +1636,10 @@ thead tr:nth-child(2) th {
   .planning-inner-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .production-flow-node {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1569,6 +1666,10 @@ thead tr:nth-child(2) th {
   .consumed-material-header,
   .consumed-material-row,
   .inventory-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .production-flow-metrics {
     grid-template-columns: 1fr;
   }
 
