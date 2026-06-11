@@ -157,34 +157,34 @@ function clampMinutes(minutes, start, end) {
 
 const PRODUCTION_STAGE_COLORS = [
   [
-    { bg: '#e8f6f8', border: '#48a6b5', text: '#123942' },
-    { bg: '#d9f2ef', border: '#68aea7', text: '#173f3b' },
-    { bg: '#dff3df', border: '#74ad74', text: '#224222' },
-    { bg: '#eadff8', border: '#9a7cc7', text: '#352750' }
+    { bg: '#d8eef7', border: '#1f78a8', text: '#123942' },
+    { bg: '#e4f4fb', border: '#4b97bd', text: '#123942' },
+    { bg: '#eef9fd', border: '#72b4d0', text: '#123942' },
+    { bg: '#f6fcff', border: '#9bcfe2', text: '#123942' }
   ],
   [
-    { bg: '#fff4e4', border: '#de9642', text: '#56320d' },
-    { bg: '#f9e2d6', border: '#d08d72', text: '#593020' },
-    { bg: '#f3e6c8', border: '#b79a55', text: '#483916' },
-    { bg: '#efe0f4', border: '#af82c1', text: '#43234f' }
+    { bg: '#fff2bf', border: '#d79a16', text: '#56320d' },
+    { bg: '#fff7d7', border: '#e4b544', text: '#56320d' },
+    { bg: '#fffbe8', border: '#eccb73', text: '#56320d' },
+    { bg: '#fffdf3', border: '#f1d895', text: '#56320d' }
   ],
   [
-    { bg: '#ecf8f1', border: '#63b485', text: '#173d2e' },
-    { bg: '#e6f4d8', border: '#8fb96c', text: '#2f421d' },
-    { bg: '#d7f0f0', border: '#68aaa8', text: '#1c4140' },
-    { bg: '#e7e6fb', border: '#8582cf', text: '#2e2d63' }
+    { bg: '#dff3e8', border: '#2f8a5d', text: '#173d2e' },
+    { bg: '#e9f8ef', border: '#5aa67a', text: '#173d2e' },
+    { bg: '#f2fbf6', border: '#83bf9a', text: '#173d2e' },
+    { bg: '#f8fefa', border: '#a8d5b8', text: '#173d2e' }
   ],
   [
-    { bg: '#f0f3ff', border: '#7d90d8', text: '#26376f' },
-    { bg: '#dceffb', border: '#70a5cf', text: '#1f405d' },
-    { bg: '#e2f2de', border: '#80b571', text: '#28451f' },
-    { bg: '#f3e1f1', border: '#bd84b5', text: '#51254b' }
+    { bg: '#e7ebfb', border: '#5269b0', text: '#26376f' },
+    { bg: '#f0f3ff', border: '#7488cc', text: '#26376f' },
+    { bg: '#f6f8ff', border: '#96a5de', text: '#26376f' },
+    { bg: '#fbfcff', border: '#b7c1eb', text: '#26376f' }
   ],
   [
-    { bg: '#fff0f6', border: '#cf7ca4', text: '#552345' },
-    { bg: '#f5e1dc', border: '#c98472', text: '#552e25' },
-    { bg: '#e1f1e7', border: '#75ae8c', text: '#203f2c' },
-    { bg: '#e5e4f8', border: '#8a83c8', text: '#302b5b' }
+    { bg: '#fbe5ef', border: '#9a4f74', text: '#552345' },
+    { bg: '#fff0f6', border: '#b96f94', text: '#552345' },
+    { bg: '#fff7fa', border: '#cf90ae', text: '#552345' },
+    { bg: '#fffafd', border: '#e0b3c8', text: '#552345' }
   ]
 ];
 

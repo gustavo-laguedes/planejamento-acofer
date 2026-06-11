@@ -575,6 +575,74 @@ export function PlanningPage() {
     );
   }
 
+  function flowNodeKey(node) {
+    return `${node.productionIndex ?? 0}:${node.materialId ?? node.materialCode ?? node.materialName}`;
+  }
+
+  function mergeFlowNode(targetNode, sourceNode) {
+    targetNode.requiredQty = Math.max(Number(targetNode.requiredQty || 0), Number(sourceNode.requiredQty || 0));
+    targetNode.stockQty = Math.max(Number(targetNode.stockQty || 0), Number(sourceNode.stockQty || 0));
+    targetNode.stockUsedQty = Math.max(Number(targetNode.stockUsedQty || 0), Number(sourceNode.stockUsedQty || 0));
+    targetNode.produceQty = Math.max(Number(targetNode.produceQty || 0), Number(sourceNode.produceQty || 0));
+    targetNode.forceStockOnly = targetNode.forceStockOnly || sourceNode.forceStockOnly;
+    targetNode.isInitialRawMaterial = targetNode.isInitialRawMaterial || sourceNode.isInitialRawMaterial;
+  }
+
+  function buildFlowGraph(root) {
+    const nodes = new Map();
+    const incoming = new Map();
+    const outgoing = new Map();
+
+    function ensureNode(node) {
+      const key = flowNodeKey(node);
+      if (!nodes.has(key)) {
+        nodes.set(key, { ...node, flowKey: key, flowOrder: nodes.size, children: [] });
+        incoming.set(key, new Set());
+        outgoing.set(key, new Set());
+      } else {
+        mergeFlowNode(nodes.get(key), node);
+      }
+      return key;
+    }
+
+    function visit(node, parentKey = null, stack = []) {
+      if (!node) return;
+      const key = ensureNode(node);
+      if (parentKey && parentKey !== key) {
+        incoming.get(key).add(parentKey);
+        outgoing.get(parentKey).add(key);
+      }
+      if (stack.includes(key)) return;
+      (node.children || []).forEach(child => visit(child, key, [...stack, key]));
+    }
+
+    visit(root);
+    const levels = new Map();
+    const rootKey = flowNodeKey(root);
+
+    function assignLevel(key, level, stack = []) {
+      if (stack.includes(key)) return;
+      levels.set(key, Math.max(levels.get(key) ?? 0, level));
+      for (const childKey of outgoing.get(key) || []) {
+        assignLevel(childKey, level + 1, [...stack, key]);
+      }
+    }
+
+    assignLevel(rootKey, 0);
+    const columns = [];
+    for (const [key, node] of nodes.entries()) {
+      const level = levels.get(key) ?? 0;
+      if (!columns[level]) columns[level] = [];
+      columns[level].push(node);
+    }
+    columns.forEach(column => column.sort((left, right) => Number(left.flowOrder || 0) - Number(right.flowOrder || 0)));
+    const edges = [];
+    for (const [from, children] of outgoing.entries()) {
+      for (const to of children) edges.push({ from, to });
+    }
+    return { columns, edges };
+  }
+
   function clearProductionMaterialDecisions(productionIndex) {
     draft.stockOnlyMaterials = (draft.stockOnlyMaterials || [])
       .filter(item => Number(item.productionIndex) !== Number(productionIndex));
@@ -613,79 +681,103 @@ export function PlanningPage() {
     clearTimeout(autosaveTimer);
   }
 
-  function renderFlowNode(node, depth = 0, renderChild = renderFlowNode) {
+  function flowNodeStatus(node, checked, produceQty, stockUsedQty, stockQty, requiredQty) {
+    if (node.isInitialRawMaterial) {
+      if (stockQty >= requiredQty) return { label: 'Estoque suficiente', className: 'stock-ok' };
+      return { label: stockQty > 0 ? 'Estoque insuficiente' : 'Comprar / mat&eacute;ria-prima inicial', className: 'raw-warning' };
+    }
+    if (checked && produceQty <= 0) return { label: 'Estoque atende', className: 'stock-ok' };
+    if (checked && stockUsedQty > 0) return { label: 'Utilizando saldo', className: 'using-stock' };
+    if (produceQty > 0) return { label: checked ? 'Precisa produzir' : 'Produ&ccedil;&atilde;o cheia', className: checked ? 'needs-production' : 'full-production' };
+    return { label: 'Estoque atende', className: 'stock-ok' };
+  }
+
+  function renderFlowNodeCard(node) {
     const productionIndex = Number(node.productionIndex || 0);
     const checked = stockOnlyChecked(productionIndex, node.materialId);
     const stockQty = Number(node.stockQty || 0);
     const requiredQty = Number(node.requiredQty || 0);
     const produceQty = Number(node.produceQty || 0);
     const stockUsedQty = Number(node.stockUsedQty || 0);
-    const stockStatus = checked && produceQty <= 0
-      ? 'Estoque atende'
-      : checked && stockUsedQty > 0
-        ? 'Utilizando saldo'
-        : produceQty > 0
-          ? (checked ? 'Precisa produzir' : 'Produ&ccedil;&atilde;o cheia')
-          : 'Estoque atende';
-    const statusClass = stockStatus === 'Estoque atende'
-      ? 'stock-ok'
-      : stockStatus === 'Utilizando saldo'
-        ? 'using-stock'
-        : stockStatus === 'Precisa produzir'
-          ? 'needs-production'
-          : 'full-production';
+    const status = flowNodeStatus(node, checked, produceQty, stockUsedQty, stockQty, requiredQty);
+    const rawMaterialWarning = node.isInitialRawMaterial && stockQty < requiredQty;
     return `
-      <li class="production-flow-branch" style="--flow-depth: ${depth}">
-        <div class="production-flow-node${produceQty > 0 ? ' needs-production' : ' stock-covered'}" style="${productionThemeStyle(productionIndex)}">
+        <div class="production-flow-node${produceQty > 0 ? ' needs-production' : ' stock-covered'}${rawMaterialWarning ? ' raw-material-warning' : ''}" data-flow-node-key="${escapeHtml(node.flowKey || flowNodeKey(node))}" style="${productionThemeStyle(productionIndex)}">
           <div class="production-flow-node-top" aria-hidden="true"></div>
           <div class="production-flow-node-header">
             <div>
               <strong>${escapeHtml(node.materialName)}</strong>
               <span>${escapeHtml(node.materialCode || '')}</span>
             </div>
-            <span class="production-flow-status ${statusClass}">${stockStatus}</span>
+            <span class="production-flow-status ${status.className}">${status.label}</span>
           </div>
           <div class="production-flow-metrics">
             <span>Necess&aacute;rio: <strong>${formatPtBrDecimal(node.requiredQty)} ${escapeHtml(node.unit || '')}</strong></span>
             <span>Saldo: <strong>${formatPtBrDecimal(node.stockQty)} ${escapeHtml(node.unit || '')}</strong></span>
-            <span>A produzir: <strong>${formatPtBrDecimal(node.produceQty)} ${escapeHtml(node.unit || '')}</strong></span>
+            ${node.isInitialRawMaterial
+              ? '<span>Origem: <strong>Compra / base</strong></span>'
+              : `<span>A produzir: <strong>${formatPtBrDecimal(node.produceQty)} ${escapeHtml(node.unit || '')}</strong></span>`}
           </div>
-          <label class="stock-only-toggle">
+          ${node.isInitialRawMaterial ? '' : `<label class="stock-only-toggle">
             <input type="checkbox" data-stock-only data-production-index="${productionIndex}" data-material-id="${node.materialId}" ${checked ? 'checked' : ''} />
             <span>Utilizar saldo</span>
-          </label>
+          </label>`}
         </div>
-        ${(node.children || []).length ? `<ul>${node.children.map(child => renderChild(child, depth + 1, renderChild)).join('')}</ul>` : ''}
-      </li>
     `;
   }
 
-  function annotateDuplicateFlowNodes(node, seen = new Map()) {
-    if (!node) return null;
-    const key = `${node.productionIndex ?? 0}:${node.materialId ?? node.materialCode ?? node.materialName}`;
-    const duplicateOf = seen.get(key);
-    const copy = {
-      ...node,
-      duplicateOf: duplicateOf ? duplicateOf.materialName : null,
-      children: []
-    };
-    if (!duplicateOf) seen.set(key, copy);
-    copy.children = duplicateOf ? [] : (node.children || []).map(child => annotateDuplicateFlowNodes(child, seen)).filter(Boolean);
-    return copy;
+  function renderFlowGraph(tree) {
+    const graph = buildFlowGraph(tree);
+    return `
+      <div class="production-flow-graph" data-flow-graph>
+        <svg class="production-flow-svg" aria-hidden="true"></svg>
+        ${graph.columns.map((column, index) => `
+          <div class="production-flow-column" data-flow-level="${index}">
+            ${column.map(renderFlowNodeCard).join('')}
+          </div>
+        `).join('')}
+        <span hidden data-flow-edges>${escapeHtml(JSON.stringify(graph.edges))}</span>
+      </div>
+    `;
   }
 
-  function renderConsolidatedFlowNode(node, depth = 0) {
-    if (node.duplicateOf) {
-      return `
-        <li class="production-flow-branch flow-reference-branch" style="--flow-depth: ${depth}">
-          <div class="production-flow-reference" style="${productionThemeStyle(node.productionIndex || 0)}">
-            <strong>${escapeHtml(node.materialName)}</strong>
-            <span>Mesmo material j&aacute; conectado neste fluxo</span>
-          </div>
-        </li>
+  function drawProductionFlowConnectors() {
+    target.querySelectorAll('[data-flow-graph]').forEach(graph => {
+      const svg = graph.querySelector('.production-flow-svg');
+      const edgeScript = graph.querySelector('[data-flow-edges]');
+      if (!svg || !edgeScript) return;
+      let edges = [];
+      try {
+        edges = JSON.parse(edgeScript.textContent || '[]');
+      } catch {
+        edges = [];
+      }
+      const nodeMap = new Map([...graph.querySelectorAll('[data-flow-node-key]')]
+        .map(node => [node.dataset.flowNodeKey, node]));
+      const rect = graph.getBoundingClientRect();
+      svg.setAttribute('viewBox', `0 0 ${Math.max(rect.width, 1)} ${Math.max(rect.height, 1)}`);
+      const paths = edges.map(edge => {
+        const from = nodeMap.get(edge.from);
+        const to = nodeMap.get(edge.to);
+        if (!from || !to) return '';
+        const fromRect = from.getBoundingClientRect();
+        const toRect = to.getBoundingClientRect();
+        const startX = fromRect.right - rect.left;
+        const startY = fromRect.top - rect.top + (fromRect.height / 2);
+        const endX = toRect.left - rect.left;
+        const endY = toRect.top - rect.top + (toRect.height / 2);
+        const middle = Math.max(28, (endX - startX) / 2);
+        return `<path class="production-flow-connector" marker-end="url(#production-flow-arrow)" d="M ${startX} ${startY} C ${startX + middle} ${startY}, ${endX - middle} ${endY}, ${endX} ${endY}" />`;
+      }).join('');
+      svg.innerHTML = `
+        <defs>
+          <marker id="production-flow-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path class="production-flow-arrow" d="M 0 0 L 10 5 L 0 10 z"></path>
+          </marker>
+        </defs>
+        ${paths}
       `;
-    }
-    return renderFlowNode(node, depth, renderConsolidatedFlowNode);
+    });
   }
 
   function renderProductionFlows(result) {
@@ -701,7 +793,7 @@ export function PlanningPage() {
           <div class="planning-subcard-header">
             <h3 class="production-title"><span class="production-gradient-key" aria-hidden="true"></span>${escapeHtml(title)}${quantity ? ` <span>${escapeHtml(quantity)}</span>` : ''}</h3>
           </div>
-          <ul class="production-flow-tree">${renderConsolidatedFlowNode(annotateDuplicateFlowNodes(tree))}</ul>
+          ${renderFlowGraph(tree)}
         </article>
       `;
     }).join('');
@@ -718,6 +810,7 @@ export function PlanningPage() {
     timelineTarget.innerHTML = '';
     timelineTarget.appendChild(CalendarTimeline(result.days, result.operations, result.summary));
     flowsTarget.innerHTML = renderProductionFlows(result);
+    requestAnimationFrame(drawProductionFlowConnectors);
     if (notice) notice.hidden = true;
     resultsTarget.hidden = false;
     form.elements.save.disabled = false;
