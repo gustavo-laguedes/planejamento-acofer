@@ -5,11 +5,11 @@ import { InternalTabs } from '../shared/InternalTabs.js';
 
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
 const PRODUCTION_THEMES = [
-  { start: '#0f6b7c', end: '#7cc7d4', soft: '#e8f6f8', border: '#48a6b5', text: '#123942' },
-  { start: '#bd6f22', end: '#f2bf71', soft: '#fff4e4', border: '#de9642', text: '#56320d' },
-  { start: '#2f7d57', end: '#8fd0aa', soft: '#ecf8f1', border: '#63b485', text: '#173d2e' },
-  { start: '#5269b0', end: '#aebdf0', soft: '#f0f3ff', border: '#7d90d8', text: '#26376f' },
-  { start: '#9a4f74', end: '#e4a0bf', soft: '#fff0f6', border: '#cf7ca4', text: '#552345' }
+  { start: '#0f6b7c', end: '#7cc7d4', soft: '#e8f6f8', border: '#48a6b5', text: '#123942', card: '#e8f6f8' },
+  { start: '#bd6f22', end: '#f2bf71', soft: '#fff4e4', border: '#de9642', text: '#56320d', card: '#fff4e4' },
+  { start: '#2f7d57', end: '#8fd0aa', soft: '#ecf8f1', border: '#63b485', text: '#173d2e', card: '#ecf8f1' },
+  { start: '#5269b0', end: '#aebdf0', soft: '#f0f3ff', border: '#7d90d8', text: '#26376f', card: '#f0f3ff' },
+  { start: '#9a4f74', end: '#e4a0bf', soft: '#fff0f6', border: '#cf7ca4', text: '#552345', card: '#fff0f6' }
 ];
 
 const planningTabs = [
@@ -151,7 +151,8 @@ function productionThemeStyle(index = 0) {
     `--production-end: ${theme.end}`,
     `--production-soft: ${theme.soft}`,
     `--production-border: ${theme.border}`,
-    `--production-text: ${theme.text}`
+    `--production-text: ${theme.text}`,
+    `--production-card: ${theme.card || theme.soft}`
   ].join('; ');
 }
 
@@ -581,27 +582,73 @@ export function PlanningPage() {
       .filter(item => Number(item.productionIndex || 0) !== Number(productionIndex));
   }
 
+  function removeProductionScopedState(removedIndex) {
+    if (removedIndex < 0) return;
+    const activeMaterialIds = new Set();
+    draft.productions.forEach(production => {
+      productionMaterialOptions(production).forEach(material => activeMaterialIds.add(String(material.id)));
+    });
+    const reindex = item => {
+      const currentIndex = Number(item.productionIndex || 0);
+      return currentIndex > removedIndex ? { ...item, productionIndex: currentIndex - 1 } : item;
+    };
+    draft.stockOnlyMaterials = (draft.stockOnlyMaterials || [])
+      .filter(item => Number(item.productionIndex || 0) !== removedIndex)
+      .map(reindex);
+    draft.operationSplits = (draft.operationSplits || [])
+      .filter(item => Number(item.productionIndex || 0) !== removedIndex)
+      .map(reindex);
+    draft.operationOverrides = Object.fromEntries(Object.entries(draft.operationOverrides || {})
+      .filter(([key]) => !key.startsWith(`${removedIndex}:`))
+      .filter(([key]) => key.includes(':') || activeMaterialIds.has(String(key)))
+      .map(([key, value]) => {
+        const match = key.match(/^(\d+):(.*)$/);
+        if (!match || Number(match[1]) <= removedIndex) return [key, value];
+        return [`${Number(match[1]) - 1}:${match[2]}`, value];
+      }));
+    currentSimulation = null;
+    lastPayload = null;
+    hasPendingSimulationChanges = false;
+    clearTimeout(recalculationTimer);
+    clearTimeout(autosaveTimer);
+  }
+
   function renderFlowNode(node, depth = 0, renderChild = renderFlowNode) {
     const productionIndex = Number(node.productionIndex || 0);
     const checked = stockOnlyChecked(productionIndex, node.materialId);
     const stockQty = Number(node.stockQty || 0);
     const requiredQty = Number(node.requiredQty || 0);
     const produceQty = Number(node.produceQty || 0);
-    const stockStatus = checked
-      ? produceQty <= 0 && stockQty >= requiredQty ? 'Saldo atende' : stockQty > 0 ? 'Utilizando saldo parcial' : 'Sem saldo dispon&iacute;vel'
-      : 'Produ&ccedil;&atilde;o cheia';
+    const stockUsedQty = Number(node.stockUsedQty || 0);
+    const stockStatus = checked && produceQty <= 0
+      ? 'Estoque atende'
+      : checked && stockUsedQty > 0
+        ? 'Utilizando saldo'
+        : produceQty > 0
+          ? (checked ? 'Precisa produzir' : 'Produ&ccedil;&atilde;o cheia')
+          : 'Estoque atende';
+    const statusClass = stockStatus === 'Estoque atende'
+      ? 'stock-ok'
+      : stockStatus === 'Utilizando saldo'
+        ? 'using-stock'
+        : stockStatus === 'Precisa produzir'
+          ? 'needs-production'
+          : 'full-production';
     return `
       <li class="production-flow-branch" style="--flow-depth: ${depth}">
         <div class="production-flow-node${produceQty > 0 ? ' needs-production' : ' stock-covered'}" style="${productionThemeStyle(productionIndex)}">
-          <div>
-            <strong>${escapeHtml(node.materialName)}</strong>
-            <span>${escapeHtml(node.materialCode || '')}</span>
+          <div class="production-flow-node-top" aria-hidden="true"></div>
+          <div class="production-flow-node-header">
+            <div>
+              <strong>${escapeHtml(node.materialName)}</strong>
+              <span>${escapeHtml(node.materialCode || '')}</span>
+            </div>
+            <span class="production-flow-status ${statusClass}">${stockStatus}</span>
           </div>
           <div class="production-flow-metrics">
             <span>Necess&aacute;rio: <strong>${formatPtBrDecimal(node.requiredQty)} ${escapeHtml(node.unit || '')}</strong></span>
             <span>Saldo: <strong>${formatPtBrDecimal(node.stockQty)} ${escapeHtml(node.unit || '')}</strong></span>
             <span>A produzir: <strong>${formatPtBrDecimal(node.produceQty)} ${escapeHtml(node.unit || '')}</strong></span>
-            <span>${stockStatus}</span>
           </div>
           <label class="stock-only-toggle">
             <input type="checkbox" data-stock-only data-production-index="${productionIndex}" data-material-id="${node.materialId}" ${checked ? 'checked' : ''} />
@@ -952,8 +999,9 @@ export function PlanningPage() {
         return;
       }
       if (!event.target.classList.contains('remove-production')) return;
+      const removedIndex = draft.productions.findIndex(item => item.id === card.dataset.productionId);
       draft.productions = draft.productions.filter(item => item.id !== card.dataset.productionId);
-      hasPendingSimulationChanges = true;
+      removeProductionScopedState(removedIndex);
       rerenderBuilder();
     });
 

@@ -157,31 +157,31 @@ function clampMinutes(minutes, start, end) {
 
 const PRODUCTION_STAGE_COLORS = [
   [
-    { bg: '#d9eef8', border: '#6aa8c8', text: '#17394a' },
+    { bg: '#e8f6f8', border: '#48a6b5', text: '#123942' },
     { bg: '#d9f2ef', border: '#68aea7', text: '#173f3b' },
     { bg: '#dff3df', border: '#74ad74', text: '#224222' },
     { bg: '#eadff8', border: '#9a7cc7', text: '#352750' }
   ],
   [
-    { bg: '#fff0d6', border: '#d7a85f', text: '#513817' },
+    { bg: '#fff4e4', border: '#de9642', text: '#56320d' },
     { bg: '#f9e2d6', border: '#d08d72', text: '#593020' },
     { bg: '#f3e6c8', border: '#b79a55', text: '#483916' },
     { bg: '#efe0f4', border: '#af82c1', text: '#43234f' }
   ],
   [
-    { bg: '#dff3ea', border: '#6fb391', text: '#173d2e' },
+    { bg: '#ecf8f1', border: '#63b485', text: '#173d2e' },
     { bg: '#e6f4d8', border: '#8fb96c', text: '#2f421d' },
     { bg: '#d7f0f0', border: '#68aaa8', text: '#1c4140' },
     { bg: '#e7e6fb', border: '#8582cf', text: '#2e2d63' }
   ],
   [
-    { bg: '#e4e9fb', border: '#8294d5', text: '#26376f' },
+    { bg: '#f0f3ff', border: '#7d90d8', text: '#26376f' },
     { bg: '#dceffb', border: '#70a5cf', text: '#1f405d' },
     { bg: '#e2f2de', border: '#80b571', text: '#28451f' },
     { bg: '#f3e1f1', border: '#bd84b5', text: '#51254b' }
   ],
   [
-    { bg: '#f7e1ee', border: '#c47aa2', text: '#552345' },
+    { bg: '#fff0f6', border: '#cf7ca4', text: '#552345' },
     { bg: '#f5e1dc', border: '#c98472', text: '#552e25' },
     { bg: '#e1f1e7', border: '#75ae8c', text: '#203f2c' },
     { bg: '#e5e4f8', border: '#8a83c8', text: '#302b5b' }
@@ -793,7 +793,8 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const productionColorIndex = productionIndexes.get(productionKey) || 0;
               const palette = PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length];
               const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
-              const eventColor = isTransport ? TRANSPORT_COLOR : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
+              const productionBaseColor = palette[0];
+              const eventColor = isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
               return `
                 <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(eventColor)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
                   ${shouldShowText && isTransport ? `
