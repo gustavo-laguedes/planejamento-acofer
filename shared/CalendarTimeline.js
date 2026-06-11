@@ -156,18 +156,12 @@ function clampMinutes(minutes, start, end) {
 }
 
 const MATERIAL_COLORS = [
-  { bg: '#d9f0f4', border: '#51a6b6', text: '#123942' },
-  { bg: '#ffe4d6', border: '#e58a63', text: '#5c2716' },
-  { bg: '#dff3ea', border: '#5fb58d', text: '#173d2e' },
-  { bg: '#e9e4fb', border: '#9b8be0', text: '#32245d' },
-  { bg: '#fff0bf', border: '#d3a832', text: '#4d3a07' },
-  { bg: '#dcebfb', border: '#6aa8df', text: '#183b5d' },
-  { bg: '#f6dff0', border: '#d579bc', text: '#552345' },
-  { bg: '#e7efcf', border: '#97b95c', text: '#344514' },
-  { bg: '#e5e7eb', border: '#94a3b8', text: '#263142' },
-  { bg: '#e5ddff', border: '#a98cf0', text: '#3b236f' },
-  { bg: '#dce8ff', border: '#76a7f2', text: '#173b7a' },
-  { bg: '#ffe1bd', border: '#e29a45', text: '#5b3510' }
+  { bg: '#d9f0f4', border: '#378b9b', text: '#123942', bgStrong: '#0f6b7c' },
+  { bg: '#ffe4c7', border: '#d48735', text: '#56320d', bgStrong: '#bd6f22' },
+  { bg: '#dff3ea', border: '#4d9b72', text: '#173d2e', bgStrong: '#2f7d57' },
+  { bg: '#e4e9fb', border: '#7185d0', text: '#26376f', bgStrong: '#5269b0' },
+  { bg: '#f6dff0', border: '#c57099', text: '#552345', bgStrong: '#9a4f74' },
+  { bg: '#fff0bf', border: '#c69a24', text: '#4d3a07', bgStrong: '#9b7415' }
 ];
 
 function segmentMinutes(segment, dayStart, dayEnd) {
@@ -180,7 +174,7 @@ function segmentStyle(segment, dayStart, dayEnd, hourHeight) {
   const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
   const top = ((start - dayStart) / 60) * hourHeight;
   const rawHeight = ((Math.max(end - start, 1)) / 60) * hourHeight;
-  const height = Math.max(rawHeight - 4, 1);
+  const height = Math.max(rawHeight - 4, 18);
   return `--event-top: calc(var(--calendar-top-pad, 0px) + ${top + 2}px); --event-height: ${height}px;`;
 }
 
@@ -190,7 +184,78 @@ function laneStyle(lane, laneCount) {
 }
 
 function colorStyle(color) {
-  return `--event-bg: ${color.bg}; --event-border: ${color.border}; --event-text: ${color.text};`;
+  return `--event-bg: linear-gradient(135deg, ${color.bgStrong || color.border}, ${color.bg}); --event-border: ${color.border}; --event-text: ${color.text};`;
+}
+
+function normalizeShiftConfig(config = {}) {
+  const source = Array.isArray(config.shifts) && config.shifts.length ? config.shifts : [{
+    label: 'Turno 1',
+    shiftStartTime: config.shiftStartTime || '07:00',
+    shiftEndTime: config.shiftEndTime || '17:00',
+    pauseHours: config.lunchHours || 0,
+    teamAvailable: 0
+  }];
+  return source.map((shift, index) => {
+    const shiftStart = parseTime(shift.shiftStartTime, index === 0 ? '07:00' : '17:00');
+    let shiftEnd = parseTime(shift.shiftEndTime, minutesToTime(shiftStart + 60));
+    if (shiftEnd <= shiftStart) shiftEnd += 24 * 60;
+    const pauseMinutes = parseLunchMinutes(shift.pauseHours ?? shift.lunchHours ?? 0);
+    const lunchStart = shift.pauseStartTime
+      ? parseTime(shift.pauseStartTime, minutesToTime(shiftStart + Math.floor((shiftEnd - shiftStart - pauseMinutes) / 2)))
+      : index === 0 ? 12 * 60 : shiftStart + Math.max(Math.floor((shiftEnd - shiftStart - pauseMinutes) / 2), 0);
+    return {
+      label: shift.label || `Turno ${index + 1}`,
+      shiftStart,
+      shiftEnd,
+      lunchStart,
+      lunchEnd: lunchStart + pauseMinutes,
+      teamAvailable: Math.max(Number(shift.teamAvailable || 0), 0)
+    };
+  });
+}
+
+function peakPeople(items) {
+  const points = [];
+  items.forEach(item => {
+    const people = Number(item.operation.peopleCount || 0);
+    if (!people || item.operation.operationType === 'transport') return;
+    const { start, end } = item;
+    if (end <= start) return;
+    points.push({ minute: start, delta: people });
+    points.push({ minute: end, delta: -people });
+  });
+  points.sort((left, right) => left.minute - right.minute || left.delta - right.delta);
+  let current = 0;
+  let peak = 0;
+  points.forEach(point => {
+    current += point.delta;
+    peak = Math.max(peak, current);
+  });
+  return peak;
+}
+
+function capacityForDate(date, operations, dates, shifts) {
+  return shifts.map(shift => {
+    const segments = operations.flatMap(operation => {
+      const dayParts = operationDaySegments(operation, dates, shift.shiftStart, shift.shiftEnd, shift.lunchStart, shift.lunchEnd).get(date) || [];
+      return dayParts.map(segment => {
+        const { start, end } = segmentMinutes(segment, shift.shiftStart, shift.shiftEnd);
+        return { operation, start, end };
+      });
+    });
+    const used = peakPeople(segments);
+    const available = shift.teamAvailable;
+    return {
+      label: shift.label,
+      used,
+      available,
+      exceeded: available > 0 && used > available
+    };
+  });
+}
+
+function capacityTooltip(items) {
+  return items.map(item => `${item.label}: equipe ${item.used}/${item.available || 0}${item.exceeded ? ' - Equipe excedida' : ''}`).join('\n');
 }
 
 function lunchStyle(lunchStart, lunchEnd, dayStart, dayEnd, hourHeight) {
@@ -573,11 +638,9 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
       productionColors.set(key, MATERIAL_COLORS[productionColors.size % MATERIAL_COLORS.length]);
     }
   });
-  const shiftStart = parseTime(config.shiftStartTime || '07:00', '07:00');
-  const shiftEnd = Math.max(parseTime(config.shiftEndTime || '17:00', '17:00'), shiftStart + 60);
-  const lunchStart = 12 * 60;
-  const lunchMinutes = parseLunchMinutes(config.lunchHours);
-  const lunchEnd = lunchStart + lunchMinutes;
+  const shifts = normalizeShiftConfig(config);
+  const shiftStart = Math.min(...shifts.map(shift => shift.shiftStart));
+  const shiftEnd = Math.max(...shifts.map(shift => shift.shiftEnd));
   const dayStart = 0;
   const dayEnd = 24 * 60;
   const hourMarks = [];
@@ -629,7 +692,12 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     const zoom = zoomLevels[zoomIndex];
     const totalMinutes = dayEnd - dayStart;
     const bodyHeight = topPad + (totalMinutes / 60) * zoom.hourHeight;
-    const lunchVisible = lunchMinutes > 0 && lunchEnd > dayStart && lunchStart < dayEnd;
+    const lunchBands = shifts
+      .filter(shift => shift.lunchEnd > shift.lunchStart && shift.lunchEnd > dayStart && shift.lunchStart < dayEnd)
+      .map(shift => ({
+        label: shift.label,
+        style: lunchStyle(shift.lunchStart, shift.lunchEnd, dayStart, dayEnd, zoom.hourHeight)
+      }));
     const board = wrapper.querySelector('.gantt-board');
     board.style.setProperty('--calendar-days', String(dates.length));
     board.style.setProperty('--calendar-day-width', `${zoom.dayWidth}px`);
@@ -643,12 +711,22 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
           <span>00:00-23:59</span>
         </div>
         <div class="gantt-dates">
-          ${dates.map(date => `
-            <div class="gantt-date" data-date="${date}">
-              <strong>${formatDateLabel(date)}</strong>
-              <span>${formatDate(date)}</span>
-            </div>
-          `).join('')}
+          ${dates.map(date => {
+            const capacity = capacityForDate(date, operations, dates, shifts);
+            return `
+              <div class="gantt-date${capacity.some(item => item.exceeded) ? ' team-exceeded' : ''}" data-date="${date}" title="${escapeAttr(capacityTooltip(capacity))}">
+                <strong>${formatDateLabel(date)}</strong>
+                <span>${formatDate(date)}</span>
+                <div class="team-capacity-list">
+                  ${capacity.map(item => `
+                    <small class="team-capacity${item.exceeded ? ' exceeded' : ''}" title="${escapeAttr(`${item.label}: Equipe ${item.used}/${item.available || 0}${item.exceeded ? ' - Equipe excedida' : ''}`)}">
+                      ${escapeAttr(item.label.replace(/^Turno\s*/i, 'T'))}: ${item.used}/${item.available || 0}${item.exceeded ? ' !' : ''}
+                    </small>
+                  `).join('')}
+                </div>
+              </div>
+            `;
+          }).join('')}
         </div>
         <div class="agenda-time-axis">
           ${hourMarks.map(minutes => `
@@ -658,7 +736,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         <div class="agenda-days">
           ${dates.map(date => {
             const daySegments = operations.flatMap(operation => {
-              const segments = operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart, lunchEnd).get(date) || [];
+              const segments = operationDaySegments(operation, dates, shiftStart, shiftEnd, 0, 0).get(date) || [];
               return segments.map(segment => ({ operation, segment }));
             });
             const dayOperations = arrangeParallelSegments(daySegments).map(item => {
@@ -670,6 +748,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
               const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
               const shouldShowText = segment.visualIndex === 0 && ((end - start) / 60) * zoom.hourHeight >= 62;
+              const shortLabel = isTransport ? 'TR' : `${operation.peopleCount || '-'}p`;
               return `
                 <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(productionColors.get(productionKey))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
                   ${shouldShowText && isTransport ? `
@@ -682,7 +761,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
                     <span>${quantity || '-'}</span>
                     <span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
                     <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
-                  ` : ''}
+                  ` : `<span class="gantt-compact-label">${escapeAttr(shortLabel)}</span>`}
                 </button>
               `;
             }).join('');
@@ -691,7 +770,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
                 ${hourMarks.map(minutes => `
                   <span class="agenda-hour-line" style="--time-top: calc(var(--calendar-top-pad) + ${((minutes - dayStart) / 60) * zoom.hourHeight}px)"></span>
                 `).join('')}
-                ${lunchVisible ? `<span class="gantt-lunch-band" style="${lunchStyle(lunchStart, lunchEnd, dayStart, dayEnd, zoom.hourHeight)}">Almo&ccedil;o</span>` : ''}
+                ${lunchBands.map(band => `<span class="gantt-lunch-band" style="${band.style}">Pausa ${escapeAttr(band.label.replace(/^Turno\s*/i, 'T'))}</span>`).join('')}
                 ${dayOperations}
               </div>
             `;

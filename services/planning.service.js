@@ -720,7 +720,8 @@ function normalizeShift(shift = {}, index = 0) {
     lunchStart: pauseStart,
     lunchEnd: pauseEnd,
     dailyMinutes: Math.min(dailyMinutes, availableMinutes),
-    label: shift.label || `Turno ${index + 1}`
+    label: shift.label || `Turno ${index + 1}`,
+    teamAvailable: Math.max(toNumber(shift.teamAvailable || 0), 0)
   };
 }
 
@@ -1236,6 +1237,7 @@ export function buildPlan(payload, context) {
         plannedUnit: production.material.primary_unit,
         machineName: production.machineName || null,
         peopleCount: Number(production.peopleCount || 0) || null,
+        desiredDate: production.desiredDate || null,
         productionModelName: production.productionModelName || null
       })),
       startDate,

@@ -4,6 +4,13 @@ import { DataTable } from '../shared/DataTable.js';
 import { InternalTabs } from '../shared/InternalTabs.js';
 
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
+const PRODUCTION_THEMES = [
+  { start: '#0f6b7c', end: '#7cc7d4', soft: '#e8f6f8', border: '#48a6b5', text: '#123942' },
+  { start: '#bd6f22', end: '#f2bf71', soft: '#fff4e4', border: '#de9642', text: '#56320d' },
+  { start: '#2f7d57', end: '#8fd0aa', soft: '#ecf8f1', border: '#63b485', text: '#173d2e' },
+  { start: '#5269b0', end: '#aebdf0', soft: '#f0f3ff', border: '#7d90d8', text: '#26376f' },
+  { start: '#9a4f74', end: '#e4a0bf', soft: '#fff0f6', border: '#cf7ca4', text: '#552345' }
+];
 
 const planningTabs = [
   { id: 'simulation', label: 'Simulacao' },
@@ -113,7 +120,8 @@ function defaultShift(index = 0, startTime = null) {
     shiftStartTime,
     pauseLabel: index === 0 ? 'Horas de almo&ccedil;o' : 'Horas de janta',
     pauseHours,
-    shiftEndTime: minutesToTime(shiftEndMinutes)
+    shiftEndTime: minutesToTime(shiftEndMinutes),
+    teamAvailable: ''
   };
 }
 
@@ -127,8 +135,24 @@ function emptyProduction(index = 0) {
     plannedQty: '',
     machineName: '',
     peopleCount: '',
+    desiredDate: '',
     transports: []
   };
+}
+
+function productionTheme(index = 0) {
+  return PRODUCTION_THEMES[index % PRODUCTION_THEMES.length];
+}
+
+function productionThemeStyle(index = 0) {
+  const theme = productionTheme(index);
+  return [
+    `--production-start: ${theme.start}`,
+    `--production-end: ${theme.end}`,
+    `--production-soft: ${theme.soft}`,
+    `--production-border: ${theme.border}`,
+    `--production-text: ${theme.text}`
+  ].join('; ');
 }
 
 function emptyTransport() {
@@ -168,7 +192,8 @@ function normalizeDraft(rawDraft) {
     ...shift,
     id: shift.id || `shift-${index}-${Date.now()}`,
     label: `Turno ${index + 1}`,
-    pauseLabel: shift.pauseLabel || (index === 0 ? 'Horas de almo&ccedil;o' : 'Horas de janta')
+    pauseLabel: shift.pauseLabel || (index === 0 ? 'Horas de almo&ccedil;o' : 'Horas de janta'),
+    teamAvailable: shift.teamAvailable ?? ''
   }));
   normalized.productions = normalized.productions.map((production, index) => ({
     ...emptyProduction(index),
@@ -217,6 +242,7 @@ export function PlanningPage() {
   let draft = loadDraft();
   let lastPayload = null;
   let currentSimulation = null;
+  let hasPendingSimulationChanges = false;
   let autosaveTimer = null;
   let recalculationTimer = null;
 
@@ -310,6 +336,7 @@ export function PlanningPage() {
         plannedUnit: material?.primary_unit || 'un',
         machineName: production.machineName,
         peopleCount: Number(production.peopleCount),
+        desiredDate: production.desiredDate || null,
         productionModelName: production.productionModelName,
         transports: (production.transports || []).map(transport => ({
           materialId: Number(transport.materialId),
@@ -348,7 +375,8 @@ export function PlanningPage() {
         shiftStartTime: shift.shiftStartTime,
         pauseLabel: shift.pauseLabel,
         pauseHours: parsePtBrDecimal(shift.pauseHours, 0),
-        shiftEndTime: shift.shiftEndTime
+        shiftEndTime: shift.shiftEndTime,
+        teamAvailable: Number(shift.teamAvailable || 0)
       })),
       productions: productionPayload(),
       stockOnlyMaterials: draft.stockOnlyMaterials || [],
@@ -374,9 +402,18 @@ export function PlanningPage() {
       toast('Selecione material e quantidade maior que zero em todas as producoes.');
       return false;
     }
+    const invalidDesiredDate = draft.productions.find(production =>
+      production.desiredDate
+      && (production.desiredDate < draft.planningStartDate || production.desiredDate > draft.planningEndDate)
+    );
+    if (invalidDesiredDate) {
+      toast('A data desejada deve ficar dentro do range do planejamento.');
+      return false;
+    }
     const invalidShift = draft.shifts.find(shift =>
       !(parsePtBrDecimal(shift.hoursPerDay, 0) > 0)
       || !(parsePtBrDecimal(shift.pauseHours, -1) >= 0)
+      || !(Number(shift.teamAvailable || 0) >= 0)
       || !shift.shiftStartTime
       || !shift.shiftEndTime
     );
@@ -425,6 +462,7 @@ export function PlanningPage() {
           <label>Come&ccedil;o do turno<input name="shiftStartTime" type="time" value="${escapeHtml(shift.shiftStartTime)}" required /></label>
           <label>${shift.pauseLabel || 'Horas de pausa'}<input name="pauseHours" type="text" inputmode="decimal" value="${escapeHtml(shift.pauseHours)}" /></label>
           <label>Final do turno<input name="shiftEndTime" type="time" value="${escapeHtml(shift.shiftEndTime)}" required /></label>
+          <label>Equipe dispon&iacute;vel<input name="teamAvailable" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(shift.teamAvailable)}" /></label>
         </div>
       </article>
     `;
@@ -441,6 +479,7 @@ export function PlanningPage() {
       .filter(Boolean))];
     const models = productionModelsFor(material);
     const transportMaterials = productionMaterialOptions(production);
+    const themeStyle = productionThemeStyle(index);
     const transportRows = (production.transports || []).map((transport, transportIndex) => `
       <article class="transport-row" data-transport-id="${transport.id}">
         <label>Material transportado
@@ -468,9 +507,9 @@ export function PlanningPage() {
       </article>
     `).join('');
     return `
-      <article class="planning-subcard production-block" data-production-id="${production.id}">
+      <article class="planning-subcard production-block" data-production-id="${production.id}" style="${themeStyle}">
         <div class="planning-subcard-header">
-          <h3>Produ&ccedil;&atilde;o ${index + 1}</h3>
+          <h3 class="production-title"><span class="production-gradient-key" aria-hidden="true"></span>Produ&ccedil;&atilde;o ${index + 1}</h3>
           ${draft.productions.length > 1 ? '<button class="link-button danger remove-production" type="button">Excluir produ&ccedil;&atilde;o</button>' : ''}
         </div>
         <div class="grid-form planning-inner-grid">
@@ -511,6 +550,9 @@ export function PlanningPage() {
                 : '<option value="">Selecione um material</option>'}
             </select>
           </label>
+          <label>Data desejada
+            <input name="desiredDate" type="date" min="${escapeHtml(draft.planningStartDate)}" max="${escapeHtml(draft.planningEndDate)}" value="${escapeHtml(production.desiredDate)}" />
+          </label>
         </div>
         <section class="transport-section">
           <div class="planning-subcard-header">
@@ -532,14 +574,14 @@ export function PlanningPage() {
     );
   }
 
-  function renderFlowNode(node) {
+  function renderFlowNode(node, depth = 0) {
     const productionIndex = Number(node.productionIndex || 0);
     const canUseStock = Number(node.stockQty || 0) >= Number(node.requiredQty || 0);
     const checked = stockOnlyChecked(productionIndex, node.materialId);
-    const stockStatus = checked || Number(node.produceQty || 0) <= 0 ? 'Estoque atende' : 'Precisa produzir';
+    const stockStatus = checked ? 'Usar estoque' : Number(node.produceQty || 0) <= 0 ? 'Estoque atende' : 'Precisa produzir';
     return `
-      <li>
-        <div class="production-flow-node${Number(node.produceQty || 0) > 0 ? ' needs-production' : ' stock-covered'}">
+      <li class="production-flow-branch" style="--flow-depth: ${depth}">
+        <div class="production-flow-node${Number(node.produceQty || 0) > 0 ? ' needs-production' : ' stock-covered'}" style="${productionThemeStyle(productionIndex)}">
           <div>
             <strong>${escapeHtml(node.materialName)}</strong>
             <span>${escapeHtml(node.materialCode || '')}</span>
@@ -555,7 +597,7 @@ export function PlanningPage() {
             <span>N&atilde;o produzir este material / usar estoque</span>
           </label>
         </div>
-        ${(node.children || []).length ? `<ul>${node.children.map(renderFlowNode).join('')}</ul>` : ''}
+        ${(node.children || []).length ? `<ul>${node.children.map(child => renderFlowNode(child, depth + 1)).join('')}</ul>` : ''}
       </li>
     `;
   }
@@ -569,9 +611,9 @@ export function PlanningPage() {
       const title = production?.title || tree.productionTitle || `Produ&ccedil;&atilde;o ${index + 1}`;
       const quantity = production ? `${formatPtBrDecimal(production.plannedQty)} ${production.plannedUnit || ''}`.trim() : '';
       return `
-        <article class="production-flow-card" data-flow-production="${tree.productionIndex ?? index}">
+        <article class="production-flow-card" data-flow-production="${tree.productionIndex ?? index}" style="${productionThemeStyle(tree.productionIndex ?? index)}">
           <div class="planning-subcard-header">
-            <h3>${escapeHtml(title)}${quantity ? ` <span>${escapeHtml(quantity)}</span>` : ''}</h3>
+            <h3 class="production-title"><span class="production-gradient-key" aria-hidden="true"></span>${escapeHtml(title)}${quantity ? ` <span>${escapeHtml(quantity)}</span>` : ''}</h3>
           </div>
           <ul class="production-flow-tree">${renderFlowNode(tree)}</ul>
         </article>
@@ -581,15 +623,27 @@ export function PlanningPage() {
 
   function renderSimulation(result, form) {
     currentSimulation = result;
+    hasPendingSimulationChanges = false;
     const resultsTarget = target.querySelector('.planning-results');
     const timelineTarget = target.querySelector('.timeline-target');
     const flowsTarget = target.querySelector('.production-flows-target');
+    const notice = target.querySelector('.unsimulated-notice');
     target.querySelector('.final-summary-panel').hidden = true;
     timelineTarget.innerHTML = '';
     timelineTarget.appendChild(CalendarTimeline(result.days, result.operations, result.summary));
     flowsTarget.innerHTML = renderProductionFlows(result);
+    if (notice) notice.hidden = true;
     resultsTarget.hidden = false;
     form.elements.save.disabled = false;
+  }
+
+  function restoreSimulation(form) {
+    if (!currentSimulation) return;
+    const wasPending = hasPendingSimulationChanges;
+    renderSimulation(currentSimulation, form);
+    hasPendingSimulationChanges = wasPending;
+    const notice = target.querySelector('.unsimulated-notice');
+    if (notice) notice.hidden = !hasPendingSimulationChanges;
   }
 
   function renderFinalSummary(result, planningCode) {
@@ -651,6 +705,7 @@ export function PlanningPage() {
           <div class="section-heading">
             <h2>Calend&aacute;rio de produ&ccedil;&atilde;o</h2>
           </div>
+          <p class="unsimulated-notice" hidden>H&aacute; altera&ccedil;&otilde;es n&atilde;o simuladas. Clique em Simular para atualizar o calend&aacute;rio.</p>
           <div class="timeline-target"></div>
         </div>
         <div class="panel production-flows-panel">
@@ -675,6 +730,7 @@ export function PlanningPage() {
     const shiftsTarget = target.querySelector('.shifts-target');
     const productionsTarget = target.querySelector('.productions-target');
     target.querySelector('.timeline-target').appendChild(CalendarTimeline([]));
+    restoreSimulation(form);
 
     function rerenderBuilder() {
       saveDraftNow();
@@ -688,6 +744,12 @@ export function PlanningPage() {
 
     function queueSimulationRefresh() {
       if (!currentSimulation) return;
+      if (!draft.productions.every(production => materialById(production.materialId) && Number(production.plannedQty) > 0)) {
+        hasPendingSimulationChanges = true;
+        const notice = target.querySelector('.unsimulated-notice');
+        if (notice) notice.hidden = false;
+        return;
+      }
       clearTimeout(recalculationTimer);
       recalculationTimer = setTimeout(() => simulateCurrent().catch(toast), 250);
     }
@@ -708,6 +770,7 @@ export function PlanningPage() {
       if (!shift || !event.target.name) return;
       shift[event.target.name] = event.target.value;
       queueAutosave();
+      queueSimulationRefresh();
     });
 
     shiftsTarget.addEventListener('click', event => {
@@ -747,6 +810,7 @@ export function PlanningPage() {
         if (material) rerenderBuilder();
       }
       queueAutosave();
+      if (event.target.name !== 'materialSearch') queueSimulationRefresh();
     });
 
     productionsTarget.addEventListener('change', event => {
@@ -765,6 +829,7 @@ export function PlanningPage() {
       }
       production[event.target.name] = event.target.value;
       if (event.target.name === 'machineName') production.peopleCount = '';
+      queueSimulationRefresh();
       rerenderBuilder();
     });
 
@@ -817,6 +882,7 @@ export function PlanningPage() {
       production.machineName = '';
       production.peopleCount = '';
       production.transports = [];
+      hasPendingSimulationChanges = true;
       rerenderBuilder();
     });
 
@@ -840,19 +906,20 @@ export function PlanningPage() {
       }
       if (!event.target.classList.contains('remove-production')) return;
       draft.productions = draft.productions.filter(item => item.id !== card.dataset.productionId);
-      lastPayload = null;
-      currentSimulation = null;
+      hasPendingSimulationChanges = true;
       rerenderBuilder();
     });
 
     target.querySelector('.add-shift').addEventListener('click', () => {
       const previous = draft.shifts.at(-1);
       draft.shifts.push(defaultShift(draft.shifts.length, previous?.shiftEndTime || '17:00'));
+      hasPendingSimulationChanges = true;
       rerenderBuilder();
     });
 
     target.querySelector('.add-production').addEventListener('click', () => {
       draft.productions.push(emptyProduction(draft.productions.length));
+      hasPendingSimulationChanges = true;
       rerenderBuilder();
     });
 
