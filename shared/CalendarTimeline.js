@@ -201,6 +201,7 @@ const PRODUCTION_STAGE_COLORS = [
 ];
 
 const TRANSPORT_COLOR = { bg: '#f3f5f7', border: '#c6ced6', text: '#3d4752' };
+const SEQUENTIAL_EVENT_VISUAL_GAP_MINUTES = 1;
 
 function segmentMinutes(segment, dayStart, dayEnd) {
   const start = clampMinutes(parseTime(segment.startTime, minutesToTime(dayStart)), dayStart, dayEnd);
@@ -210,8 +211,11 @@ function segmentMinutes(segment, dayStart, dayEnd) {
 
 function segmentStyle(segment, dayStart, dayEnd, hourHeight) {
   const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
-  const top = ((start - dayStart) / 60) * hourHeight;
-  const rawHeight = ((Math.max(end - start, 1)) / 60) * hourHeight;
+  const visualStart = Number.isFinite(segment.visualStart)
+    ? clampMinutes(segment.visualStart, dayStart, end)
+    : start;
+  const top = ((visualStart - dayStart) / 60) * hourHeight;
+  const rawHeight = ((Math.max(end - visualStart, 1)) / 60) * hourHeight;
   const height = Math.max(rawHeight - 4, 18);
   return `--event-top: calc(var(--calendar-top-pad, 0px) + ${top + 2}px); --event-height: ${height}px;`;
 }
@@ -438,6 +442,18 @@ function arrangeParallelSegments(items) {
       item.laneCount = laneCount;
     });
   });
+
+  sorted
+    .slice()
+    .sort((first, second) => first.lane - second.lane || first.start - second.start || first.end - second.end)
+    .forEach((item, index, ordered) => {
+      const touchesPrevious = ordered
+        .slice(0, index)
+        .some(previous => previous.lane === item.lane && previous.end === item.start);
+      item.visualStart = touchesPrevious
+        ? Math.min(item.start + SEQUENTIAL_EVENT_VISUAL_GAP_MINUTES, item.end)
+        : item.start;
+    });
 
   return sorted.sort((first, second) => first.index - second.index);
 }
@@ -1153,7 +1169,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const eventColor = isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
               const breakdown = isTransport ? [] : productionBreakdown(operation);
               return `
-                <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${eventColorStyle(eventColor, breakdown, colorForProduction)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+                <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle({ ...segment, visualStart: item.visualStart }, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${eventColorStyle(eventColor, breakdown, colorForProduction)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
                   ${shouldShowText && isTransport ? `
                     <strong>Transporte</strong>
                     <span>${operation.materialName || '-'}</span>
