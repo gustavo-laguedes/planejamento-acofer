@@ -112,6 +112,18 @@ function machineOptionTags(options, selectedValue) {
   `).join('');
 }
 
+function machineNameOptionTags(options, selectedValue) {
+  return options.map(option => `
+    <option value="${escapeAttr(optionValue(option))}" ${optionValue(option) === selectedValue ? 'selected' : ''}>${escapeAttr(option.machineName)}</option>
+  `).join('');
+}
+
+function peopleOptionTags(options, selectedValue) {
+  return options.map(option => `
+    <option value="${escapeAttr(optionValue(option))}" ${optionValue(option) === selectedValue ? 'selected' : ''}>${escapeAttr(option.peopleCount)}</option>
+  `).join('');
+}
+
 function modelOptions(operation) {
   return Array.isArray(operation.productionModelOptions) ? operation.productionModelOptions : [];
 }
@@ -213,6 +225,38 @@ function colorStyle(color) {
   return `--event-bg: ${color.bg}; --event-border: ${color.border}; --event-text: ${color.text};`;
 }
 
+function stableProductionIndex(item = {}) {
+  const explicit = Number(item.productionIndex);
+  if (Number.isFinite(explicit)) return explicit;
+  const match = String(item.productionKey || '').match(/production-(\d+)/i);
+  return match ? Number(match[1]) : 0;
+}
+
+function stableProductionKey(item = {}) {
+  return item.productionKey || `production-${stableProductionIndex(item)}`;
+}
+
+function eventColorStyle(color, breakdown, colorForProduction) {
+  const items = stableProductionBreakdown(breakdown);
+  if (items.length <= 1) return colorStyle(color);
+  const step = 100 / items.length;
+  const bgStops = items.map((item, index) => {
+    const productionColor = colorForProduction(stableProductionKey(item));
+    const start = Number((index * step).toFixed(3));
+    const end = Number(((index + 1) * step).toFixed(3));
+    return `${productionColor.bg} ${start}% ${end}%`;
+  }).join(', ');
+  const firstColor = colorForProduction(stableProductionKey(items[0]));
+  return `--event-bg: linear-gradient(90deg, ${bgStops}); --event-border: ${firstColor.border}; --event-text: ${firstColor.text};`;
+}
+
+function stableProductionBreakdown(items = []) {
+  return [...items].sort((left, right) =>
+    stableProductionIndex(left) - stableProductionIndex(right)
+    || String(stableProductionKey(left)).localeCompare(String(stableProductionKey(right)))
+  );
+}
+
 function productionBreakdown(operation) {
   const source = Array.isArray(operation.productionBreakdown) && operation.productionBreakdown.length
     ? operation.productionBreakdown
@@ -225,19 +269,33 @@ function productionBreakdown(operation) {
     }];
   const grouped = new Map();
   source.forEach(item => {
-    const key = String(item.productionKey || `production-${Number(item.productionIndex || 0)}`);
+    const productionIndex = stableProductionIndex(item);
+    const key = String(item.productionKey || `production-${productionIndex}`);
     if (!grouped.has(key)) {
       grouped.set(key, {
         ...item,
+        productionIndex,
         productionKey: key,
+        operationIds: [],
         quantity: 0,
         unit: item.unit || operation.unit || ''
       });
     }
     const current = grouped.get(key);
+    const fallbackOperationId = `${productionIndex}:${item.materialId || operation.materialId}`;
+    const itemOperationId = item.operationId || fallbackOperationId || operation.operationId || operation.materialId;
+    current.operationId = current.operationId || itemOperationId;
+    current.operationIds = [...new Set([...(current.operationIds || []), itemOperationId].filter(Boolean).map(String))];
+    current.materialId = current.materialId || item.materialId || operation.materialId;
+    current.materialName = current.materialName || item.materialName || operation.materialName;
+    current.machineName = current.machineName || item.machineName || operation.machineName;
+    current.peopleCount = current.peopleCount || item.peopleCount || operation.peopleCount;
+    current.productionModelName = current.productionModelName || item.productionModelName || operation.productionModelName;
+    current.productivityOptions = current.productivityOptions?.length ? current.productivityOptions : item.productivityOptions || operation.productivityOptions || [];
+    current.productionModelOptions = current.productionModelOptions?.length ? current.productionModelOptions : item.productionModelOptions || operation.productionModelOptions || [];
     current.quantity = Number((Number(current.quantity || 0) + Number(item.quantity || 0)).toFixed(3));
   });
-  return [...grouped.values()].sort((left, right) => Number(left.productionIndex || 0) - Number(right.productionIndex || 0));
+  return stableProductionBreakdown([...grouped.values()]);
 }
 
 function breakdownText(operation) {
@@ -248,18 +306,6 @@ function breakdownText(operation) {
     'Producoes:',
     ...items.map(item => `${item.productionTitle || `Producao ${Number(item.productionIndex || 0) + 1}`}: ${formatQty(item.quantity)} ${item.unit || operation.unit || ''}`.trim())
   ];
-}
-
-function productionStripStyle(items, colorForProduction) {
-  if (!items.length) return '';
-  const step = 100 / items.length;
-  const stops = items.map((item, index) => {
-    const color = colorForProduction(item.productionKey).border;
-    const start = Number((index * step).toFixed(3));
-    const end = Number(((index + 1) * step).toFixed(3));
-    return `${color} ${start}% ${end}%`;
-  }).join(', ');
-  return `background: linear-gradient(90deg, ${stops});`;
 }
 
 function normalizeShiftConfig(config = {}) {
@@ -395,7 +441,23 @@ function splitSegmentByLunch(segment, lunchStart, lunchEnd, shiftStart, shiftEnd
   ].filter(Boolean);
 }
 
+function normalizeLunchBreaks(lunchStart, lunchEnd) {
+  if (Array.isArray(lunchStart)) {
+    return lunchStart
+      .filter(item => item && Number(item.lunchEnd) > Number(item.lunchStart))
+      .map(item => ({ lunchStart: Number(item.lunchStart), lunchEnd: Number(item.lunchEnd) }));
+  }
+  return Number(lunchEnd) > Number(lunchStart) ? [{ lunchStart, lunchEnd }] : [];
+}
+
+function splitSegmentByLunchBreaks(segment, lunchBreaks, shiftStart, shiftEnd) {
+  return lunchBreaks.reduce((parts, lunch) => (
+    parts.flatMap(part => splitSegmentByLunch(part, lunch.lunchStart, lunch.lunchEnd, shiftStart, shiftEnd))
+  ), [segment]);
+}
+
 function operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart, lunchEnd) {
+  const lunchBreaks = normalizeLunchBreaks(lunchStart, lunchEnd);
   const baseSegments = operation.segments?.length ? operation.segments : [{
     date: operation.startDate,
     startTime: operationStartTime(operation),
@@ -412,7 +474,7 @@ function operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart
       if (!byDate.has(date)) return;
       const startTime = date === startDate ? segment.startTime : minutesToTime(shiftStart);
       const endTime = date === endDate ? segment.endTime : minutesToTime(shiftEnd);
-      splitSegmentByLunch({ ...segment, date, startTime, endDate: date, endTime }, lunchStart, lunchEnd, shiftStart, shiftEnd)
+      splitSegmentByLunchBreaks({ ...segment, date, startTime, endDate: date, endTime }, lunchBreaks, shiftStart, shiftEnd)
         .forEach(part => visualSegments.push(part));
     });
   });
@@ -425,6 +487,37 @@ function operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart
 }
 
 function dispatchConfig(wrapper, operation, modal) {
+  const productionRows = modal.querySelectorAll('.operation-production-row');
+  if (productionRows.length) {
+    const currentItems = productionBreakdown(operation);
+    const changes = [...productionRows].map(row => {
+      const machineSelect = row.querySelector('[name="productionMachine"]');
+      const peopleSelect = row.querySelector('[name="productionPeople"]');
+      const [machineName, peopleCount] = (peopleSelect?.value || machineSelect?.value || '').split('||');
+      const productionModelName = row.querySelector('[name="productionModel"]')?.value || null;
+      return {
+        operationId: String(row.dataset.operationId || operation.operationId || operation.materialId),
+        materialId: String(row.dataset.materialId || operation.materialId),
+        productionIndex: Number(row.dataset.productionIndex || 0),
+        machineName,
+        peopleCount: Number(peopleCount || 0),
+        productionModelName
+      };
+    }).filter(change => {
+      const item = currentItems.find(part => Number(part.productionIndex || 0) === Number(change.productionIndex || 0));
+      return item && (
+        change.machineName !== item.machineName
+        || Number(change.peopleCount || 0) !== Number(item.peopleCount || 0)
+        || String(change.productionModelName || '') !== String(item.productionModelName || '')
+      );
+    });
+    if (!changes.length) return;
+    wrapper.dispatchEvent(new CustomEvent('operation-config-change', {
+      bubbles: true,
+      detail: { changes }
+    }));
+    return;
+  }
   const machineSelect = modal.querySelector('[name="machinePeople"]');
   const peopleSelect = modal.querySelector('[name="peopleMachine"]');
   const [machineName, peopleCount] = (peopleSelect?.value || machineSelect?.value || '').split('||');
@@ -446,6 +539,99 @@ function dispatchConfig(wrapper, operation, modal) {
       productionModelName
     }
   }));
+}
+
+function productionConfigTemplate(item, operation) {
+  const machineOptions = item.productivityOptions?.length ? item.productivityOptions : operation.productivityOptions || [];
+  const models = item.productionModelOptions?.length ? item.productionModelOptions : modelOptions(operation);
+  const selectedValue = optionValue({
+    machineName: item.machineName || operation.machineName,
+    peopleCount: item.peopleCount || operation.peopleCount
+  });
+  const selectedModel = item.productionModelName || operation.productionModelName || models[0]?.modelName || '';
+  return `
+    <article class="operation-production-row" data-operation-id="${escapeAttr(item.operationId || operation.operationId || operation.materialId)}" data-material-id="${escapeAttr(item.materialId || operation.materialId)}" data-production-index="${Number(item.productionIndex || 0)}">
+      <div class="operation-production-heading">
+        <strong>${escapeAttr(item.productionTitle || `Producao ${Number(item.productionIndex || 0) + 1}`)}</strong>
+        <span>${formatQty(item.quantity)} ${escapeAttr(item.unit || operation.unit || '')}</span>
+      </div>
+      <label>Quantidade
+        <input type="text" value="${escapeAttr(`${formatQty(item.quantity)} ${item.unit || operation.unit || ''}`.trim())}" disabled data-locked="true" />
+      </label>
+      <label>M&aacute;quina
+        <select name="productionMachine" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
+          ${machineNameOptionTags(machineOptions, selectedValue)}
+        </select>
+      </label>
+      <label>Pessoas
+        <select name="productionPeople" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
+          ${peopleOptionTags(machineOptions, selectedValue)}
+        </select>
+      </label>
+      <label>Modelo de produ&ccedil;&atilde;o
+        <select name="productionModel" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
+          ${models.length ? models.map(model => `<option value="${escapeAttr(model.modelName)}" ${String(model.modelName) === String(selectedModel) ? 'selected' : ''}>${escapeAttr(model.label || model.modelName)}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
+        </select>
+      </label>
+    </article>
+  `;
+}
+
+function makeModalDraggable(backdrop) {
+  const modal = backdrop.querySelector('.operation-modal');
+  const handle = modal?.querySelector('.modal-header');
+  if (!modal || !handle) return;
+  let drag = null;
+  const startDrag = event => {
+    if (event.target.closest('button, input, select, textarea, a')) return false;
+    const rect = modal.getBoundingClientRect();
+    drag = {
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top
+    };
+    backdrop.classList.add('modal-backdrop-floating');
+    modal.classList.add('is-floating');
+    modal.classList.add('is-dragging');
+    modal.style.left = `${rect.left}px`;
+    modal.style.top = `${rect.top}px`;
+    modal.style.transform = 'none';
+    return true;
+  };
+  const moveDrag = event => {
+    if (!drag) return;
+    const rect = modal.getBoundingClientRect();
+    const padding = 8;
+    const maxLeft = Math.max(padding, window.innerWidth - rect.width - padding);
+    const maxTop = Math.max(padding, window.innerHeight - Math.min(rect.height, window.innerHeight - (padding * 2)) - padding);
+    modal.style.left = `${Math.min(Math.max(padding, event.clientX - drag.offsetX), maxLeft)}px`;
+    modal.style.top = `${Math.min(Math.max(padding, event.clientY - drag.offsetY), maxTop)}px`;
+  };
+  const stopDrag = () => {
+    if (!drag) return;
+    drag = null;
+    modal.classList.remove('is-dragging');
+  };
+  handle.addEventListener('pointerdown', event => {
+    if (startDrag(event)) handle.setPointerCapture(event.pointerId);
+  });
+  handle.addEventListener('pointermove', moveDrag);
+  const stopPointerDrag = event => {
+    stopDrag();
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+  };
+  handle.addEventListener('pointerup', stopPointerDrag);
+  handle.addEventListener('pointercancel', stopPointerDrag);
+  handle.addEventListener('mousedown', event => {
+    if (!startDrag(event)) return;
+    const moveMouse = moveEvent => moveDrag(moveEvent);
+    const stopMouse = () => {
+      stopDrag();
+      document.removeEventListener('mousemove', moveMouse);
+      document.removeEventListener('mouseup', stopMouse);
+    };
+    document.addEventListener('mousemove', moveMouse);
+    document.addEventListener('mouseup', stopMouse);
+  });
 }
 
 function tooltipText(operation) {
@@ -586,13 +772,16 @@ function showOperationModal(wrapper, operation) {
   const startTime = operationStartTime(operation);
   const endTime = operationEndTime(operation);
   const breakdown = productionBreakdown(operation);
+  const isSharedOperation = breakdown.length > 1;
   const breakdownHtml = breakdown.length > 1 ? `
-    <article class="wide operation-breakdown">
-      <span>Produ&ccedil;&otilde;es inclu&iacute;das</span>
-      ${breakdown.map(item => `
-        <strong>${escapeAttr(item.productionTitle || `Producao ${Number(item.productionIndex || 0) + 1}`)}: ${formatQty(item.quantity)} ${escapeAttr(item.unit || operation.unit || '')}</strong>
-      `).join('')}
-    </article>
+    <section class="wide operation-breakdown operation-productions-section">
+      <div class="section-heading compact-heading">
+        <h3>Produ&ccedil;&otilde;es inclu&iacute;das</h3>
+      </div>
+      <div class="operation-productions-list">
+        ${breakdown.map(item => productionConfigTemplate(item, operation)).join('')}
+      </div>
+    </section>
   ` : '';
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
@@ -606,17 +795,17 @@ function showOperationModal(wrapper, operation) {
         <div class="operation-detail-grid">
           <article><span>Material</span><strong>${operation.materialName}</strong></article>
           <article><span>Quantidade</span><strong>${formatQty(operation.produceQty)} ${operation.unit || ''}</strong></article>
-          <label>M&aacute;quina
+          <label ${isSharedOperation ? 'hidden' : ''}>M&aacute;quina
             <select name="machinePeople" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
               ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.machineName}</option>`).join('')}
             </select>
           </label>
-          <label>Pessoas
+          <label ${isSharedOperation ? 'hidden' : ''}>Pessoas
             <select name="peopleMachine" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
               ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.peopleCount}</option>`).join('')}
             </select>
           </label>
-          <label>Modelo de produ&ccedil;&atilde;o
+          <label ${isSharedOperation ? 'hidden' : ''}>Modelo de produ&ccedil;&atilde;o
             <select name="productionModel" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
               ${models.length ? models.map(model => `<option value="${model.modelName}" ${String(model.modelName) === String(selectedModel) ? 'selected' : ''}>${model.label || model.modelName}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
             </select>
@@ -651,10 +840,18 @@ function showOperationModal(wrapper, operation) {
   backdrop.addEventListener('click', event => {
     if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
   });
+  makeModalDraggable(backdrop);
   backdrop.querySelectorAll('[name="machinePeople"], [name="peopleMachine"]').forEach(select => {
     select.addEventListener('change', () => {
       backdrop.querySelector('[name="machinePeople"]').value = select.value;
       backdrop.querySelector('[name="peopleMachine"]').value = select.value;
+    });
+  });
+  backdrop.querySelectorAll('[name="productionMachine"], [name="productionPeople"]').forEach(select => {
+    select.addEventListener('change', () => {
+      const row = select.closest('.operation-production-row');
+      row.querySelector('[name="productionMachine"]').value = select.value;
+      row.querySelector('[name="productionPeople"]').value = select.value;
     });
   });
   const splitsTarget = backdrop.querySelector('.operation-splits-target');
@@ -717,15 +914,6 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   const calendarStartDate = addDays(knownDates[0], -15);
   const calendarEndDate = addDays(knownDates[knownDates.length - 1], 15);
   const dates = eachDate(calendarStartDate, calendarEndDate);
-  const productionIndexes = new Map();
-  operations.forEach(operation => {
-    const key = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
-    if (!productionIndexes.has(key)) productionIndexes.set(key, productionIndexes.size);
-    productionBreakdown(operation).forEach(item => {
-      const breakdownKey = String(item.productionKey || `production-${Number(item.productionIndex || 0)}`);
-      if (!productionIndexes.has(breakdownKey)) productionIndexes.set(breakdownKey, productionIndexes.size);
-    });
-  });
   const stageIndexes = new Map();
   operations
     .filter(operation => operation.operationType !== 'transport')
@@ -745,7 +933,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     });
   const shifts = normalizeShiftConfig(config);
   const colorForProduction = productionKey => {
-    const productionColorIndex = productionIndexes.get(String(productionKey)) || 0;
+    const productionColorIndex = stableProductionIndex({ productionKey });
     return PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length][0];
   };
   const shiftStart = Math.min(...shifts.map(shift => shift.shiftStart));
@@ -845,7 +1033,8 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         <div class="agenda-days">
           ${dates.map(date => {
             const daySegments = operations.flatMap(operation => {
-              const segments = operationDaySegments(operation, dates, shiftStart, shiftEnd, 0, 0).get(date) || [];
+              const lunchBreaks = shifts.map(shift => ({ lunchStart: shift.lunchStart, lunchEnd: shift.lunchEnd }));
+              const segments = operationDaySegments(operation, dates, dayStart, dayEnd, lunchBreaks).get(date) || [];
               return segments.map(segment => ({ operation, segment }));
             });
             const dayOperations = arrangeParallelSegments(daySegments).map(item => {
@@ -858,16 +1047,14 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
               const shouldShowText = segment.visualIndex === 0 && ((end - start) / 60) * zoom.hourHeight >= 62;
               const shortLabel = isTransport ? 'TR' : `${operation.peopleCount || '-'}p`;
-              const productionColorIndex = productionIndexes.get(productionKey) || 0;
+              const productionColorIndex = stableProductionIndex(operation);
               const palette = PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length];
               const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
               const productionBaseColor = palette[0];
               const eventColor = isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
               const breakdown = isTransport ? [] : productionBreakdown(operation);
-              const stripStyle = productionStripStyle(breakdown, colorForProduction);
               return `
-                <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(eventColor)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
-                  ${breakdown.length > 1 ? `<span class="gantt-production-strip" style="${escapeAttr(stripStyle)}"></span>` : ''}
+                <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${eventColorStyle(eventColor, breakdown, colorForProduction)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
                   ${shouldShowText && isTransport ? `
                     <strong>Transporte</strong>
                     <span>${operation.materialName || '-'}</span>

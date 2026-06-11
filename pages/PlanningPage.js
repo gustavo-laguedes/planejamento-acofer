@@ -156,6 +156,18 @@ function productionThemeStyle(index = 0) {
   ].join('; ');
 }
 
+function productionSegmentStyle(productions = []) {
+  const items = productions.length ? productions : [{ index: 0 }];
+  const step = 100 / items.length;
+  const stops = items.map((item, index) => {
+    const theme = productionTheme(Number(item.index || 0));
+    const start = Number((index * step).toFixed(3));
+    const end = Number(((index + 1) * step).toFixed(3));
+    return `${theme.border} ${start}% ${end}%`;
+  }).join(', ');
+  return `background: linear-gradient(90deg, ${stops});`;
+}
+
 function emptyTransport() {
   return {
     id: `transport-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -576,19 +588,36 @@ export function PlanningPage() {
   }
 
   function flowNodeKey(node) {
-    return `${node.productionIndex ?? 0}:${node.materialId ?? node.materialCode ?? node.materialName}`;
+    return String(node.materialId ?? node.materialCode ?? node.materialName);
   }
 
   function mergeFlowNode(targetNode, sourceNode) {
-    targetNode.requiredQty = Math.max(Number(targetNode.requiredQty || 0), Number(sourceNode.requiredQty || 0));
+    const productionKey = String(sourceNode.productionKey || `production-${Number(sourceNode.productionIndex || 0)}`);
+    if (!targetNode.productionKeys.has(productionKey)) {
+      targetNode.requiredQty = Number(targetNode.requiredQty || 0) + Number(sourceNode.requiredQty || 0);
+      targetNode.stockUsedQty = Number(targetNode.stockUsedQty || 0) + Number(sourceNode.stockUsedQty || 0);
+      targetNode.produceQty = Number(targetNode.produceQty || 0) + Number(sourceNode.produceQty || 0);
+    } else {
+      targetNode.requiredQty = Math.max(Number(targetNode.requiredQty || 0), Number(sourceNode.requiredQty || 0));
+      targetNode.stockUsedQty = Math.max(Number(targetNode.stockUsedQty || 0), Number(sourceNode.stockUsedQty || 0));
+      targetNode.produceQty = Math.max(Number(targetNode.produceQty || 0), Number(sourceNode.produceQty || 0));
+    }
     targetNode.stockQty = Math.max(Number(targetNode.stockQty || 0), Number(sourceNode.stockQty || 0));
-    targetNode.stockUsedQty = Math.max(Number(targetNode.stockUsedQty || 0), Number(sourceNode.stockUsedQty || 0));
-    targetNode.produceQty = Math.max(Number(targetNode.produceQty || 0), Number(sourceNode.produceQty || 0));
     targetNode.forceStockOnly = targetNode.forceStockOnly || sourceNode.forceStockOnly;
     targetNode.isInitialRawMaterial = targetNode.isInitialRawMaterial || sourceNode.isInitialRawMaterial;
+    targetNode.productionKeys.add(productionKey);
+    if (!targetNode.productions.some(item => item.key === productionKey)) {
+      targetNode.productions.push({
+        key: productionKey,
+        index: Number(sourceNode.productionIndex || 0),
+        title: sourceNode.productionTitle || `Produ&ccedil;&atilde;o ${Number(sourceNode.productionIndex || 0) + 1}`
+      });
+      targetNode.productions.sort((left, right) => Number(left.index || 0) - Number(right.index || 0));
+    }
   }
 
-  function buildFlowGraph(root) {
+  function buildFlowGraph(roots) {
+    const rootNodes = Array.isArray(roots) ? roots.filter(Boolean) : [roots].filter(Boolean);
     const nodes = new Map();
     const incoming = new Map();
     const outgoing = new Map();
@@ -596,7 +625,19 @@ export function PlanningPage() {
     function ensureNode(node) {
       const key = flowNodeKey(node);
       if (!nodes.has(key)) {
-        nodes.set(key, { ...node, flowKey: key, flowOrder: nodes.size, children: [] });
+        const productionKey = String(node.productionKey || `production-${Number(node.productionIndex || 0)}`);
+        nodes.set(key, {
+          ...node,
+          flowKey: key,
+          flowOrder: nodes.size,
+          children: [],
+          productionKeys: new Set([productionKey]),
+          productions: [{
+            key: productionKey,
+            index: Number(node.productionIndex || 0),
+            title: node.productionTitle || `Produ&ccedil;&atilde;o ${Number(node.productionIndex || 0) + 1}`
+          }]
+        });
         incoming.set(key, new Set());
         outgoing.set(key, new Set());
       } else {
@@ -609,16 +650,16 @@ export function PlanningPage() {
       if (!node) return;
       const key = ensureNode(node);
       if (parentKey && parentKey !== key) {
-        incoming.get(key).add(parentKey);
-        outgoing.get(parentKey).add(key);
+        incoming.get(parentKey).add(key);
+        outgoing.get(key).add(parentKey);
       }
       if (stack.includes(key)) return;
       (node.children || []).forEach(child => visit(child, key, [...stack, key]));
     }
 
-    visit(root);
+    rootNodes.forEach(root => visit(root));
     const levels = new Map();
-    const rootKey = flowNodeKey(root);
+    const sourceKeys = [...nodes.keys()].filter(key => !(incoming.get(key)?.size));
 
     function assignLevel(key, level, stack = []) {
       if (stack.includes(key)) return;
@@ -628,7 +669,7 @@ export function PlanningPage() {
       }
     }
 
-    assignLevel(rootKey, 0);
+    sourceKeys.forEach(key => assignLevel(key, 0));
     const columns = [];
     for (const [key, node] of nodes.entries()) {
       const level = levels.get(key) ?? 0;
@@ -640,7 +681,11 @@ export function PlanningPage() {
     for (const [from, children] of outgoing.entries()) {
       for (const to of children) edges.push({ from, to });
     }
-    return { columns, edges };
+    const plainColumns = columns.map(column => column.map(node => {
+      const { productionKeys, ...plainNode } = node;
+      return plainNode;
+    }));
+    return { columns: plainColumns, edges };
   }
 
   function clearProductionMaterialDecisions(productionIndex) {
@@ -693,8 +738,11 @@ export function PlanningPage() {
   }
 
   function renderFlowNodeCard(node) {
-    const productionIndex = Number(node.productionIndex || 0);
-    const checked = stockOnlyChecked(productionIndex, node.materialId);
+    const productions = Array.isArray(node.productions) && node.productions.length
+      ? node.productions
+      : [{ index: Number(node.productionIndex || 0), title: node.productionTitle || `Produ&ccedil;&atilde;o ${Number(node.productionIndex || 0) + 1}` }];
+    const productionIndex = Number(productions[0]?.index || node.productionIndex || 0);
+    const checked = productions.some(production => stockOnlyChecked(production.index, node.materialId));
     const stockQty = Number(node.stockQty || 0);
     const requiredQty = Number(node.requiredQty || 0);
     const produceQty = Number(node.produceQty || 0);
@@ -703,7 +751,6 @@ export function PlanningPage() {
     const rawMaterialWarning = node.isInitialRawMaterial && stockQty < requiredQty;
     return `
         <div class="production-flow-node${produceQty > 0 ? ' needs-production' : ' stock-covered'}${rawMaterialWarning ? ' raw-material-warning' : ''}" data-flow-node-key="${escapeHtml(node.flowKey || flowNodeKey(node))}" style="${productionThemeStyle(productionIndex)}">
-          <div class="production-flow-node-top" aria-hidden="true"></div>
           <div class="production-flow-node-header">
             <div>
               <strong>${escapeHtml(node.materialName)}</strong>
@@ -711,6 +758,7 @@ export function PlanningPage() {
             </div>
             <span class="production-flow-status ${status.className}">${status.label}</span>
           </div>
+          <div class="production-flow-production-markers" style="${escapeHtml(productionSegmentStyle(productions))}" title="${escapeHtml(productions.map(item => item.title || `Produ&ccedil;&atilde;o ${Number(item.index || 0) + 1}`).join(' | '))}" aria-hidden="true"></div>
           <div class="production-flow-metrics">
             <span>Necess&aacute;rio: <strong>${formatPtBrDecimal(node.requiredQty)} ${escapeHtml(node.unit || '')}</strong></span>
             <span>Saldo: <strong>${formatPtBrDecimal(node.stockQty)} ${escapeHtml(node.unit || '')}</strong></span>
@@ -718,16 +766,16 @@ export function PlanningPage() {
               ? '<span>Origem: <strong>Compra / base</strong></span>'
               : `<span>A produzir: <strong>${formatPtBrDecimal(node.produceQty)} ${escapeHtml(node.unit || '')}</strong></span>`}
           </div>
-          ${node.isInitialRawMaterial ? '' : `<label class="stock-only-toggle">
-            <input type="checkbox" data-stock-only data-production-index="${productionIndex}" data-material-id="${node.materialId}" ${checked ? 'checked' : ''} />
-            <span>Utilizar saldo</span>
-          </label>`}
+          ${node.isInitialRawMaterial ? '' : productions.map(production => `<label class="stock-only-toggle">
+            <input type="checkbox" data-stock-only data-production-index="${Number(production.index || 0)}" data-material-id="${node.materialId}" ${stockOnlyChecked(production.index, node.materialId) ? 'checked' : ''} />
+            <span>${productions.length > 1 ? escapeHtml(production.title || `Produ&ccedil;&atilde;o ${Number(production.index || 0) + 1}`) : 'Utilizar saldo'}</span>
+          </label>`).join('')}
         </div>
     `;
   }
 
-  function renderFlowGraph(tree) {
-    const graph = buildFlowGraph(tree);
+  function renderFlowGraph(trees) {
+    const graph = buildFlowGraph(trees);
     return `
       <div class="production-flow-graph" data-flow-graph>
         <svg class="production-flow-svg" aria-hidden="true"></svg>
@@ -784,19 +832,18 @@ export function PlanningPage() {
     const trees = result.tree?.children?.length && result.tree.materialName === 'Plano de producao'
       ? result.tree.children
       : result.tree ? [result.tree] : [];
-    return trees.map((tree, index) => {
-      const production = result.summary.productions?.[index];
-      const title = production?.title || tree.productionTitle || `Produ&ccedil;&atilde;o ${index + 1}`;
-      const quantity = production ? `${formatPtBrDecimal(production.plannedQty)} ${production.plannedUnit || ''}`.trim() : '';
-      return `
-        <article class="production-flow-card" data-flow-production="${tree.productionIndex ?? index}" style="${productionThemeStyle(tree.productionIndex ?? index)}">
-          <div class="planning-subcard-header">
-            <h3 class="production-title"><span class="production-gradient-key" aria-hidden="true"></span>${escapeHtml(title)}${quantity ? ` <span>${escapeHtml(quantity)}</span>` : ''}</h3>
-          </div>
-          ${renderFlowGraph(tree)}
-        </article>
-      `;
-    }).join('');
+    const summary = result.summary.productions || [];
+    const title = summary.length > 1
+      ? summary.map((production, index) => `${production.title || `Produ&ccedil;&atilde;o ${index + 1}`}${production.plannedQty ? ` ${formatPtBrDecimal(production.plannedQty)} ${production.plannedUnit || ''}` : ''}`.trim()).join(' | ')
+      : (summary[0]?.title || trees[0]?.productionTitle || 'Fluxo produtivo');
+    return `
+      <article class="production-flow-card consolidated-flow-card" data-flow-production="consolidated" style="${productionThemeStyle(0)}">
+        <div class="planning-subcard-header">
+          <h3 class="production-title"><span class="production-gradient-key" aria-hidden="true"></span>${escapeHtml(title)}</h3>
+        </div>
+        ${renderFlowGraph(trees)}
+      </article>
+    `;
   }
 
   function renderSimulation(result, form) {
@@ -1161,11 +1208,13 @@ export function PlanningPage() {
         startDate: event.detail.startDate,
         startTime: event.detail.startTime
       };
-      draft.operationOverrides[String(event.detail.materialId)] = {
-        ...(draft.operationOverrides[String(event.detail.materialId)] || {}),
-        startDate: event.detail.startDate,
-        startTime: event.detail.startTime
-      };
+      if (!key.includes(':')) {
+        draft.operationOverrides[String(event.detail.materialId)] = {
+          ...(draft.operationOverrides[String(event.detail.materialId)] || {}),
+          startDate: event.detail.startDate,
+          startTime: event.detail.startTime
+        };
+      }
       saveDraftNow();
       try {
         await simulateCurrent();
@@ -1175,20 +1224,25 @@ export function PlanningPage() {
     });
 
     target.addEventListener('operation-config-change', async event => {
-      const key = String(event.detail.operationId || event.detail.materialId);
-      const override = {
-        machineName: event.detail.machineName,
-        peopleCount: event.detail.peopleCount,
-        productionModelName: event.detail.productionModelName
-      };
-      draft.operationOverrides[key] = {
-        ...(draft.operationOverrides[key] || {}),
-        ...override
-      };
-      draft.operationOverrides[String(event.detail.materialId)] = {
-        ...(draft.operationOverrides[String(event.detail.materialId)] || {}),
-        ...override
-      };
+      const changes = Array.isArray(event.detail.changes) ? event.detail.changes : [event.detail];
+      changes.forEach(change => {
+        const key = String(change.operationId || change.materialId);
+        const override = {
+          machineName: change.machineName,
+          peopleCount: change.peopleCount,
+          productionModelName: change.productionModelName
+        };
+        draft.operationOverrides[key] = {
+          ...(draft.operationOverrides[key] || {}),
+          ...override
+        };
+        if (!String(key).includes(':')) {
+          draft.operationOverrides[String(change.materialId)] = {
+            ...(draft.operationOverrides[String(change.materialId)] || {}),
+            ...override
+          };
+        }
+      });
       saveDraftNow();
       try {
         await simulateCurrent();

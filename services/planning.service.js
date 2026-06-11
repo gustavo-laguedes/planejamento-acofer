@@ -34,13 +34,11 @@ function normalizedMaterialKey(operation) {
     operation.materialCode || '',
     operation.unit || ''
   ].join('|');
-  const logicalStage = Math.round(toNumber(operation.productionOrder) % 1000);
   return [
     materialKey,
     operation.machineName || '',
     operation.productionModelName || '',
-    operation.unit || '',
-    logicalStage
+    operation.unit || ''
   ].join('|');
 }
 
@@ -121,9 +119,20 @@ function productivityOptions(material, matrixRows) {
     .sort((left, right) => left.secondsPerUnit - right.secondsPerUnit);
 }
 
-function overrideForMaterial(overrides = {}, material) {
+function overrideForMaterial(overrides = {}, material, productionIndex = null) {
   const id = materialIdentifier(material);
-  const keys = [id, id == null ? null : String(id), material?.materialId, material?.id, materialName(material), materialCodeForOverride(material)].filter(Boolean);
+  const scopedIndex = productionIndex ?? material?.productionIndex;
+  const scopedKeys = scopedIndex == null || id == null ? [] : [`${scopedIndex}:${id}`];
+  const keys = [
+    material?.operationId,
+    ...scopedKeys,
+    id,
+    id == null ? null : String(id),
+    material?.materialId,
+    material?.id,
+    materialName(material),
+    materialCodeForOverride(material)
+  ].filter(Boolean);
   for (const key of keys) {
     if (overrides[key]) return overrides[key];
   }
@@ -186,9 +195,9 @@ function stockOnlySet(payload = {}) {
   return new Set(source.map(item => stockOnlyKey(item.productionIndex ?? 0, item.materialId)));
 }
 
-function selectedInputs(material, inputsByMaterialId, operationOverrides = {}) {
+function selectedInputs(material, inputsByMaterialId, operationOverrides = {}, productionIndex = null) {
   const allInputs = inputsByMaterialId.get(String(material.id)) || [];
-  const override = overrideForMaterial(operationOverrides, material);
+  const override = overrideForMaterial(operationOverrides, material, productionIndex);
   const selectedModelName = override?.productionModelName ? String(override.productionModelName) : null;
   if (selectedModelName) {
     return allInputs.filter(input => String(input.production_model_name || 'Modelo padrão') === selectedModelName);
@@ -219,13 +228,14 @@ function productionModelOptions(material, inputsByMaterialId, materialsById) {
   }));
 }
 
-function operationForMaterial(material, state, productionOrder, context, requestedMachine, requestedPeople, operationOverrides = {}) {
+function operationForMaterial(material, state, productionOrder, context, requestedMachine, requestedPeople, operationOverrides = {}, productionIndex = null) {
   const requiredQty = toNumber(state.requiredQty);
   const stockQty = toNumber(state.stockAvailable);
   const produceQty = toNumber(state.produceQty);
-  const override = overrideForMaterial(operationOverrides, material);
+  const operationScopedMaterial = productionIndex == null ? material : { ...material, operationId: `${productionIndex}:${material.id}`, productionIndex };
+  const override = overrideForMaterial(operationOverrides, operationScopedMaterial, productionIndex);
   const matrix = resolveMatrix(material, context.matrixRows, override?.machineName || requestedMachine, override?.peopleCount || requestedPeople);
-  const inputs = selectedInputs(material, context.inputsByMaterialId, operationOverrides);
+  const inputs = selectedInputs(operationScopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex);
   const modelOptions = productionModelOptions(material, context.inputsByMaterialId, context.materialsById);
   const productionModelName = inputs[0]?.production_model_name || modelOptions[0]?.modelName || null;
   return {
@@ -254,7 +264,8 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
   const state = states?.get(String(material.id)) || {};
   const stockQty = toNumber(state.stockAvailable);
   const produceQty = toNumber(state.produceQty);
-  const override = overrideForMaterial(operationOverrides, material);
+  const operationScopedMaterial = { ...material, operationId: `${productionIndex}:${material.id}`, productionIndex };
+  const override = overrideForMaterial(operationOverrides, operationScopedMaterial, productionIndex);
   const matrix = resolveMatrix(material, matrixRows, override?.machineName || requestedMachine, override?.peopleCount || requestedPeople);
   const node = {
     productionIndex,
@@ -281,7 +292,7 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
     return node;
   }
 
-  const inputs = selectedInputs(material, inputsByMaterialId, operationOverrides);
+  const inputs = selectedInputs(operationScopedMaterial, inputsByMaterialId, operationOverrides, productionIndex);
   node.productionModelName = inputs[0]?.production_model_name || productionModelOptions(material, inputsByMaterialId, materialsById)[0]?.modelName || null;
   node.productionModelOptions = productionModelOptions(material, inputsByMaterialId, materialsById);
   node.children = inputs.map(input => {
@@ -310,14 +321,15 @@ function flattenOperations(tree, operations = []) {
   return operations;
 }
 
-function operationRank(material, context, operationOverrides = {}, stack = []) {
+function operationRank(material, context, operationOverrides = {}, stack = [], productionIndex = null) {
   if (!material || stack.includes(String(material.id))) return 0;
-  const inputs = selectedInputs(material, context.inputsByMaterialId, operationOverrides)
+  const operationScopedMaterial = productionIndex == null ? material : { ...material, operationId: `${productionIndex}:${material.id}`, productionIndex };
+  const inputs = selectedInputs(operationScopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex)
     .map(input => context.materialsById.get(String(input.input_material_id)))
     .filter(Boolean);
   if (!inputs.length || material.is_initial_raw_material === true) return 0;
   return 1 + Math.max(...inputs.map(inputMaterial =>
-    operationRank(inputMaterial, context, operationOverrides, [...stack, String(material.id)])
+    operationRank(inputMaterial, context, operationOverrides, [...stack, String(material.id)], productionIndex)
   ));
 }
 
@@ -361,7 +373,8 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
       if (deltaProduceQty <= 0) continue;
       state.expandedProduceQty = produceQty;
       if (currentMaterial.is_initial_raw_material === true) continue;
-      const inputs = selectedInputs(currentMaterial, context.inputsByMaterialId, operationOverrides);
+      const scopedMaterial = { ...currentMaterial, operationId: `${productionIndex}:${currentMaterial.id}`, productionIndex };
+      const inputs = selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex);
       for (const input of inputs) {
         const inputMaterial = context.materialsById.get(String(input.input_material_id));
         if (!inputMaterial) continue;
@@ -379,7 +392,7 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
   const operations = [...states.values()]
     .filter(state => state.material.is_initial_raw_material !== true)
     .map(state => {
-      const rank = operationRank(state.material, context, operationOverrides);
+      const rank = operationRank(state.material, context, operationOverrides, [], productionIndex);
       return operationForMaterial(
         state.material,
         state,
@@ -387,7 +400,8 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
         context,
         requestedMachine,
         requestedPeople,
-        operationOverrides
+        operationOverrides,
+        productionIndex
       );
     })
     .filter(operation => operation.produceQty > 0)
@@ -400,7 +414,8 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
   const operationMaterialIds = new Set(operations.map(operation => String(operation.materialId)));
   const withDependencies = operations.map(operation => {
     const material = context.materialsById.get(String(operation.materialId));
-    const dependencyMaterialIds = selectedInputs(material, context.inputsByMaterialId, operationOverrides)
+    const scopedMaterial = { ...material, operationId: `${productionIndex}:${material.id}`, productionIndex };
+    const dependencyMaterialIds = selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex)
       .map(input => String(input.input_material_id))
       .filter(inputMaterialId => operationMaterialIds.has(inputMaterialId));
     return {
@@ -462,11 +477,17 @@ function groupOperations(operations) {
     const sourceOperationId = String(operation.operationId || operation.materialId);
     current.groupedOperationIds = [...new Set([...(current.groupedOperationIds || []), sourceOperationId])];
     current.productionBreakdown.push({
+      operationId: sourceOperationId,
       productionIndex: Number(operation.productionIndex || 0),
       productionKey: operation.productionKey || `production-${Number(operation.productionIndex || 0)}`,
       productionTitle: operation.productionTitle || `Producao ${Number(operation.productionIndex || 0) + 1}`,
       materialId: operation.materialId,
       materialName: operation.materialName,
+      machineName: operation.machineName,
+      peopleCount: Number(operation.peopleCount || 0),
+      productionModelName: operation.productionModelName || null,
+      productivityOptions: operation.productivityOptions || [],
+      productionModelOptions: operation.productionModelOptions || [],
       quantity: Number(toNumber(operation.produceQty).toFixed(3)),
       unit: operation.unit || ''
     });
