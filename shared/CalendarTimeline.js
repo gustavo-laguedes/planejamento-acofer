@@ -298,6 +298,20 @@ function productionBreakdown(operation) {
   return stableProductionBreakdown([...grouped.values()]);
 }
 
+function productivitySummary(operation, breakdown = productionBreakdown(operation)) {
+  const items = breakdown.length ? breakdown : [operation];
+  const labels = [...new Set(items.map(item => {
+    const outputQty = item.outputQty ?? operation.outputQty;
+    const outputUnit = item.outputUnit ?? operation.outputUnit;
+    const timeSeconds = item.timeSeconds ?? operation.timeSeconds;
+    if (outputQty && timeSeconds) return `${formatQty(outputQty)} ${outputUnit || ''} em ${formatQty(timeSeconds)}s`.trim();
+    const machineName = item.machineName || operation.machineName || '-';
+    const peopleCount = item.peopleCount || operation.peopleCount || '-';
+    return `${machineName} | ${peopleCount} pessoa${Number(peopleCount) === 1 ? '' : 's'}`;
+  }).filter(Boolean))];
+  return labels.join(' | ');
+}
+
 function breakdownText(operation) {
   const items = productionBreakdown(operation);
   if (items.length <= 1) return [];
@@ -541,6 +555,25 @@ function dispatchConfig(wrapper, operation, modal) {
   }));
 }
 
+function operationForProductionRow(row, operation) {
+  const [machineName, peopleCount] = (row.querySelector('[name="productionPeople"]')?.value
+    || row.querySelector('[name="productionMachine"]')?.value
+    || operationValue(operation)).split('||');
+  return {
+    ...operation,
+    operationId: row.dataset.operationId || operation.operationId || operation.materialId,
+    materialId: row.dataset.materialId || operation.materialId,
+    productionIndex: Number(row.dataset.productionIndex || 0),
+    produceQty: Number(row.dataset.quantity || 0),
+    unit: row.dataset.unit || operation.unit,
+    machineName,
+    peopleCount: Number(peopleCount || 0),
+    productivityOptions: productionBreakdown(operation).find(item =>
+      Number(item.productionIndex || 0) === Number(row.dataset.productionIndex || 0)
+    )?.productivityOptions || operation.productivityOptions || []
+  };
+}
+
 function productionConfigTemplate(item, operation) {
   const machineOptions = item.productivityOptions?.length ? item.productivityOptions : operation.productivityOptions || [];
   const models = item.productionModelOptions?.length ? item.productionModelOptions : modelOptions(operation);
@@ -550,7 +583,7 @@ function productionConfigTemplate(item, operation) {
   });
   const selectedModel = item.productionModelName || operation.productionModelName || models[0]?.modelName || '';
   return `
-    <article class="operation-production-row" data-operation-id="${escapeAttr(item.operationId || operation.operationId || operation.materialId)}" data-material-id="${escapeAttr(item.materialId || operation.materialId)}" data-production-index="${Number(item.productionIndex || 0)}">
+    <article class="operation-production-row" data-operation-id="${escapeAttr(item.operationId || operation.operationId || operation.materialId)}" data-material-id="${escapeAttr(item.materialId || operation.materialId)}" data-production-index="${Number(item.productionIndex || 0)}" data-quantity="${escapeAttr(item.quantity || 0)}" data-unit="${escapeAttr(item.unit || operation.unit || '')}">
       <div class="operation-production-heading">
         <strong>${escapeAttr(item.productionTitle || `Producao ${Number(item.productionIndex || 0) + 1}`)}</strong>
         <span>${formatQty(item.quantity)} ${escapeAttr(item.unit || operation.unit || '')}</span>
@@ -573,6 +606,12 @@ function productionConfigTemplate(item, operation) {
           ${models.length ? models.map(model => `<option value="${escapeAttr(model.modelName)}" ${String(model.modelName) === String(selectedModel) ? 'selected' : ''}>${escapeAttr(model.label || model.modelName)}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
         </select>
       </label>
+      <div class="operation-production-split">
+        <button class="secondary-button divide-production" type="button">Dividir produ&ccedil;&atilde;o</button>
+        <p class="form-error split-warning" hidden></p>
+        <div class="operation-splits-target"></div>
+        <button class="secondary-button add-split" type="button" hidden>+ Adicionar divis&atilde;o</button>
+      </div>
     </article>
   `;
 }
@@ -726,8 +765,8 @@ function splitRowTemplate(index, part, operation, machineOptions) {
   `;
 }
 
-function collectSplitRows(modal, operation) {
-  return [...modal.querySelectorAll('.operation-split-row')].map(row => {
+function collectSplitRows(container, operation) {
+  return [...container.querySelectorAll('.operation-split-row')].map(row => {
     const [machineName, peopleCount] = (row.querySelector('[name="splitMachinePeople"]')?.value || operationValue(operation)).split('||');
     return {
       quantity: normalizeSplitQuantity(row.querySelector('[name="splitQty"]')?.value),
@@ -739,20 +778,52 @@ function collectSplitRows(modal, operation) {
   });
 }
 
-function dispatchSplit(wrapper, operation, modal) {
-  const splitRows = modal.querySelectorAll('.operation-split-row');
-  if (!splitRows.length) return true;
-  const parts = collectSplitRows(modal, operation);
-  const total = Number(operation.produceQty || 0);
+function validateSplitParts(parts, total, warning, unit = '') {
   const sum = parts.reduce((amount, part) => amount + Number(part.quantity || 0), 0);
-  const warning = modal.querySelector('.split-warning');
   if (Math.abs(sum - total) > 0.001 || parts.some(part => !(part.quantity > 0) || !part.startDate || !part.startTime || !part.machineName || !part.peopleCount)) {
     if (warning) {
-      warning.textContent = `A soma das partes deve ser ${formatQty(total)} ${operation.unit || ''} e todos os campos devem estar preenchidos.`;
+      warning.textContent = `A soma das partes deve ser ${formatQty(total)} ${unit} e todos os campos devem estar preenchidos.`;
       warning.hidden = false;
     }
     return false;
   }
+  if (warning) warning.hidden = true;
+  return true;
+}
+
+function dispatchSplit(wrapper, operation, modal) {
+  const productionRows = [...modal.querySelectorAll('.operation-production-row')];
+  const rowSplits = productionRows
+    .filter(row => row.querySelectorAll('.operation-split-row').length)
+    .map(row => {
+      const parts = collectSplitRows(row, operation);
+      const total = Number(row.dataset.quantity || 0);
+      const warning = row.querySelector('.split-warning');
+      return {
+        valid: validateSplitParts(parts, total, warning, row.dataset.unit || operation.unit || ''),
+        split: {
+          operationId: String(row.dataset.operationId || operation.operationId || operation.materialId),
+          materialId: String(row.dataset.materialId || operation.materialId),
+          productionIndex: Number(row.dataset.productionIndex || 0),
+          parts
+        }
+      };
+    });
+  if (rowSplits.length) {
+    if (rowSplits.some(item => !item.valid)) return false;
+    wrapper.dispatchEvent(new CustomEvent('operation-split-change', {
+      bubbles: true,
+      detail: { splits: rowSplits.map(item => item.split) }
+    }));
+    return true;
+  }
+
+  const splitRows = modal.querySelector('.operation-splits-target')?.querySelectorAll('.operation-split-row') || [];
+  if (!splitRows.length) return true;
+  const parts = collectSplitRows(modal.querySelector('.operation-splits-target'), operation);
+  const total = Number(operation.produceQty || 0);
+  const warning = modal.querySelector('.operation-split-section > .split-warning');
+  if (!validateSplitParts(parts, total, warning, operation.unit || '')) return false;
   wrapper.dispatchEvent(new CustomEvent('operation-split-change', {
     bubbles: true,
     detail: {
@@ -773,6 +844,7 @@ function showOperationModal(wrapper, operation) {
   const endTime = operationEndTime(operation);
   const breakdown = productionBreakdown(operation);
   const isSharedOperation = breakdown.length > 1;
+  const productivityLabel = productivitySummary(operation, breakdown);
   const breakdownHtml = breakdown.length > 1 ? `
     <section class="wide operation-breakdown operation-productions-section">
       <div class="section-heading compact-heading">
@@ -794,23 +866,25 @@ function showOperationModal(wrapper, operation) {
       <form class="operation-modal-form">
         <div class="operation-detail-grid">
           <article><span>Material</span><strong>${operation.materialName}</strong></article>
-          <article><span>Quantidade</span><strong>${formatQty(operation.produceQty)} ${operation.unit || ''}</strong></article>
-          <label ${isSharedOperation ? 'hidden' : ''}>M&aacute;quina
-            <select name="machinePeople" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
-              ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.machineName}</option>`).join('')}
-            </select>
-          </label>
-          <label ${isSharedOperation ? 'hidden' : ''}>Pessoas
-            <select name="peopleMachine" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
-              ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.peopleCount}</option>`).join('')}
-            </select>
-          </label>
-          <label ${isSharedOperation ? 'hidden' : ''}>Modelo de produ&ccedil;&atilde;o
-            <select name="productionModel" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
-              ${models.length ? models.map(model => `<option value="${model.modelName}" ${String(model.modelName) === String(selectedModel) ? 'selected' : ''}>${model.label || model.modelName}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
-            </select>
-          </label>
-          <article><span>Produtividade</span><strong>${formatQty(operation.outputQty)} ${operation.outputUnit || ''} em ${formatQty(operation.timeSeconds)}s</strong></article>
+          <article><span>Quantidade total</span><strong>${formatQty(operation.produceQty)} ${operation.unit || ''}</strong></article>
+          ${isSharedOperation ? '' : `
+            <label>M&aacute;quina
+              <select name="machinePeople" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
+                ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.machineName}</option>`).join('')}
+              </select>
+            </label>
+            <label>Pessoas
+              <select name="peopleMachine" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
+                ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.peopleCount}</option>`).join('')}
+              </select>
+            </label>
+            <label>Modelo de produ&ccedil;&atilde;o
+              <select name="productionModel" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
+                ${models.length ? models.map(model => `<option value="${model.modelName}" ${String(model.modelName) === String(selectedModel) ? 'selected' : ''}>${model.label || model.modelName}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
+              </select>
+            </label>
+          `}
+          <article><span>Produtividade</span><strong>${escapeAttr(productivityLabel)}</strong></article>
           <label>Data inicial
             <input name="operationStartDate" type="date" value="${operation.startDate || ''}" required />
           </label>
@@ -821,7 +895,7 @@ function showOperationModal(wrapper, operation) {
           <article><span>Hora final</span><strong>${endTime}</strong></article>
           ${breakdownHtml}
         </div>
-        <div class="operation-split-section">
+        <div class="operation-split-section" ${isSharedOperation ? 'hidden' : ''}>
           <div class="section-heading">
             <h3>Divis&atilde;o de produ&ccedil;&atilde;o</h3>
             <button class="secondary-button divide-production" type="button">Dividir produ&ccedil;&atilde;o</button>
@@ -856,28 +930,53 @@ function showOperationModal(wrapper, operation) {
   });
   const splitsTarget = backdrop.querySelector('.operation-splits-target');
   const addSplitButton = backdrop.querySelector('.add-split');
-  const renderSplits = parts => {
-    splitsTarget.innerHTML = parts.map((part, index) => splitRowTemplate(index, part, operation, machineOptions)).join('');
-    addSplitButton.hidden = false;
-    backdrop.querySelector('.split-warning').hidden = true;
+  const renderSplits = (target, parts, scopeOperation, scopeMachineOptions, addButton = null) => {
+    target.innerHTML = parts.map((part, index) => splitRowTemplate(index, part, scopeOperation, scopeMachineOptions)).join('');
+    if (addButton) addButton.hidden = false;
+    target.closest('.operation-production-row, .operation-split-section')?.querySelector('.split-warning')?.toggleAttribute('hidden', true);
   };
-  backdrop.querySelector('.divide-production').addEventListener('click', () => {
+  backdrop.querySelector('.operation-split-section .divide-production')?.addEventListener('click', () => {
     const total = Number(operation.produceQty || 0);
     const half = Number((total / 2).toFixed(3));
-    renderSplits([
+    renderSplits(splitsTarget, [
       { quantity: half, startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount },
       { quantity: Number((total - half).toFixed(3)), startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount }
-    ]);
+    ], operation, machineOptions, addSplitButton);
   });
   addSplitButton.addEventListener('click', () => {
-    const parts = collectSplitRows(backdrop, operation);
+    const parts = collectSplitRows(splitsTarget, operation);
     parts.push({ quantity: 0, startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount });
-    renderSplits(parts);
+    renderSplits(splitsTarget, parts, operation, machineOptions, addSplitButton);
   });
-  splitsTarget.addEventListener('click', event => {
+  backdrop.addEventListener('click', event => {
+    if (event.target.classList.contains('divide-production') && event.target.closest('.operation-production-row')) {
+      const row = event.target.closest('.operation-production-row');
+      const scopeOperation = operationForProductionRow(row, operation);
+      const scopeMachineOptions = scopeOperation.productivityOptions || machineOptions;
+      const target = row.querySelector('.operation-splits-target');
+      const addButton = row.querySelector('.add-split');
+      const total = Number(row.dataset.quantity || scopeOperation.produceQty || 0);
+      const half = Number((total / 2).toFixed(3));
+      renderSplits(target, [
+        { quantity: half, startDate: operation.startDate, startTime, machineName: scopeOperation.machineName, peopleCount: scopeOperation.peopleCount },
+        { quantity: Number((total - half).toFixed(3)), startDate: operation.startDate, startTime, machineName: scopeOperation.machineName, peopleCount: scopeOperation.peopleCount }
+      ], scopeOperation, scopeMachineOptions, addButton);
+      return;
+    }
+    if (event.target.classList.contains('add-split') && event.target.closest('.operation-production-row')) {
+      const row = event.target.closest('.operation-production-row');
+      const scopeOperation = operationForProductionRow(row, operation);
+      const scopeMachineOptions = scopeOperation.productivityOptions || machineOptions;
+      const target = row.querySelector('.operation-splits-target');
+      const parts = collectSplitRows(target, scopeOperation);
+      parts.push({ quantity: 0, startDate: operation.startDate, startTime, machineName: scopeOperation.machineName, peopleCount: scopeOperation.peopleCount });
+      renderSplits(target, parts, scopeOperation, scopeMachineOptions, row.querySelector('.add-split'));
+      return;
+    }
     if (!event.target.classList.contains('remove-split')) return;
+    const container = event.target.closest('.operation-splits-target');
     event.target.closest('.operation-split-row')?.remove();
-    backdrop.querySelectorAll('.operation-split-row').forEach((row, index) => {
+    container?.querySelectorAll('.operation-split-row').forEach((row, index) => {
       row.dataset.splitIndex = String(index);
       row.querySelector('strong').textContent = `Parte ${index + 1}`;
     });

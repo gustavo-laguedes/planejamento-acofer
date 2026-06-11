@@ -1850,6 +1850,15 @@ thead tr:nth-child(2) th {
   padding: 12px;
 }
 
+.operation-production-split {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
 .operation-production-heading {
   display: grid;
   gap: 4px;

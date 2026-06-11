@@ -587,6 +587,10 @@ export function PlanningPage() {
     );
   }
 
+  function consolidatedStockOnlyChecked(productions, materialId) {
+    return productions.length > 0 && productions.every(production => stockOnlyChecked(production.index, materialId));
+  }
+
   function flowNodeKey(node) {
     return String(node.materialId ?? node.materialCode ?? node.materialName);
   }
@@ -742,7 +746,7 @@ export function PlanningPage() {
       ? node.productions
       : [{ index: Number(node.productionIndex || 0), title: node.productionTitle || `Produ&ccedil;&atilde;o ${Number(node.productionIndex || 0) + 1}` }];
     const productionIndex = Number(productions[0]?.index || node.productionIndex || 0);
-    const checked = productions.some(production => stockOnlyChecked(production.index, node.materialId));
+    const checked = consolidatedStockOnlyChecked(productions, node.materialId);
     const stockQty = Number(node.stockQty || 0);
     const requiredQty = Number(node.requiredQty || 0);
     const produceQty = Number(node.produceQty || 0);
@@ -766,10 +770,10 @@ export function PlanningPage() {
               ? '<span>Origem: <strong>Compra / base</strong></span>'
               : `<span>A produzir: <strong>${formatPtBrDecimal(node.produceQty)} ${escapeHtml(node.unit || '')}</strong></span>`}
           </div>
-          ${node.isInitialRawMaterial ? '' : productions.map(production => `<label class="stock-only-toggle">
-            <input type="checkbox" data-stock-only data-production-index="${Number(production.index || 0)}" data-material-id="${node.materialId}" ${stockOnlyChecked(production.index, node.materialId) ? 'checked' : ''} />
-            <span>${productions.length > 1 ? escapeHtml(production.title || `Produ&ccedil;&atilde;o ${Number(production.index || 0) + 1}`) : 'Utilizar saldo'}</span>
-          </label>`).join('')}
+          ${node.isInitialRawMaterial ? '' : `<label class="stock-only-toggle">
+            <input type="checkbox" data-stock-only data-production-indexes="${escapeHtml(productions.map(production => Number(production.index || 0)).join(','))}" data-material-id="${node.materialId}" ${checked ? 'checked' : ''} />
+            <span>Utilizar saldo</span>
+          </label>`}
         </div>
     `;
   }
@@ -1188,11 +1192,17 @@ export function PlanningPage() {
     target.addEventListener('change', async event => {
       if (!event.target.matches('[data-stock-only]')) return;
       const materialId = Number(event.target.dataset.materialId);
-      const productionIndex = Number(event.target.dataset.productionIndex || 0);
+      const productionIndexes = String(event.target.dataset.productionIndexes || event.target.dataset.productionIndex || '0')
+        .split(',')
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value));
+      const indexSet = new Set(productionIndexes);
       draft.stockOnlyMaterials = (draft.stockOnlyMaterials || []).filter(item =>
-        !(Number(item.productionIndex) === productionIndex && Number(item.materialId) === materialId)
+        !(indexSet.has(Number(item.productionIndex)) && Number(item.materialId) === materialId)
       );
-      if (event.target.checked) draft.stockOnlyMaterials.push({ productionIndex, materialId });
+      if (event.target.checked) {
+        productionIndexes.forEach(productionIndex => draft.stockOnlyMaterials.push({ productionIndex, materialId }));
+      }
       saveDraftNow();
       try {
         await simulateCurrent();
@@ -1252,13 +1262,16 @@ export function PlanningPage() {
     });
 
     target.addEventListener('operation-split-change', async event => {
-      const operationId = String(event.detail.operationId || event.detail.materialId);
-      draft.operationSplits = (draft.operationSplits || []).filter(split => String(split.operationId) !== operationId);
-      draft.operationSplits.push({
-        operationId,
-        materialId: event.detail.materialId,
-        productionIndex: event.detail.productionIndex,
-        parts: event.detail.parts
+      const splits = Array.isArray(event.detail.splits) ? event.detail.splits : [event.detail];
+      const operationIds = new Set(splits.map(split => String(split.operationId || split.materialId)));
+      draft.operationSplits = (draft.operationSplits || []).filter(split => !operationIds.has(String(split.operationId)));
+      splits.forEach(split => {
+        draft.operationSplits.push({
+          operationId: String(split.operationId || split.materialId),
+          materialId: split.materialId,
+          productionIndex: split.productionIndex,
+          parts: split.parts
+        });
       });
       saveDraftNow();
       try {

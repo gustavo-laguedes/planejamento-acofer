@@ -488,6 +488,9 @@ function groupOperations(operations) {
       productionModelName: operation.productionModelName || null,
       productivityOptions: operation.productivityOptions || [],
       productionModelOptions: operation.productionModelOptions || [],
+      outputQty: operation.outputQty,
+      outputUnit: operation.outputUnit,
+      timeSeconds: operation.timeSeconds,
       quantity: Number(toNumber(operation.produceQty).toFixed(3)),
       unit: operation.unit || ''
     });
