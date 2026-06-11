@@ -120,7 +120,18 @@ function emptyProduction(index = 0) {
     productionModelName: '',
     plannedQty: '',
     machineName: '',
-    peopleCount: ''
+    peopleCount: '',
+    transports: []
+  };
+}
+
+function emptyTransport() {
+  return {
+    id: `transport-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    materialId: '',
+    originLocationId: '',
+    destinationLocationId: '',
+    hours: ''
   };
 }
 
@@ -155,7 +166,14 @@ function normalizeDraft(rawDraft) {
     ...emptyProduction(index),
     ...production,
     id: production.id || `production-${index}-${Date.now()}`,
-    title: `Produ&ccedil;&atilde;o ${index + 1}`
+    title: `Produ&ccedil;&atilde;o ${index + 1}`,
+    transports: Array.isArray(production.transports)
+      ? production.transports.map((transport, transportIndex) => ({
+          ...emptyTransport(),
+          ...transport,
+          id: transport.id || `transport-${index}-${transportIndex}-${Date.now()}`
+        }))
+      : []
   }));
   return normalized;
 }
@@ -187,10 +205,12 @@ export function PlanningPage() {
   let activeTab = sessionStorage.getItem('planejamento_planning_tab') || 'simulation';
   let materials = [];
   let matrix = [];
+  let locations = [];
   let draft = loadDraft();
   let lastPayload = null;
   let currentSimulation = null;
   let autosaveTimer = null;
+  let recalculationTimer = null;
 
   function toast(error) {
     window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message || error }));
@@ -241,7 +261,34 @@ export function PlanningPage() {
   }
 
   async function loadLookups() {
-    [materials, matrix] = await Promise.all([api('/materials'), api('/productivity')]);
+    [materials, matrix, locations] = await Promise.all([api('/materials'), api('/productivity'), api('/locations')]);
+  }
+
+  function productionMaterialOptions(production) {
+    const root = materialById(production.materialId);
+    if (!root) return [];
+    const seen = new Set();
+    const result = [];
+
+    function visit(material) {
+      if (!material || seen.has(String(material.id))) return;
+      seen.add(String(material.id));
+      result.push(material);
+      const models = productionModelsFor(material);
+      const selectedModel = models.find(model =>
+        String(model.name) === String(material.id === root.id ? production.productionModelName : '')
+      ) || models[0];
+      (selectedModel?.inputMaterials || []).forEach(input => visit(materialById(input.materialId || input.id)));
+    }
+
+    visit(root);
+    return result;
+  }
+
+  function locationOptions(selectedId) {
+    return locations.map(location => `
+      <option value="${location.id}" ${String(location.id) === String(selectedId) ? 'selected' : ''}>${escapeHtml(location.name)}</option>
+    `).join('');
   }
 
   function productionPayload() {
@@ -255,7 +302,18 @@ export function PlanningPage() {
         plannedUnit: material?.primary_unit || 'un',
         machineName: production.machineName,
         peopleCount: Number(production.peopleCount),
-        productionModelName: production.productionModelName
+        productionModelName: production.productionModelName,
+        transports: (production.transports || []).map(transport => ({
+          materialId: Number(transport.materialId),
+          originLocationId: Number(transport.originLocationId),
+          destinationLocationId: Number(transport.destinationLocationId),
+          hours: parsePtBrDecimal(transport.hours, 0)
+        })).filter(transport =>
+          transport.materialId
+          && transport.originLocationId
+          && transport.destinationLocationId
+          && transport.hours > 0
+        )
       };
     });
   }
@@ -315,6 +373,24 @@ export function PlanningPage() {
       toast('Revise os horarios e pausas dos turnos.');
       return false;
     }
+    const invalidTransport = draft.productions.some(production => {
+      const activeTransports = (production.transports || []).filter(transport =>
+        transport.materialId
+        || transport.originLocationId
+        || transport.destinationLocationId
+        || String(transport.hours || '').trim()
+      );
+      return activeTransports.some(transport =>
+        !materialById(transport.materialId)
+        || !locations.some(location => String(location.id) === String(transport.originLocationId))
+        || !locations.some(location => String(location.id) === String(transport.destinationLocationId))
+        || !(parsePtBrDecimal(transport.hours, 0) > 0)
+      );
+    });
+    if (invalidTransport) {
+      toast('Revise material, origem, destino e tempo dos transportes.');
+      return false;
+    }
     return true;
   }
 
@@ -353,6 +429,33 @@ export function PlanningPage() {
       .map(row => row.people_count)
       .filter(Boolean))];
     const models = productionModelsFor(material);
+    const transportMaterials = productionMaterialOptions(production);
+    const transportRows = (production.transports || []).map((transport, transportIndex) => `
+      <article class="transport-row" data-transport-id="${transport.id}">
+        <label>Material transportado
+          <select name="materialId">
+            <option value="">Selecione</option>
+            ${transportMaterials.map(item => `<option value="${item.id}" ${String(item.id) === String(transport.materialId) ? 'selected' : ''}>${escapeHtml(materialLabel(item))}</option>`).join('')}
+          </select>
+        </label>
+        <label>Origem
+          <select name="originLocationId">
+            <option value="">Selecione</option>
+            ${locationOptions(transport.originLocationId)}
+          </select>
+        </label>
+        <label>Destino
+          <select name="destinationLocationId">
+            <option value="">Selecione</option>
+            ${locationOptions(transport.destinationLocationId)}
+          </select>
+        </label>
+        <label>Tempo de transporte
+          <input name="hours" type="text" inputmode="decimal" placeholder="4" value="${escapeHtml(transport.hours)}" />
+        </label>
+        <button class="link-button danger remove-transport" type="button">Remover</button>
+      </article>
+    `).join('');
     return `
       <article class="planning-subcard production-block" data-production-id="${production.id}">
         <div class="planning-subcard-header">
@@ -398,6 +501,15 @@ export function PlanningPage() {
             </select>
           </label>
         </div>
+        <section class="transport-section">
+          <div class="planning-subcard-header">
+            <h3>Transportes</h3>
+            <button class="secondary-button add-transport" type="button">+ Adicionar transporte</button>
+          </div>
+          <div class="transport-list">
+            ${transportRows || '<div class="empty-state compact">Nenhum transporte cadastrado.</div>'}
+          </div>
+        </section>
       </article>
     `;
   }
@@ -547,6 +659,17 @@ export function PlanningPage() {
       renderSimulationTab().catch(toast);
     }
 
+    function rerenderProductionsBuilder() {
+      saveDraftNow();
+      productionsTarget.innerHTML = draft.productions.map(renderProduction).join('');
+    }
+
+    function queueSimulationRefresh() {
+      if (!currentSimulation) return;
+      clearTimeout(recalculationTimer);
+      recalculationTimer = setTimeout(() => simulateCurrent().catch(toast), 250);
+    }
+
     function updateDraftFromGeneral() {
       draft.planningStartDate = form.elements.planningStartDate.value;
       draft.planningEndDate = form.elements.planningEndDate.value;
@@ -577,6 +700,15 @@ export function PlanningPage() {
       if (!card) return;
       const production = draft.productions.find(item => item.id === card.dataset.productionId);
       if (!production || !event.target.name) return;
+      const transportRow = event.target.closest('[data-transport-id]');
+      if (transportRow) {
+        const transport = (production.transports || []).find(item => item.id === transportRow.dataset.transportId);
+        if (!transport) return;
+        transport[event.target.name] = event.target.value;
+        queueAutosave();
+        queueSimulationRefresh();
+        return;
+      }
       production[event.target.name] = event.target.value;
       if (event.target.name === 'materialSearch') {
         const searchValue = event.target.value.trim().toLowerCase();
@@ -588,6 +720,7 @@ export function PlanningPage() {
         production.productionModelName = '';
         production.machineName = '';
         production.peopleCount = '';
+        production.transports = [];
         renderMaterialSuggestions(card, production);
         if (material) rerenderBuilder();
       }
@@ -599,6 +732,15 @@ export function PlanningPage() {
       if (!card) return;
       const production = draft.productions.find(item => item.id === card.dataset.productionId);
       if (!production || !event.target.name) return;
+      const transportRow = event.target.closest('[data-transport-id]');
+      if (transportRow) {
+        const transport = (production.transports || []).find(item => item.id === transportRow.dataset.transportId);
+        if (!transport) return;
+        transport[event.target.name] = event.target.value;
+        saveDraftNow();
+        queueSimulationRefresh();
+        return;
+      }
       production[event.target.name] = event.target.value;
       if (event.target.name === 'machineName') production.peopleCount = '';
       rerenderBuilder();
@@ -652,13 +794,30 @@ export function PlanningPage() {
       production.productionModelName = '';
       production.machineName = '';
       production.peopleCount = '';
+      production.transports = [];
       rerenderBuilder();
     });
 
     productionsTarget.addEventListener('click', event => {
       const card = event.target.closest('[data-production-id]');
-      if (!card || !event.target.classList.contains('remove-production')) return;
-      draft.productions = draft.productions.filter(production => production.id !== card.dataset.productionId);
+      if (!card) return;
+      const production = draft.productions.find(item => item.id === card.dataset.productionId);
+      if (!production) return;
+      if (event.target.classList.contains('add-transport')) {
+        production.transports = [...(production.transports || []), emptyTransport()];
+        rerenderProductionsBuilder();
+        queueSimulationRefresh();
+        return;
+      }
+      if (event.target.classList.contains('remove-transport')) {
+        const row = event.target.closest('[data-transport-id]');
+        production.transports = (production.transports || []).filter(transport => transport.id !== row?.dataset.transportId);
+        rerenderProductionsBuilder();
+        queueSimulationRefresh();
+        return;
+      }
+      if (!event.target.classList.contains('remove-production')) return;
+      draft.productions = draft.productions.filter(item => item.id !== card.dataset.productionId);
       lastPayload = null;
       currentSimulation = null;
       rerenderBuilder();

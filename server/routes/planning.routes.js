@@ -8,7 +8,7 @@ const router = Router();
 async function planningContext(db, payload = {}) {
   const materialId = Number(payload.materialId);
   const materialCode = String(payload.materialCode || '').trim();
-  const [materials, inputs, stockRows, inventoryRows, productionRows, matrixRows] = await Promise.all([
+  const [materials, inputs, stockRows, inventoryRows, productionRows, matrixRows, locations] = await Promise.all([
     db`SELECT * FROM materials WHERE active = true ORDER BY name`,
     db`SELECT * FROM material_inputs`,
     db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit FROM stock_snapshot`,
@@ -19,9 +19,11 @@ async function planningContext(db, payload = {}) {
       ORDER BY material_id, location_id, updated_at DESC, id DESC
     `,
     db`SELECT material_id, quantity FROM production_launches WHERE material_id IS NOT NULL`,
-    db`SELECT * FROM productivity_matrix WHERE active = true ORDER BY updated_at DESC`
+    db`SELECT * FROM productivity_matrix WHERE active = true ORDER BY updated_at DESC`,
+    db`SELECT * FROM locations WHERE active = true ORDER BY name`
   ]);
   const materialsById = new Map(materials.map(material => [String(material.id), material]));
+  const locationsById = new Map(locations.map(location => [String(location.id), location]));
   const inputsByMaterialId = new Map();
   for (const input of inputs) {
     const key = String(input.material_id);
@@ -34,7 +36,7 @@ async function planningContext(db, payload = {}) {
         item.name === payload.materialName
         || (Array.isArray(item.codes) && item.codes.some(code => String(code) === materialCode))
       );
-  return { material, materialsById, inputsByMaterialId, stockRows, inventoryRows, productionRows, matrixRows };
+  return { material, materialsById, inputsByMaterialId, locationsById, stockRows, inventoryRows, productionRows, matrixRows };
 }
 
 router.post('/simulate', async (req, res, next) => {

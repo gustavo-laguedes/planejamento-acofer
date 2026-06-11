@@ -27,6 +27,7 @@ function toOperationalHours(value) {
 }
 
 function normalizedMaterialKey(operation) {
+  if (operation.operationType === 'transport') return operation.operationId || `transport:${operation.productionKey}:${operation.productionOrder}`;
   const materialKey = operation.materialId ? String(operation.materialId) : [
     String(operation.materialName || '').trim().toLowerCase(),
     operation.materialCode || '',
@@ -430,6 +431,10 @@ function groupOperations(operations) {
   const grouped = new Map();
   for (const operation of operations) {
     const key = normalizedMaterialKey(operation);
+    if (operation.operationType === 'transport') {
+      grouped.set(key, { ...operation });
+      continue;
+    }
     if (!grouped.has(key)) {
       grouped.set(key, { ...operation, requiredQty: 0, produceQty: 0, stockUsedQty: 0, dependencyMaterialIds: [], successorMaterialIds: [], dependencyOperationIds: [], successorOperationIds: [] });
     }
@@ -446,9 +451,11 @@ function groupOperations(operations) {
   const result = [...grouped.values()]
     .map(operation => ({
       ...operation,
-      produceQty: Number(Math.max(toNumber(operation.requiredQty) - toNumber(operation.stockQty), 0).toFixed(3))
+      produceQty: operation.operationType === 'transport'
+        ? toNumber(operation.produceQty)
+        : Number(Math.max(toNumber(operation.requiredQty) - toNumber(operation.stockQty), 0).toFixed(3))
     }))
-    .filter(operation => operation.produceQty > 0)
+    .filter(operation => operation.operationType === 'transport' || operation.produceQty > 0)
     .sort((left, right) => toNumber(left.productionOrder) - toNumber(right.productionOrder));
   const materialIds = new Set(result.map(operation => String(operation.materialId)));
   const operationIds = new Set(result.map(operation => String(operation.operationId || operation.materialId)));
@@ -459,6 +466,98 @@ function groupOperations(operations) {
     dependencyOperationIds: (operation.dependencyOperationIds || []).filter(operationId => operationIds.has(String(operationId))),
     successorOperationIds: (operation.successorOperationIds || []).filter(operationId => operationIds.has(String(operationId)))
   }));
+}
+
+function normalizeTransportEntries(production, context) {
+  const source = Array.isArray(production.transports) ? production.transports : [];
+  return source.map((transport, index) => {
+    const material = context.materialsById.get(String(transport.materialId));
+    const origin = context.locationsById?.get(String(transport.originLocationId));
+    const destination = context.locationsById?.get(String(transport.destinationLocationId));
+    const hours = toOperationalHours(transport.hours);
+    if (!material || !origin || !destination || !(hours > 0)) return null;
+    return {
+      index,
+      material,
+      origin,
+      destination,
+      hours,
+      totalMinutes: Math.ceil(hours * 60)
+    };
+  }).filter(Boolean);
+}
+
+function applyProductionTransports(operations, production, context) {
+  const transports = normalizeTransportEntries(production, context);
+  if (!transports.length) return operations;
+  const result = operations.map(operation => ({ ...operation }));
+  const byMaterialId = new Map(result.map(operation => [String(operation.materialId), operation]));
+  const byOperationId = new Map(result.map(operation => [String(operation.operationId), operation]));
+  const transportsByMaterialId = new Map();
+  for (const transport of transports) {
+    const key = String(transport.material.id);
+    if (!transportsByMaterialId.has(key)) transportsByMaterialId.set(key, []);
+    transportsByMaterialId.get(key).push(transport);
+  }
+
+  transportsByMaterialId.forEach((materialTransports, materialId) => {
+    const sourceOperation = byMaterialId.get(String(materialId));
+    if (!sourceOperation) return;
+    const originalSuccessorIds = [...new Set(sourceOperation.successorOperationIds || [])];
+    const transportOperations = materialTransports
+      .sort((left, right) => left.index - right.index)
+      .map((transport, transportIndex) => {
+        const operationId = `${production.productionIndex}:transport:${transport.index}:${transport.material.id}`;
+        return {
+          operationType: 'transport',
+          operationId,
+          productionIndex: production.productionIndex,
+          productionKey: `production-${production.productionIndex}`,
+          productionTitle: `Producao ${production.productionIndex + 1}`,
+          productionOrder: toNumber(sourceOperation.productionOrder) + 0.5 + (transportIndex / 100),
+          materialId: transport.material.id,
+          materialName: transport.material.name,
+          materialCode: materialCode(transport.material),
+          requiredQty: 0,
+          stockQty: 0,
+          stockUsedQty: 0,
+          produceQty: 0,
+          unit: transport.material.primary_unit,
+          status: 'Transporte',
+          machineName: null,
+          peopleCount: null,
+          originLocationId: transport.origin.id,
+          originLocationName: transport.origin.name,
+          destinationLocationId: transport.destination.id,
+          destinationLocationName: transport.destination.name,
+          transportHours: transport.hours,
+          totalMinutes: transport.totalMinutes,
+          dependencyMaterialIds: [String(transport.material.id)],
+          dependencyOperationIds: transportIndex === 0 ? [sourceOperation.operationId] : [],
+          successorMaterialIds: [],
+          successorOperationIds: []
+        };
+      });
+
+    transportOperations.forEach((transportOperation, index) => {
+      const nextTransport = transportOperations[index + 1];
+      if (index > 0) transportOperation.dependencyOperationIds = [transportOperations[index - 1].operationId];
+      transportOperation.successorOperationIds = nextTransport ? [nextTransport.operationId] : originalSuccessorIds;
+      result.push(transportOperation);
+      byOperationId.set(String(transportOperation.operationId), transportOperation);
+    });
+
+    sourceOperation.successorOperationIds = [transportOperations[0].operationId];
+    const lastTransportId = transportOperations[transportOperations.length - 1].operationId;
+    for (const successorId of originalSuccessorIds) {
+      const successor = byOperationId.get(String(successorId));
+      if (!successor) continue;
+      successor.dependencyOperationIds = (successor.dependencyOperationIds || [])
+        .map(operationId => String(operationId) === String(sourceOperation.operationId) ? lastTransportId : operationId);
+    }
+  });
+
+  return result;
 }
 
 function parseTime(value, fallback) {
@@ -682,6 +781,16 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
   const source = groupOperations(operations);
 
   const enrich = operation => {
+    if (operation.operationType === 'transport') {
+      return {
+        ...operation,
+        totalMinutes: Math.max(Math.ceil(toNumber(operation.totalMinutes || toNumber(operation.transportHours) * 60)), 1),
+        outputQty: 0,
+        outputUnit: operation.unit || 'un',
+        timeSeconds: Math.max(Math.ceil(toNumber(operation.totalMinutes || toNumber(operation.transportHours) * 60)), 1) * 60,
+        minutesPerUnit: 0
+      };
+    }
     const matrix = resolveMatrix(
       { name: operation.materialName, codes: operation.materialCode ? [operation.materialCode] : [] },
       matrixRows,
@@ -745,14 +854,14 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
         .map(operationId => scheduledByMaterialId.get(String(operationId)))
         .filter(Boolean)
         .map(item => ({ date: item.endDate, minutes: parseTime(item.endTime, minutesToTime(shiftStart)) })));
-      const machineCursor = byMachine.get(operation.machineName || '') || startCursor;
+      const machineCursor = operation.operationType === 'transport' ? startCursor : byMachine.get(operation.machineName || '') || startCursor;
       const override = overrideForMaterial(operationOverrides, operation);
       const overrideCursor = overrideStartCursor(override, startCursor.date, shiftStart);
       const cursor = overrideCursor || maxCursor(startCursor, dependencyEnd, machineCursor);
       const slot = scheduleForward(cursor, operation.totalMinutes, calendar);
       const item = scheduledItem(operation, slot);
       scheduledByMaterialId.set(String(operation.operationId || operation.materialId), item);
-      byMachine.set(operation.machineName || '', slot.end);
+      if (operation.operationType !== 'transport') byMachine.set(operation.machineName || '', slot.end);
       scheduled.push(item);
     }
   }
@@ -769,12 +878,12 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
         .map(operationId => scheduledByMaterialId.get(String(operationId)))
         .filter(Boolean)
         .map(item => ({ date: item.startDate, minutes: parseTime(item.startTime, minutesToTime(shiftStart)) })));
-      const machineCursor = reverseMachine.get(operation.machineName || '') || endCursor;
+      const machineCursor = operation.operationType === 'transport' ? endCursor : reverseMachine.get(operation.machineName || '') || endCursor;
       const cursor = minCursor(endCursor, successorStart, machineCursor);
       const slot = scheduleBackward(cursor, operation.totalMinutes, calendar);
       const item = scheduledItem(operation, slot);
       scheduledByMaterialId.set(String(operation.operationId || operation.materialId), item);
-      reverseMachine.set(operation.machineName || '', slot.start);
+      if (operation.operationType !== 'transport') reverseMachine.set(operation.machineName || '', slot.start);
       scheduled.push(item);
     }
   }
@@ -851,6 +960,11 @@ function buildSinglePlan(payload, context) {
     productionTitle: 'Producao 1',
     forcedStockOnly: stockOnlySet(payload)
   });
+  const production = {
+    ...payload,
+    productionIndex: 0,
+    transports: Array.isArray(payload.transports) ? payload.transports : []
+  };
   const tree = buildRequirementTree({
     material,
     quantity: payload.plannedQty,
@@ -864,7 +978,7 @@ function buildSinglePlan(payload, context) {
     productionIndex: 0,
     productionTitle: 'Producao 1'
   });
-  const operations = scheduleOperations(built.operations, context.matrixRows, {
+  const operations = scheduleOperations(applyProductionTransports(built.operations, production, context), context.matrixRows, {
     dateMode: payload.dateMode,
     selectedDate: payload.selectedDate || payload.startDate,
     hoursPerDay: payload.hoursPerDay,
@@ -979,7 +1093,7 @@ export function buildPlan(payload, context) {
     return {
       production,
       tree,
-      operations: built.operations.map(operation => ({
+      operations: applyProductionTransports(built.operations, production, context).map(operation => ({
         ...operation,
         productionOrder: operation.productionOrder + (production.productionIndex * 1000)
       }))

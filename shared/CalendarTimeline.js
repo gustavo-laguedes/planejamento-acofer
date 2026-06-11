@@ -71,6 +71,12 @@ function formatQty(value) {
   return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 }
 
+function formatHours(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return '';
+  return number.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+}
+
 function escapeAttr(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -295,6 +301,19 @@ function dispatchConfig(wrapper, operation, modal) {
 }
 
 function tooltipText(operation) {
+  if (operation.operationType === 'transport') {
+    return [
+      'Transporte',
+      `Material: ${operation.materialName || '-'}`,
+      `Rota: ${operation.originLocationName || '-'} -> ${operation.destinationLocationName || '-'}`,
+      `Duracao: ${formatHours(operation.transportHours)}h`,
+      '',
+      `Data inicial: ${formatDate(operation.startDate)}`,
+      `Hora inicial: ${operationStartTime(operation)}`,
+      `Data final: ${formatDate(operation.endDate)}`,
+      `Hora final: ${operationEndTime(operation)}`
+    ].join('\n');
+  }
   const people = Number(operation.peopleCount || 0);
   const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
   return [
@@ -528,12 +547,18 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const startTime = operationStartTime(operation);
               const endTime = operationEndTime(operation);
               const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
+              const isTransport = operation.operationType === 'transport';
               const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
               const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
               const shouldShowText = segment.visualIndex === 0 && ((end - start) / 60) * zoom.hourHeight >= 62;
               return `
-                <button class="gantt-bar${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(productionColors.get(productionKey))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
-                  ${shouldShowText ? `
+                <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(productionColors.get(productionKey))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+                  ${shouldShowText && isTransport ? `
+                    <strong>Transporte</strong>
+                    <span>${operation.materialName || '-'}</span>
+                    <span>${operation.originLocationName || '-'} -&gt; ${operation.destinationLocationName || '-'}</span>
+                    <small>${formatHours(operation.transportHours)}h | ${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
+                  ` : shouldShowText ? `
                     <strong>${operation.materialName}</strong>
                     <span>${quantity || '-'}</span>
                     <span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
@@ -583,6 +608,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     const bar = event.target.closest('.gantt-bar');
     if (!bar) return;
     const operation = operations.find(item => String(item.operationId || item.materialId) === String(bar.dataset.operationId));
+    if (operation?.operationType === 'transport') return;
     if (operation) showOperationModal(wrapper, operation);
   });
 

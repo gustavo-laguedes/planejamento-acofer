@@ -1179,6 +1179,39 @@ thead tr:nth-child(2) th {
   height: 16px;
 }
 
+.transport-section {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.transport-list {
+  display: grid;
+  gap: 10px;
+}
+
+.transport-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+  border: 1px solid #d8e2e8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.transport-row .remove-transport {
+  min-height: 38px;
+  padding-bottom: 8px;
+}
+
+.empty-state.compact {
+  padding: 14px;
+  text-align: left;
+}
+
 .operation-config-target {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -1506,6 +1539,16 @@ thead tr:nth-child(2) th {
   padding: 0;
 }
 
+.gantt-bar-transport {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.32) 0,
+    rgba(255, 255, 255, 0.32) 7px,
+    transparent 7px,
+    transparent 14px
+  );
+}
+
 .gantt-lunch-band {
   position: absolute;
   top: var(--lunch-top);
@@ -1633,7 +1676,8 @@ thead tr:nth-child(2) th {
   .filters,
   .summary-grid,
   .compact-summary,
-  .planning-inner-grid {
+  .planning-inner-grid,
+  .transport-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1665,6 +1709,7 @@ thead tr:nth-child(2) th {
   .material-usage-row,
   .consumed-material-header,
   .consumed-material-row,
+  .transport-row,
   .inventory-grid {
     grid-template-columns: 1fr;
   }
