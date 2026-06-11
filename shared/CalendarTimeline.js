@@ -213,6 +213,55 @@ function colorStyle(color) {
   return `--event-bg: ${color.bg}; --event-border: ${color.border}; --event-text: ${color.text};`;
 }
 
+function productionBreakdown(operation) {
+  const source = Array.isArray(operation.productionBreakdown) && operation.productionBreakdown.length
+    ? operation.productionBreakdown
+    : [{
+      productionIndex: Number(operation.productionIndex || 0),
+      productionKey: operation.productionKey || `production-${Number(operation.productionIndex || 0)}`,
+      productionTitle: operation.productionTitle || `Producao ${Number(operation.productionIndex || 0) + 1}`,
+      quantity: Number(operation.produceQty || 0),
+      unit: operation.unit || ''
+    }];
+  const grouped = new Map();
+  source.forEach(item => {
+    const key = String(item.productionKey || `production-${Number(item.productionIndex || 0)}`);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        ...item,
+        productionKey: key,
+        quantity: 0,
+        unit: item.unit || operation.unit || ''
+      });
+    }
+    const current = grouped.get(key);
+    current.quantity = Number((Number(current.quantity || 0) + Number(item.quantity || 0)).toFixed(3));
+  });
+  return [...grouped.values()].sort((left, right) => Number(left.productionIndex || 0) - Number(right.productionIndex || 0));
+}
+
+function breakdownText(operation) {
+  const items = productionBreakdown(operation);
+  if (items.length <= 1) return [];
+  return [
+    '',
+    'Producoes:',
+    ...items.map(item => `${item.productionTitle || `Producao ${Number(item.productionIndex || 0) + 1}`}: ${formatQty(item.quantity)} ${item.unit || operation.unit || ''}`.trim())
+  ];
+}
+
+function productionStripStyle(items, colorForProduction) {
+  if (!items.length) return '';
+  const step = 100 / items.length;
+  const stops = items.map((item, index) => {
+    const color = colorForProduction(item.productionKey).border;
+    const start = Number((index * step).toFixed(3));
+    const end = Number(((index + 1) * step).toFixed(3));
+    return `${color} ${start}% ${end}%`;
+  }).join(', ');
+  return `background: linear-gradient(90deg, ${stops});`;
+}
+
 function normalizeShiftConfig(config = {}) {
   const source = Array.isArray(config.shifts) && config.shifts.length ? config.shifts : [{
     label: 'Turno 1',
@@ -424,7 +473,8 @@ function tooltipText(operation) {
     `Data inicial: ${formatDate(operation.startDate)}`,
     `Hora inicial: ${operationStartTime(operation)}`,
     `Data final: ${formatDate(operation.endDate)}`,
-    `Hora final: ${operationEndTime(operation)}`
+    `Hora final: ${operationEndTime(operation)}`,
+    ...breakdownText(operation)
   ].join('\n');
   return [
     operation.materialName,
@@ -535,6 +585,15 @@ function showOperationModal(wrapper, operation) {
   const selectedModel = operation.productionModelName || models[0]?.modelName || '';
   const startTime = operationStartTime(operation);
   const endTime = operationEndTime(operation);
+  const breakdown = productionBreakdown(operation);
+  const breakdownHtml = breakdown.length > 1 ? `
+    <article class="wide operation-breakdown">
+      <span>Produ&ccedil;&otilde;es inclu&iacute;das</span>
+      ${breakdown.map(item => `
+        <strong>${escapeAttr(item.productionTitle || `Producao ${Number(item.productionIndex || 0) + 1}`)}: ${formatQty(item.quantity)} ${escapeAttr(item.unit || operation.unit || '')}</strong>
+      `).join('')}
+    </article>
+  ` : '';
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   backdrop.innerHTML = `
@@ -571,6 +630,7 @@ function showOperationModal(wrapper, operation) {
           </label>
           <article><span>Data final</span><strong>${formatDate(operation.endDate)}</strong></article>
           <article><span>Hora final</span><strong>${endTime}</strong></article>
+          ${breakdownHtml}
         </div>
         <div class="operation-split-section">
           <div class="section-heading">
@@ -661,6 +721,10 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   operations.forEach(operation => {
     const key = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
     if (!productionIndexes.has(key)) productionIndexes.set(key, productionIndexes.size);
+    productionBreakdown(operation).forEach(item => {
+      const breakdownKey = String(item.productionKey || `production-${Number(item.productionIndex || 0)}`);
+      if (!productionIndexes.has(breakdownKey)) productionIndexes.set(breakdownKey, productionIndexes.size);
+    });
   });
   const stageIndexes = new Map();
   operations
@@ -680,6 +744,10 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
       }
     });
   const shifts = normalizeShiftConfig(config);
+  const colorForProduction = productionKey => {
+    const productionColorIndex = productionIndexes.get(String(productionKey)) || 0;
+    return PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length][0];
+  };
   const shiftStart = Math.min(...shifts.map(shift => shift.shiftStart));
   const shiftEnd = Math.max(...shifts.map(shift => shift.shiftEnd));
   const dayStart = 0;
@@ -795,8 +863,11 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
               const productionBaseColor = palette[0];
               const eventColor = isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
+              const breakdown = isTransport ? [] : productionBreakdown(operation);
+              const stripStyle = productionStripStyle(breakdown, colorForProduction);
               return `
                 <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(eventColor)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+                  ${breakdown.length > 1 ? `<span class="gantt-production-strip" style="${escapeAttr(stripStyle)}"></span>` : ''}
                   ${shouldShowText && isTransport ? `
                     <strong>Transporte</strong>
                     <span>${operation.materialName || '-'}</span>
@@ -806,6 +877,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
                     <strong>${operation.materialName}</strong>
                     <span>${quantity || '-'}</span>
                     <span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
+                    ${breakdown.length > 1 ? `<small>${breakdown.map(item => `${escapeAttr(item.productionTitle || `P${Number(item.productionIndex || 0) + 1}`)}: ${formatQty(item.quantity)}`).join(' | ')}</small>` : ''}
                     <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
                   ` : `<span class="gantt-compact-label">${escapeAttr(shortLabel)}</span>`}
                 </button>

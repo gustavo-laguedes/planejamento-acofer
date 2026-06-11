@@ -34,12 +34,13 @@ function normalizedMaterialKey(operation) {
     operation.materialCode || '',
     operation.unit || ''
   ].join('|');
+  const logicalStage = Math.round(toNumber(operation.productionOrder) % 1000);
   return [
-    operation.productionKey || '',
     materialKey,
     operation.machineName || '',
     operation.productionModelName || '',
-    operation.productionOrder || 0
+    operation.unit || '',
+    logicalStage
   ].join('|');
 }
 
@@ -432,16 +433,43 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
 
 function groupOperations(operations) {
   const grouped = new Map();
+  const operationIdToGroupId = new Map();
   for (const operation of operations) {
     const key = normalizedMaterialKey(operation);
     if (operation.operationType === 'transport') {
       grouped.set(key, { ...operation });
+      operationIdToGroupId.set(String(operation.operationId || operation.materialId), String(operation.operationId || operation.materialId));
       continue;
     }
+    const groupOperationId = `group:${key}`;
+    operationIdToGroupId.set(String(operation.operationId || operation.materialId), groupOperationId);
     if (!grouped.has(key)) {
-      grouped.set(key, { ...operation, requiredQty: 0, produceQty: 0, stockUsedQty: 0, dependencyMaterialIds: [], successorMaterialIds: [], dependencyOperationIds: [], successorOperationIds: [] });
+      grouped.set(key, {
+        ...operation,
+        operationId: groupOperationId,
+        groupedOperationIds: [],
+        productionBreakdown: [],
+        requiredQty: 0,
+        produceQty: 0,
+        stockUsedQty: 0,
+        dependencyMaterialIds: [],
+        successorMaterialIds: [],
+        dependencyOperationIds: [],
+        successorOperationIds: []
+      });
     }
     const current = grouped.get(key);
+    const sourceOperationId = String(operation.operationId || operation.materialId);
+    current.groupedOperationIds = [...new Set([...(current.groupedOperationIds || []), sourceOperationId])];
+    current.productionBreakdown.push({
+      productionIndex: Number(operation.productionIndex || 0),
+      productionKey: operation.productionKey || `production-${Number(operation.productionIndex || 0)}`,
+      productionTitle: operation.productionTitle || `Producao ${Number(operation.productionIndex || 0) + 1}`,
+      materialId: operation.materialId,
+      materialName: operation.materialName,
+      quantity: Number(toNumber(operation.produceQty).toFixed(3)),
+      unit: operation.unit || ''
+    });
     current.requiredQty = Number((toNumber(current.requiredQty) + toNumber(operation.requiredQty)).toFixed(3));
     current.produceQty = Number((toNumber(current.produceQty) + toNumber(operation.produceQty)).toFixed(3));
     current.productionOrder = Math.min(toNumber(current.productionOrder), toNumber(operation.productionOrder));
@@ -455,14 +483,18 @@ function groupOperations(operations) {
   const result = [...grouped.values()]
     .filter(operation => operation.operationType === 'transport' || operation.produceQty > 0)
     .sort((left, right) => toNumber(left.productionOrder) - toNumber(right.productionOrder));
-  const materialIds = new Set(result.map(operation => String(operation.materialId)));
   const operationIds = new Set(result.map(operation => String(operation.operationId || operation.materialId)));
+  const remapIds = ids => [...new Set((ids || [])
+    .map(id => operationIdToGroupId.get(String(id)) || String(id))
+    .filter(Boolean))];
   return result.map(operation => ({
     ...operation,
-    dependencyMaterialIds: (operation.dependencyMaterialIds || []).filter(materialId => materialIds.has(String(materialId))),
-    successorMaterialIds: (operation.successorMaterialIds || []).filter(materialId => materialIds.has(String(materialId))),
-    dependencyOperationIds: (operation.dependencyOperationIds || []).filter(operationId => operationIds.has(String(operationId))),
-    successorOperationIds: (operation.successorOperationIds || []).filter(operationId => operationIds.has(String(operationId)))
+    dependencyOperationIds: remapIds(operation.dependencyOperationIds)
+      .filter(operationId => operationIds.has(String(operationId)) && String(operationId) !== String(operation.operationId)),
+    successorOperationIds: remapIds(operation.successorOperationIds)
+      .filter(operationId => operationIds.has(String(operationId)) && String(operationId) !== String(operation.operationId)),
+    dependencyMaterialIds: [],
+    successorMaterialIds: []
   }));
 }
 
@@ -563,6 +595,9 @@ function splitEntries(payload = {}) {
 }
 
 function splitMatchesOperation(split, operation) {
+  if (Array.isArray(operation.groupedOperationIds) && operation.groupedOperationIds.length > 1) {
+    return String(split.operationId || '') === String(operation.operationId || operation.materialId);
+  }
   if (String(split.operationId || '').includes(':parte:')) {
     return String(split.operationId || '') === String(operation.operationId || operation.materialId);
   }
@@ -851,11 +886,11 @@ function segmentsForOperation(operation, calendar) {
   return segments;
 }
 
-function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, shifts, operationOverrides = {} }) {
+function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, shifts, operationOverrides = {}, operationSplits = [] }) {
   const calendar = calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours });
   const { shiftStart, shiftEnd } = calendar;
   const scheduled = [];
-  const source = groupOperations(operations);
+  const source = applyOperationSplits(groupOperations(operations), { operationSplits });
 
   const enrich = operation => {
     if (operation.operationType === 'transport') {
@@ -1063,7 +1098,8 @@ function buildSinglePlan(payload, context) {
     shiftStartTime: payload.shiftStartTime,
     shiftEndTime: payload.shiftEndTime,
     lunchHours: payload.lunchHours,
-    operationOverrides
+    operationOverrides,
+    operationSplits: payload.operationSplits
   });
   const days = buildDays(operations, material.primary_unit);
   const hoursPerDay = Math.max(toOperationalHours(payload.hoursPerDay || 8), 1 / 60);
@@ -1188,7 +1224,8 @@ export function buildPlan(payload, context) {
     shiftEndTime: payload.shiftEndTime,
     lunchHours: payload.lunchHours,
     shifts: payload.shifts,
-    operationOverrides
+    operationOverrides,
+    operationSplits: payload.operationSplits
   });
   const firstMaterial = productions[0].material;
   const days = buildDays(operations, firstMaterial.primary_unit);

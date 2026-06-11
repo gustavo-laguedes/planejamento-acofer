@@ -1695,6 +1695,20 @@ thead tr:nth-child(2) th {
   overflow: hidden;
 }
 
+.gantt-production-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  pointer-events: none;
+}
+
+.gantt-production-strip + strong,
+.gantt-production-strip + .gantt-compact-label {
+  margin-top: 3px;
+}
+
 .gantt-bar-compact {
   padding: 0 6px;
   place-items: center;
@@ -1736,7 +1750,8 @@ thead tr:nth-child(2) th {
   font-weight: 800;
   text-transform: uppercase;
   pointer-events: none;
-  z-index: 2;
+  z-index: 6;
+  box-shadow: 0 -3px 0 rgba(255, 255, 255, 0.86), 0 3px 0 rgba(255, 255, 255, 0.86);
 }
 
 .calendar-tooltip {
@@ -1795,6 +1810,15 @@ thead tr:nth-child(2) th {
 
 .operation-detail-grid .wide {
   grid-column: 1 / -1;
+}
+
+.operation-breakdown {
+  align-content: start;
+}
+
+.operation-breakdown strong {
+  color: var(--petroleum-dark);
+  font-size: 13px;
 }
 
 .operation-detail-grid span,
