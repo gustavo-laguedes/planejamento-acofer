@@ -348,13 +348,14 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
     guard += 1;
     for (const state of [...states.values()]) {
       const currentMaterial = state.material;
-      const forceStockOnly = forcedStockOnly.has(stockOnlyKey(productionIndex, currentMaterial.id));
+      const useStockBalance = forcedStockOnly.has(stockOnlyKey(productionIndex, currentMaterial.id));
       const stockQty = stockLedger.available(currentMaterial);
-      const produceQty = forceStockOnly ? 0 : Math.max(toNumber(state.requiredQty) - stockQty, 0);
+      const stockUsedQty = useStockBalance ? Math.min(stockQty, toNumber(state.requiredQty)) : 0;
+      const produceQty = Math.max(toNumber(state.requiredQty) - stockUsedQty, 0);
       state.stockAvailable = stockQty;
-      state.stockUsedQty = Math.min(stockQty, toNumber(state.requiredQty));
+      state.stockUsedQty = stockUsedQty;
       state.produceQty = produceQty;
-      state.forceStockOnly = forceStockOnly;
+      state.forceStockOnly = useStockBalance;
       const deltaProduceQty = Number((produceQty - state.expandedProduceQty).toFixed(6));
       if (deltaProduceQty <= 0) continue;
       state.expandedProduceQty = produceQty;
@@ -371,7 +372,7 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
   }
 
   for (const state of states.values()) {
-    stockLedger.consume(state.material, state.stockUsedQty);
+    if (state.forceStockOnly) stockLedger.consume(state.material, state.stockUsedQty);
   }
 
   const operations = [...states.values()]
@@ -442,6 +443,7 @@ function groupOperations(operations) {
     }
     const current = grouped.get(key);
     current.requiredQty = Number((toNumber(current.requiredQty) + toNumber(operation.requiredQty)).toFixed(3));
+    current.produceQty = Number((toNumber(current.produceQty) + toNumber(operation.produceQty)).toFixed(3));
     current.productionOrder = Math.min(toNumber(current.productionOrder), toNumber(operation.productionOrder));
     current.stockQty = Number(Math.max(toNumber(current.stockQty), toNumber(operation.stockQty)).toFixed(3));
     current.stockUsedQty = Number((toNumber(current.stockUsedQty) + toNumber(operation.stockUsedQty)).toFixed(3));
@@ -451,12 +453,6 @@ function groupOperations(operations) {
     current.successorOperationIds = [...new Set([...(current.successorOperationIds || []), ...(operation.successorOperationIds || []).map(String)])];
   }
   const result = [...grouped.values()]
-    .map(operation => ({
-      ...operation,
-      produceQty: operation.operationType === 'transport'
-        ? toNumber(operation.produceQty)
-        : Number(Math.max(toNumber(operation.requiredQty) - toNumber(operation.stockQty), 0).toFixed(3))
-    }))
     .filter(operation => operation.operationType === 'transport' || operation.produceQty > 0)
     .sort((left, right) => toNumber(left.productionOrder) - toNumber(right.productionOrder));
   const materialIds = new Set(result.map(operation => String(operation.materialId)));

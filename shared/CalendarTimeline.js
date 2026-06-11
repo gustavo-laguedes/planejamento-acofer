@@ -155,14 +155,40 @@ function clampMinutes(minutes, start, end) {
   return Math.max(start, Math.min(minutes, end));
 }
 
-const MATERIAL_COLORS = [
-  { bg: '#d9f0f4', border: '#378b9b', text: '#123942', bgStrong: '#0f6b7c' },
-  { bg: '#ffe4c7', border: '#d48735', text: '#56320d', bgStrong: '#bd6f22' },
-  { bg: '#dff3ea', border: '#4d9b72', text: '#173d2e', bgStrong: '#2f7d57' },
-  { bg: '#e4e9fb', border: '#7185d0', text: '#26376f', bgStrong: '#5269b0' },
-  { bg: '#f6dff0', border: '#c57099', text: '#552345', bgStrong: '#9a4f74' },
-  { bg: '#fff0bf', border: '#c69a24', text: '#4d3a07', bgStrong: '#9b7415' }
+const PRODUCTION_STAGE_COLORS = [
+  [
+    { bg: '#d9eef8', border: '#6aa8c8', text: '#17394a' },
+    { bg: '#d9f2ef', border: '#68aea7', text: '#173f3b' },
+    { bg: '#dff3df', border: '#74ad74', text: '#224222' },
+    { bg: '#eadff8', border: '#9a7cc7', text: '#352750' }
+  ],
+  [
+    { bg: '#fff0d6', border: '#d7a85f', text: '#513817' },
+    { bg: '#f9e2d6', border: '#d08d72', text: '#593020' },
+    { bg: '#f3e6c8', border: '#b79a55', text: '#483916' },
+    { bg: '#efe0f4', border: '#af82c1', text: '#43234f' }
+  ],
+  [
+    { bg: '#dff3ea', border: '#6fb391', text: '#173d2e' },
+    { bg: '#e6f4d8', border: '#8fb96c', text: '#2f421d' },
+    { bg: '#d7f0f0', border: '#68aaa8', text: '#1c4140' },
+    { bg: '#e7e6fb', border: '#8582cf', text: '#2e2d63' }
+  ],
+  [
+    { bg: '#e4e9fb', border: '#8294d5', text: '#26376f' },
+    { bg: '#dceffb', border: '#70a5cf', text: '#1f405d' },
+    { bg: '#e2f2de', border: '#80b571', text: '#28451f' },
+    { bg: '#f3e1f1', border: '#bd84b5', text: '#51254b' }
+  ],
+  [
+    { bg: '#f7e1ee', border: '#c47aa2', text: '#552345' },
+    { bg: '#f5e1dc', border: '#c98472', text: '#552e25' },
+    { bg: '#e1f1e7', border: '#75ae8c', text: '#203f2c' },
+    { bg: '#e5e4f8', border: '#8a83c8', text: '#302b5b' }
+  ]
 ];
+
+const TRANSPORT_COLOR = { bg: '#f3f5f7', border: '#c6ced6', text: '#3d4752' };
 
 function segmentMinutes(segment, dayStart, dayEnd) {
   const start = clampMinutes(parseTime(segment.startTime, minutesToTime(dayStart)), dayStart, dayEnd);
@@ -184,7 +210,7 @@ function laneStyle(lane, laneCount) {
 }
 
 function colorStyle(color) {
-  return `--event-bg: linear-gradient(135deg, ${color.bgStrong || color.border}, ${color.bg}); --event-border: ${color.border}; --event-text: ${color.text};`;
+  return `--event-bg: ${color.bg}; --event-border: ${color.border}; --event-text: ${color.text};`;
 }
 
 function normalizeShiftConfig(config = {}) {
@@ -631,13 +657,28 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   const calendarStartDate = addDays(knownDates[0], -15);
   const calendarEndDate = addDays(knownDates[knownDates.length - 1], 15);
   const dates = eachDate(calendarStartDate, calendarEndDate);
-  const productionColors = new Map();
+  const productionIndexes = new Map();
   operations.forEach(operation => {
     const key = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
-    if (!productionColors.has(key)) {
-      productionColors.set(key, MATERIAL_COLORS[productionColors.size % MATERIAL_COLORS.length]);
-    }
+    if (!productionIndexes.has(key)) productionIndexes.set(key, productionIndexes.size);
   });
+  const stageIndexes = new Map();
+  operations
+    .filter(operation => operation.operationType !== 'transport')
+    .slice()
+    .sort((left, right) =>
+      Number(left.productionOrder || 0) - Number(right.productionOrder || 0)
+      || String(left.materialName || '').localeCompare(String(right.materialName || ''))
+    )
+    .forEach(operation => {
+      const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
+      const operationKey = String(operation.operationId || operation.materialId || operation.materialName || '');
+      const key = `${productionKey}:${operationKey}`;
+      if (!stageIndexes.has(key)) {
+        const currentCount = [...stageIndexes.keys()].filter(item => item.startsWith(`${productionKey}:`)).length;
+        stageIndexes.set(key, currentCount);
+      }
+    });
   const shifts = normalizeShiftConfig(config);
   const shiftStart = Math.min(...shifts.map(shift => shift.shiftStart));
   const shiftEnd = Math.max(...shifts.map(shift => shift.shiftEnd));
@@ -749,8 +790,12 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
               const shouldShowText = segment.visualIndex === 0 && ((end - start) / 60) * zoom.hourHeight >= 62;
               const shortLabel = isTransport ? 'TR' : `${operation.peopleCount || '-'}p`;
+              const productionColorIndex = productionIndexes.get(productionKey) || 0;
+              const palette = PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length];
+              const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
+              const eventColor = isTransport ? TRANSPORT_COLOR : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
               return `
-                <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(productionColors.get(productionKey))}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+                <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle(segment, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${colorStyle(eventColor)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
                   ${shouldShowText && isTransport ? `
                     <strong>Transporte</strong>
                     <span>${operation.materialName || '-'}</span>

@@ -1105,7 +1105,7 @@ thead tr:nth-child(2) th {
 
 .production-block {
   border-color: color-mix(in srgb, var(--production-border, var(--line)) 54%, var(--line));
-  background: linear-gradient(90deg, var(--production-soft, #fbfcfd), #ffffff 38%);
+  background: #ffffff;
 }
 
 .planning-subcard-header h3 span {
@@ -1123,8 +1123,9 @@ thead tr:nth-child(2) th {
   display: grid;
   gap: 12px;
   border: 1px solid color-mix(in srgb, var(--production-border, var(--line)) 55%, var(--line));
+  border-left: 5px solid var(--production-border, var(--accent));
   border-radius: 8px;
-  background: linear-gradient(90deg, var(--production-soft, #fbfcfd), #ffffff 44%);
+  background: #ffffff;
   padding: 14px;
   overflow-x: auto;
 }
@@ -1176,12 +1177,32 @@ thead tr:nth-child(2) th {
 
 .production-flow-node.stock-covered {
   border-color: color-mix(in srgb, #5fb58d 45%, var(--production-border, #b9ddcc));
-  background: linear-gradient(180deg, #ffffff, #f4fbf7);
+  background: #ffffff;
 }
 
 .production-flow-node.needs-production {
   border-color: color-mix(in srgb, var(--production-border, #edd0a3) 76%, #edd0a3);
-  background: linear-gradient(180deg, #ffffff, var(--production-soft, #fffaf0));
+  background: #ffffff;
+}
+
+.production-flow-reference {
+  width: 220px;
+  min-width: 220px;
+  display: grid;
+  gap: 4px;
+  align-items: start;
+  border: 1px dashed color-mix(in srgb, var(--production-border, #d8e2e8) 65%, #d8e2e8);
+  border-left: 5px solid var(--production-border, var(--accent));
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+  color: var(--production-text, var(--petroleum-dark));
+}
+
+.production-flow-reference span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .production-flow-node strong,
@@ -1637,13 +1658,7 @@ thead tr:nth-child(2) th {
 }
 
 .gantt-bar-transport {
-  background-image: repeating-linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.32) 0,
-    rgba(255, 255, 255, 0.32) 7px,
-    transparent 7px,
-    transparent 14px
-  );
+  box-shadow: 0 6px 14px rgba(61, 71, 82, 0.1);
 }
 
 .gantt-lunch-band {

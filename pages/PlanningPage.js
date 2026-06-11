@@ -500,7 +500,7 @@ export function PlanningPage() {
             ${locationOptions(transport.destinationLocationId)}
           </select>
         </label>
-        <label>Tempo de transporte
+        <label>Tempo de transporte (horas)
           <input name="hours" type="text" inputmode="decimal" placeholder="4" value="${escapeHtml(transport.hours)}" />
         </label>
         <button class="link-button danger remove-transport" type="button">Remover</button>
@@ -574,14 +574,25 @@ export function PlanningPage() {
     );
   }
 
-  function renderFlowNode(node, depth = 0) {
+  function clearProductionMaterialDecisions(productionIndex) {
+    draft.stockOnlyMaterials = (draft.stockOnlyMaterials || [])
+      .filter(item => Number(item.productionIndex) !== Number(productionIndex));
+    draft.operationSplits = (draft.operationSplits || [])
+      .filter(item => Number(item.productionIndex || 0) !== Number(productionIndex));
+  }
+
+  function renderFlowNode(node, depth = 0, renderChild = renderFlowNode) {
     const productionIndex = Number(node.productionIndex || 0);
-    const canUseStock = Number(node.stockQty || 0) >= Number(node.requiredQty || 0);
     const checked = stockOnlyChecked(productionIndex, node.materialId);
-    const stockStatus = checked ? 'Usar estoque' : Number(node.produceQty || 0) <= 0 ? 'Estoque atende' : 'Precisa produzir';
+    const stockQty = Number(node.stockQty || 0);
+    const requiredQty = Number(node.requiredQty || 0);
+    const produceQty = Number(node.produceQty || 0);
+    const stockStatus = checked
+      ? produceQty <= 0 && stockQty >= requiredQty ? 'Saldo atende' : stockQty > 0 ? 'Utilizando saldo parcial' : 'Sem saldo dispon&iacute;vel'
+      : 'Produ&ccedil;&atilde;o cheia';
     return `
       <li class="production-flow-branch" style="--flow-depth: ${depth}">
-        <div class="production-flow-node${Number(node.produceQty || 0) > 0 ? ' needs-production' : ' stock-covered'}" style="${productionThemeStyle(productionIndex)}">
+        <div class="production-flow-node${produceQty > 0 ? ' needs-production' : ' stock-covered'}" style="${productionThemeStyle(productionIndex)}">
           <div>
             <strong>${escapeHtml(node.materialName)}</strong>
             <span>${escapeHtml(node.materialCode || '')}</span>
@@ -593,13 +604,41 @@ export function PlanningPage() {
             <span>${stockStatus}</span>
           </div>
           <label class="stock-only-toggle">
-            <input type="checkbox" data-stock-only data-production-index="${productionIndex}" data-material-id="${node.materialId}" ${checked ? 'checked' : ''} ${canUseStock ? '' : 'disabled'} />
-            <span>N&atilde;o produzir este material / usar estoque</span>
+            <input type="checkbox" data-stock-only data-production-index="${productionIndex}" data-material-id="${node.materialId}" ${checked ? 'checked' : ''} />
+            <span>Utilizar saldo</span>
           </label>
         </div>
-        ${(node.children || []).length ? `<ul>${node.children.map(child => renderFlowNode(child, depth + 1)).join('')}</ul>` : ''}
+        ${(node.children || []).length ? `<ul>${node.children.map(child => renderChild(child, depth + 1, renderChild)).join('')}</ul>` : ''}
       </li>
     `;
+  }
+
+  function annotateDuplicateFlowNodes(node, seen = new Map()) {
+    if (!node) return null;
+    const key = `${node.productionIndex ?? 0}:${node.materialId ?? node.materialCode ?? node.materialName}`;
+    const duplicateOf = seen.get(key);
+    const copy = {
+      ...node,
+      duplicateOf: duplicateOf ? duplicateOf.materialName : null,
+      children: []
+    };
+    if (!duplicateOf) seen.set(key, copy);
+    copy.children = duplicateOf ? [] : (node.children || []).map(child => annotateDuplicateFlowNodes(child, seen)).filter(Boolean);
+    return copy;
+  }
+
+  function renderConsolidatedFlowNode(node, depth = 0) {
+    if (node.duplicateOf) {
+      return `
+        <li class="production-flow-branch flow-reference-branch" style="--flow-depth: ${depth}">
+          <div class="production-flow-reference" style="${productionThemeStyle(node.productionIndex || 0)}">
+            <strong>${escapeHtml(node.materialName)}</strong>
+            <span>Mesmo material j&aacute; conectado neste fluxo</span>
+          </div>
+        </li>
+      `;
+    }
+    return renderFlowNode(node, depth, renderConsolidatedFlowNode);
   }
 
   function renderProductionFlows(result) {
@@ -615,7 +654,7 @@ export function PlanningPage() {
           <div class="planning-subcard-header">
             <h3 class="production-title"><span class="production-gradient-key" aria-hidden="true"></span>${escapeHtml(title)}${quantity ? ` <span>${escapeHtml(quantity)}</span>` : ''}</h3>
           </div>
-          <ul class="production-flow-tree">${renderFlowNode(tree)}</ul>
+          <ul class="production-flow-tree">${renderConsolidatedFlowNode(annotateDuplicateFlowNodes(tree))}</ul>
         </article>
       `;
     }).join('');
@@ -796,12 +835,16 @@ export function PlanningPage() {
       }
       production[event.target.name] = event.target.value;
       if (event.target.name === 'materialSearch') {
+        const previousMaterialId = production.materialId;
         const searchValue = event.target.value.trim().toLowerCase();
         const material = materials.find(item =>
           materialLabel(item).toLowerCase() === searchValue
           || (item.codes || []).some(code => String(code).toLowerCase() === searchValue)
         );
         production.materialId = material?.id || '';
+        if (String(previousMaterialId || '') !== String(production.materialId || '')) {
+          clearProductionMaterialDecisions(draft.productions.indexOf(production));
+        }
         production.productionModelName = '';
         production.machineName = '';
         production.peopleCount = '';
@@ -876,7 +919,11 @@ export function PlanningPage() {
       event.preventDefault();
       const production = draft.productions.find(item => item.id === card.dataset.productionId);
       const material = materialById(button.dataset.materialId);
+      const previousMaterialId = production.materialId;
       production.materialId = material?.id || '';
+      if (String(previousMaterialId || '') !== String(production.materialId || '')) {
+        clearProductionMaterialDecisions(draft.productions.indexOf(production));
+      }
       production.materialSearch = materialLabel(material);
       production.productionModelName = '';
       production.machineName = '';
