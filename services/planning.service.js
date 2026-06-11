@@ -28,6 +28,7 @@ function toOperationalHours(value) {
 
 function normalizedMaterialKey(operation) {
   if (operation.operationType === 'transport') return operation.operationId || `transport:${operation.productionKey}:${operation.productionOrder}`;
+  if (operation.splitParentOperationId) return operation.operationId;
   const materialKey = operation.materialId ? String(operation.materialId) : [
     String(operation.materialName || '').trim().toLowerCase(),
     operation.materialCode || '',
@@ -57,9 +58,10 @@ function formatCodeQuantity(quantity) {
     : String(Number(number.toFixed(3)));
 }
 
-function codeForPlan(date = new Date()) {
+function codeForPlan(date = new Date(), productionCount = 1) {
   const pad = value => String(value).padStart(2, '0');
-  return `${pad(date.getDate())}${pad(date.getMonth() + 1)}${String(date.getFullYear()).slice(-2)}${pad(date.getHours())}${pad(date.getMinutes())}`;
+  const suffix = Number(productionCount || 0) > 1 ? String(productionCount).padStart(2, '0') : '';
+  return `${pad(date.getDate())}${pad(date.getMonth() + 1)}${String(date.getFullYear()).slice(-2)}${pad(date.getHours())}${pad(date.getMinutes())}PLANO${suffix}`;
 }
 
 function materialCode(material) {
@@ -67,7 +69,7 @@ function materialCode(material) {
 }
 
 function materialIdentifier(material) {
-  return material?.id ?? material?.materialId;
+  return material?.operationId ?? material?.id ?? material?.materialId;
 }
 
 function materialName(material) {
@@ -120,7 +122,7 @@ function productivityOptions(material, matrixRows) {
 
 function overrideForMaterial(overrides = {}, material) {
   const id = materialIdentifier(material);
-  const keys = [id, id == null ? null : String(id), materialName(material), materialCodeForOverride(material)].filter(Boolean);
+  const keys = [id, id == null ? null : String(id), material?.materialId, material?.id, materialName(material), materialCodeForOverride(material)].filter(Boolean);
   for (const key of keys) {
     if (overrides[key]) return overrides[key];
   }
@@ -560,6 +562,84 @@ function applyProductionTransports(operations, production, context) {
   return result;
 }
 
+function splitEntries(payload = {}) {
+  return Array.isArray(payload.operationSplits) ? payload.operationSplits : [];
+}
+
+function splitMatchesOperation(split, operation) {
+  if (String(split.operationId || '').includes(':parte:')) {
+    return String(split.operationId || '') === String(operation.operationId || operation.materialId);
+  }
+  return String(split.operationId || '') === String(operation.operationId || operation.materialId)
+    || (
+      String(split.materialId || '') === String(operation.materialId || '')
+      && Number(split.productionIndex || 0) === Number(operation.productionIndex || 0)
+    );
+}
+
+function applyOperationSplits(operations, payload = {}) {
+  const splits = splitEntries(payload);
+  if (!splits.length) return operations;
+  const source = operations.map(operation => ({ ...operation }));
+  const splitMap = new Map();
+  const replacementIds = new Map();
+
+  for (const operation of source) {
+    if (operation.operationType === 'transport') continue;
+    const split = splits.find(item => splitMatchesOperation(item, operation));
+    const parts = Array.isArray(split?.parts) ? split.parts : [];
+    if (!parts.length) continue;
+    const total = toNumber(operation.produceQty);
+    const sum = parts.reduce((amount, part) => amount + toNumber(part.quantity), 0);
+    if (Math.abs(sum - total) > 0.001) {
+      const error = new Error(`A soma das divisoes de ${operation.materialName} deve ser ${total}.`);
+      error.status = 400;
+      throw error;
+    }
+    const parentId = String(operation.operationId || operation.materialId);
+    const replacements = parts.map((part, index) => ({
+      ...operation,
+      operationId: `${parentId}:parte:${index + 1}`,
+      splitParentOperationId: parentId,
+      splitPartNumber: index + 1,
+      requiredQty: toNumber(part.quantity),
+      produceQty: toNumber(part.quantity),
+      stockQty: 0,
+      stockUsedQty: 0,
+      machineName: part.machineName || operation.machineName,
+      peopleCount: Number(part.peopleCount || operation.peopleCount || 0),
+      startDate: part.startDate || operation.startDate,
+      startTime: part.startTime || operation.startTime,
+      productionOrder: toNumber(operation.productionOrder) + (index / 100)
+    }));
+    splitMap.set(parentId, replacements);
+    replacementIds.set(parentId, replacements.map(item => item.operationId));
+  }
+
+  if (!splitMap.size) return operations;
+
+  function replaceIds(ids = []) {
+    return ids.flatMap(id => replacementIds.get(String(id)) || [id]);
+  }
+
+  return source.flatMap(operation => {
+    const parentId = String(operation.operationId || operation.materialId);
+    const replacements = splitMap.get(parentId);
+    if (replacements) {
+      return replacements.map(part => ({
+        ...part,
+        dependencyOperationIds: replaceIds(part.dependencyOperationIds || []),
+        successorOperationIds: replaceIds(part.successorOperationIds || [])
+      }));
+    }
+    return [{
+      ...operation,
+      dependencyOperationIds: replaceIds(operation.dependencyOperationIds || []),
+      successorOperationIds: replaceIds(operation.successorOperationIds || [])
+    }];
+  });
+}
+
 function parseTime(value, fallback) {
   const [hours, minutes] = String(value || fallback).split(':').map(part => Number(part));
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return parseTime(fallback, '07:12');
@@ -830,7 +910,7 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
 
   const enriched = source.map(enrich);
   const byOperationId = new Map(enriched.map(operation => [String(operation.operationId || operation.materialId), operation]));
-  const hasManualStart = enriched.some(operation => overrideForMaterial(operationOverrides, operation)?.startDate);
+  const hasManualStart = enriched.some(operation => operation.startDate || overrideForMaterial(operationOverrides, operation)?.startDate);
   const byMachine = new Map();
   const scheduledByMaterialId = new Map();
 
@@ -856,8 +936,9 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
         .map(item => ({ date: item.endDate, minutes: parseTime(item.endTime, minutesToTime(shiftStart)) })));
       const machineCursor = operation.operationType === 'transport' ? startCursor : byMachine.get(operation.machineName || '') || startCursor;
       const override = overrideForMaterial(operationOverrides, operation);
-      const overrideCursor = overrideStartCursor(override, startCursor.date, shiftStart);
-      const cursor = overrideCursor || maxCursor(startCursor, dependencyEnd, machineCursor);
+      const operationCursor = operation.startDate ? { date: operation.startDate, minutes: parseTime(operation.startTime, minutesToTime(shiftStart)) } : null;
+      const overrideCursor = overrideStartCursor(override, startCursor.date, shiftStart) || operationCursor;
+      const cursor = maxCursor(overrideCursor || startCursor, dependencyEnd, machineCursor);
       const slot = scheduleForward(cursor, operation.totalMinutes, calendar);
       const item = scheduledItem(operation, slot);
       scheduledByMaterialId.set(String(operation.operationId || operation.materialId), item);
@@ -978,7 +1059,7 @@ function buildSinglePlan(payload, context) {
     productionIndex: 0,
     productionTitle: 'Producao 1'
   });
-  const operations = scheduleOperations(applyProductionTransports(built.operations, production, context), context.matrixRows, {
+  const operations = scheduleOperations(applyOperationSplits(applyProductionTransports(built.operations, production, context), payload), context.matrixRows, {
     dateMode: payload.dateMode,
     selectedDate: payload.selectedDate || payload.startDate,
     hoursPerDay: payload.hoursPerDay,
@@ -995,7 +1076,7 @@ function buildSinglePlan(payload, context) {
   const uniqueDaysNeeded = new Set(days.map(day => day.planned_date)).size;
 
   return {
-    code: codeForPlan(),
+    code: payload.planningCode || codeForPlan(),
     summary: {
       materialId: material.id,
       materialName: material.name,
@@ -1102,7 +1183,7 @@ export function buildPlan(payload, context) {
   const trees = builtProductions.map(item => item.tree);
   const tree = trees.length === 1 ? trees[0] : { materialName: 'Plano de producao', children: trees };
   const aggregatedOperations = builtProductions.flatMap(item => item.operations);
-  const operations = scheduleOperations(aggregatedOperations, context.matrixRows, {
+  const operations = scheduleOperations(applyOperationSplits(aggregatedOperations, payload), context.matrixRows, {
     dateMode: 'start',
     selectedDate: payload.planningStartDate || payload.selectedDate || payload.startDate,
     hoursPerDay: payload.hoursPerDay,
@@ -1126,7 +1207,7 @@ export function buildPlan(payload, context) {
   const plannedQty = productions.reduce((sum, production) => sum + production.plannedQty, 0);
 
   return {
-    code: codeForPlan(),
+    code: payload.planningCode || codeForPlan(new Date(), productions.length),
     summary: {
       materialId: firstMaterial.id,
       materialName: productions.length === 1 ? firstMaterial.name : `${productions.length} producoes`,

@@ -84,7 +84,7 @@ router.get('/plans', async (req, res, next) => {
   try {
     const db = requireDb();
     const rows = await db`
-      SELECT id, code, material_name, material_code, planned_qty, planned_unit, hours_per_day, start_date, end_date, status, created_at
+      SELECT id, code, material_name, material_code, planned_qty, planned_unit, hours_per_day, start_date, end_date, status, created_at, schedule_tree
       FROM production_plans
       ORDER BY created_at DESC
       LIMIT 100

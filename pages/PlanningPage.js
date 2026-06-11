@@ -61,6 +61,12 @@ function formatPtBrDecimal(value) {
   });
 }
 
+function generatePlanningCode(productionCount = 1, date = new Date()) {
+  const pad = value => String(value).padStart(2, '0');
+  const suffix = Number(productionCount || 0) > 1 ? String(productionCount).padStart(2, '0') : '';
+  return `${pad(date.getDate())}${pad(date.getMonth() + 1)}${String(date.getFullYear()).slice(-2)}${pad(date.getHours())}${pad(date.getMinutes())}PLANO${suffix}`;
+}
+
 function matrixSecondsPerUnit(row) {
   const timeSeconds = Number(row.time_seconds || Number(row.time_minutes || 0) * 60);
   return timeSeconds / Math.max(Number(row.output_qty || 1), 1);
@@ -153,7 +159,9 @@ function normalizeDraft(rawDraft) {
     ...draft,
     shifts: Array.isArray(draft.shifts) && draft.shifts.length ? draft.shifts : [defaultShift(0)],
     productions: Array.isArray(draft.productions) && draft.productions.length ? draft.productions : [emptyProduction(0)],
-    stockOnlyMaterials: Array.isArray(draft.stockOnlyMaterials) ? draft.stockOnlyMaterials : []
+    stockOnlyMaterials: Array.isArray(draft.stockOnlyMaterials) ? draft.stockOnlyMaterials : [],
+    operationOverrides: draft.operationOverrides && typeof draft.operationOverrides === 'object' ? draft.operationOverrides : {},
+    operationSplits: Array.isArray(draft.operationSplits) ? draft.operationSplits : []
   };
   normalized.shifts = normalized.shifts.map((shift, index) => ({
     ...defaultShift(index, shift.shiftStartTime),
@@ -343,7 +351,10 @@ export function PlanningPage() {
         shiftEndTime: shift.shiftEndTime
       })),
       productions: productionPayload(),
-      stockOnlyMaterials: draft.stockOnlyMaterials || []
+      stockOnlyMaterials: draft.stockOnlyMaterials || [],
+      operationOverrides: draft.operationOverrides || {},
+      operationSplits: draft.operationSplits || [],
+      planningCode: draft.planningCode || null
     };
   }
 
@@ -571,28 +582,36 @@ export function PlanningPage() {
   function renderSimulation(result, form) {
     currentSimulation = result;
     const resultsTarget = target.querySelector('.planning-results');
-    const summaryGrid = target.querySelector('.summary-grid');
     const timelineTarget = target.querySelector('.timeline-target');
     const flowsTarget = target.querySelector('.production-flows-target');
-    const firstOperation = result.operations[0];
-    const lastOperation = result.operations[result.operations.length - 1];
-    const cards = [
-      ['C&oacute;digo previsto', result.code],
-      ['Plano', result.summary.materialName],
-      ['Produ&ccedil;&otilde;es', result.summary.productions?.length || draft.productions.length],
-      ['Range informado', `${formatDateOnly(result.summary.planningStartDate || draft.planningStartDate)} at&eacute; ${formatDateOnly(result.summary.planningEndDate || draft.planningEndDate)}`],
-      ['Per&iacute;odo estimado', `${formatDateOnly(result.summary.startDate)} ${firstOperation?.startTime || ''} at&eacute; ${formatDateOnly(result.summary.endDate)} ${lastOperation?.endTime || ''}`],
-      ['Total de opera&ccedil;&otilde;es', result.operations.length],
-      ['Total de dias', result.summary.daysNeeded],
-      ['Turnos', draft.shifts.length],
-      ['Horas/dia', formatPtBrDecimal(result.summary.hoursPerDay)]
-    ];
-    summaryGrid.innerHTML = cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${value}</strong></article>`).join('');
+    target.querySelector('.final-summary-panel').hidden = true;
     timelineTarget.innerHTML = '';
     timelineTarget.appendChild(CalendarTimeline(result.days, result.operations, result.summary));
     flowsTarget.innerHTML = renderProductionFlows(result);
     resultsTarget.hidden = false;
     form.elements.save.disabled = false;
+  }
+
+  function renderFinalSummary(result, planningCode) {
+    const firstOperation = result.operations[0];
+    const lastOperation = result.operations[result.operations.length - 1];
+    const productions = result.summary.productions || [];
+    const transports = draft.productions.reduce((sum, production) => sum + (production.transports || []).length, 0);
+    const cards = [
+      ['C&oacute;digo previsto', planningCode],
+      ['Per&iacute;odo', `${formatDateOnly(result.summary.planningStartDate || draft.planningStartDate)} ate ${formatDateOnly(result.summary.planningEndDate || draft.planningEndDate)}`],
+      ['Produ&ccedil;&otilde;es inclu&iacute;das', productions.length || draft.productions.length],
+      ['Materiais finais', productions.map(production => production.materialName).join(', ') || result.summary.materialName],
+      ['Quantidades', productions.map(production => `${formatPtBrDecimal(production.plannedQty)} ${production.plannedUnit || ''}`.trim()).join(' | ') || `${formatPtBrDecimal(result.summary.plannedQty)} ${result.summary.plannedUnit || ''}`.trim()],
+      ['Turnos', draft.shifts.length],
+      ['Transportes', transports],
+      ['Total de opera&ccedil;&otilde;es', result.operations.length],
+      ['In&iacute;cio/fim estimado', `${formatDateOnly(result.summary.startDate)} ${firstOperation?.startTime || ''} ate ${formatDateOnly(result.summary.endDate)} ${lastOperation?.endTime || ''}`]
+    ];
+    const panel = target.querySelector('.final-summary-panel');
+    panel.querySelector('.final-summary-grid').innerHTML = cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
+    panel.hidden = false;
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   async function renderSimulationTab() {
@@ -628,12 +647,6 @@ export function PlanningPage() {
         </form>
       </div>
       <div class="planning-results" hidden>
-        <div class="panel">
-          <div class="section-heading">
-            <h2>Resumo da simula&ccedil;&atilde;o</h2>
-          </div>
-          <div class="summary-grid compact-summary"></div>
-        </div>
         <div class="panel calendar-panel">
           <div class="section-heading">
             <h2>Calend&aacute;rio de produ&ccedil;&atilde;o</h2>
@@ -645,6 +658,15 @@ export function PlanningPage() {
             <h2>Fluxo produtivo por produ&ccedil;&atilde;o</h2>
           </div>
           <div class="production-flows-target"></div>
+        </div>
+        <div class="panel final-summary-panel" hidden>
+          <div class="section-heading">
+            <h2>Resumo final</h2>
+          </div>
+          <div class="final-summary-grid summary-grid compact-summary"></div>
+          <div class="form-actions">
+            <button class="primary-button launch-planning" type="button">Lan&ccedil;ar planejamento</button>
+          </div>
         </div>
       </div>
     `;
@@ -845,10 +867,11 @@ export function PlanningPage() {
 
     async function simulateCurrent() {
       updateDraftFromGeneral();
-      if (!validateDraft(form)) return;
+      if (!validateDraft(form)) return null;
       lastPayload = payload();
       const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
       renderSimulation(result, form);
+      return result;
     }
 
     form.addEventListener('submit', async event => {
@@ -876,11 +899,95 @@ export function PlanningPage() {
       }
     });
 
+    target.addEventListener('operation-date-change', async event => {
+      const key = String(event.detail.operationId || event.detail.materialId);
+      draft.operationOverrides[key] = {
+        ...(draft.operationOverrides[key] || {}),
+        startDate: event.detail.startDate,
+        startTime: event.detail.startTime
+      };
+      draft.operationOverrides[String(event.detail.materialId)] = {
+        ...(draft.operationOverrides[String(event.detail.materialId)] || {}),
+        startDate: event.detail.startDate,
+        startTime: event.detail.startTime
+      };
+      saveDraftNow();
+      try {
+        await simulateCurrent();
+      } catch (error) {
+        toast(error);
+      }
+    });
+
+    target.addEventListener('operation-config-change', async event => {
+      const key = String(event.detail.operationId || event.detail.materialId);
+      const override = {
+        machineName: event.detail.machineName,
+        peopleCount: event.detail.peopleCount,
+        productionModelName: event.detail.productionModelName
+      };
+      draft.operationOverrides[key] = {
+        ...(draft.operationOverrides[key] || {}),
+        ...override
+      };
+      draft.operationOverrides[String(event.detail.materialId)] = {
+        ...(draft.operationOverrides[String(event.detail.materialId)] || {}),
+        ...override
+      };
+      saveDraftNow();
+      try {
+        await simulateCurrent();
+      } catch (error) {
+        toast(error);
+      }
+    });
+
+    target.addEventListener('operation-split-change', async event => {
+      const operationId = String(event.detail.operationId || event.detail.materialId);
+      draft.operationSplits = (draft.operationSplits || []).filter(split => String(split.operationId) !== operationId);
+      draft.operationSplits.push({
+        operationId,
+        materialId: event.detail.materialId,
+        productionIndex: event.detail.productionIndex,
+        parts: event.detail.parts
+      });
+      saveDraftNow();
+      try {
+        await simulateCurrent();
+      } catch (error) {
+        toast(error);
+      }
+    });
+
     form.elements.save.addEventListener('click', async () => {
       try {
-        const saved = await api('/planning/plans', { method: 'POST', body: lastPayload || payload() });
-        form.elements.save.disabled = true;
-        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Planejamento ${saved.plan.code || saved.plan.id} salvo.` }));
+        const simulation = await simulateCurrent();
+        if (!simulation) return;
+        draft.planningCode = draft.planningCode || generatePlanningCode(draft.productions.length);
+        lastPayload = { ...(lastPayload || payload()), planningCode: draft.planningCode };
+        saveDraftNow();
+        renderFinalSummary(currentSimulation, draft.planningCode);
+        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Resumo do planejamento ${draft.planningCode} pronto para lancamento.` }));
+      } catch (error) {
+        toast(error);
+      }
+    });
+
+    target.querySelector('.launch-planning').addEventListener('click', async () => {
+      try {
+        const simulation = await simulateCurrent();
+        if (!simulation) return;
+        draft.planningCode = draft.planningCode || generatePlanningCode(draft.productions.length);
+        lastPayload = { ...(lastPayload || payload()), planningCode: draft.planningCode };
+        const saved = await api('/planning/plans', { method: 'POST', body: lastPayload });
+        localStorage.removeItem(DRAFT_KEY);
+        draft = defaultDraft();
+        lastPayload = null;
+        currentSimulation = null;
+        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Planejamento ${saved.plan.code || saved.plan.id} lancado.` }));
+        activeTab = 'history';
+        sessionStorage.setItem('planejamento_planning_tab', activeTab);
+        await render();
       } catch (error) {
         toast(error);
       }
@@ -905,12 +1012,12 @@ export function PlanningPage() {
       historyTarget.appendChild(DataTable({
         columns: [
           { label: 'C&oacute;digo do planejamento', key: 'code' },
-          { label: 'Material', key: 'material_name' },
-          { label: 'Quantidade', render: row => `${row.planned_qty} ${row.planned_unit}` },
-          { label: 'Horas/dia', render: row => formatPtBrDecimal(row.hours_per_day), sortValue: row => Number(row.hours_per_day || 0) },
-          { label: 'Data de cria&ccedil;&atilde;o', render: row => formatDate(row.created_at), sortValue: row => row.created_at },
-          { label: 'In&iacute;cio', render: row => formatDateOnly(row.start_date), sortValue: row => row.start_date },
-          { label: 'Fim', render: row => formatDateOnly(row.end_date), sortValue: row => row.end_date },
+          { label: 'Per&iacute;odo', render: row => `${formatDateOnly(row.start_date)} ate ${formatDateOnly(row.end_date)}`, sortValue: row => row.start_date },
+          { label: 'Produ&ccedil;&otilde;es', render: row => {
+            const children = Array.isArray(row.schedule_tree?.children) ? row.schedule_tree.children : [];
+            const match = String(row.material_name || '').match(/^(\d+)\s+produ/i);
+            return children.length && row.schedule_tree?.materialName === 'Plano de producao' ? children.length : Number(match?.[1] || 1);
+          } },
           { label: 'Status', key: 'status' },
           { label: 'A&ccedil;&otilde;es', render: row => `
             <button class="link-button" data-view="${row.id}">Visualizar</button>

@@ -106,6 +106,12 @@ function operationValue(operation) {
   return `${operation.machineName}||${operation.peopleCount}`;
 }
 
+function machineOptionTags(options, selectedValue) {
+  return options.map(option => `
+    <option value="${escapeAttr(optionValue(option))}" ${optionValue(option) === selectedValue ? 'selected' : ''}>${escapeAttr(option.machineName)} | ${escapeAttr(option.peopleCount)} pessoa${Number(option.peopleCount) === 1 ? '' : 's'}</option>
+  `).join('');
+}
+
 function modelOptions(operation) {
   return Array.isArray(operation.productionModelOptions) ? operation.productionModelOptions : [];
 }
@@ -293,6 +299,8 @@ function dispatchConfig(wrapper, operation, modal) {
     bubbles: true,
     detail: {
       materialId: String(operation.materialId),
+      operationId: String(operation.operationId || operation.materialId),
+      productionIndex: Number(operation.productionIndex || 0),
       machineName,
       peopleCount: Number(peopleCount || 0),
       productionModelName
@@ -348,6 +356,8 @@ function dispatchDate(wrapper, operation, modal) {
     bubbles: true,
     detail: {
       materialId: String(operation.materialId),
+      operationId: String(operation.operationId || operation.materialId),
+      productionIndex: Number(operation.productionIndex || 0),
       materialName: operation.materialName,
       previousStartDate: operation.startDate,
       previousStartTime: currentTime,
@@ -355,6 +365,77 @@ function dispatchDate(wrapper, operation, modal) {
       startTime: startTime || currentTime || '00:00'
     }
   }));
+}
+
+function normalizeSplitQuantity(value) {
+  const number = Number(String(value ?? '').replace(/\./g, '').replace(',', '.'));
+  return Number.isFinite(number) ? number : 0;
+}
+
+function splitRowTemplate(index, part, operation, machineOptions) {
+  const selectedValue = optionValue({
+    machineName: part.machineName || operation.machineName,
+    peopleCount: part.peopleCount || operation.peopleCount
+  });
+  return `
+    <article class="operation-split-row" data-split-index="${index}">
+      <strong>Parte ${index + 1}</strong>
+      <label>Quantidade
+        <input name="splitQty" type="number" step="0.001" min="0.001" value="${escapeAttr(part.quantity)}" required />
+      </label>
+      <label>Data inicial
+        <input name="splitStartDate" type="date" value="${escapeAttr(part.startDate || operation.startDate || '')}" required />
+      </label>
+      <label>Hora inicial
+        <input name="splitStartTime" type="time" value="${escapeAttr(part.startTime || operationStartTime(operation))}" required />
+      </label>
+      <label>M&aacute;quina / pessoas
+        <select name="splitMachinePeople" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
+          ${machineOptionTags(machineOptions, selectedValue)}
+        </select>
+      </label>
+      ${index > 1 ? '<button class="link-button danger remove-split" type="button">Remover</button>' : ''}
+    </article>
+  `;
+}
+
+function collectSplitRows(modal, operation) {
+  return [...modal.querySelectorAll('.operation-split-row')].map(row => {
+    const [machineName, peopleCount] = (row.querySelector('[name="splitMachinePeople"]')?.value || operationValue(operation)).split('||');
+    return {
+      quantity: normalizeSplitQuantity(row.querySelector('[name="splitQty"]')?.value),
+      startDate: row.querySelector('[name="splitStartDate"]')?.value,
+      startTime: row.querySelector('[name="splitStartTime"]')?.value,
+      machineName,
+      peopleCount: Number(peopleCount || 0)
+    };
+  });
+}
+
+function dispatchSplit(wrapper, operation, modal) {
+  const splitRows = modal.querySelectorAll('.operation-split-row');
+  if (!splitRows.length) return true;
+  const parts = collectSplitRows(modal, operation);
+  const total = Number(operation.produceQty || 0);
+  const sum = parts.reduce((amount, part) => amount + Number(part.quantity || 0), 0);
+  const warning = modal.querySelector('.split-warning');
+  if (Math.abs(sum - total) > 0.001 || parts.some(part => !(part.quantity > 0) || !part.startDate || !part.startTime || !part.machineName || !part.peopleCount)) {
+    if (warning) {
+      warning.textContent = `A soma das partes deve ser ${formatQty(total)} ${operation.unit || ''} e todos os campos devem estar preenchidos.`;
+      warning.hidden = false;
+    }
+    return false;
+  }
+  wrapper.dispatchEvent(new CustomEvent('operation-split-change', {
+    bubbles: true,
+    detail: {
+      operationId: String(operation.operationId || operation.materialId),
+      materialId: String(operation.materialId),
+      productionIndex: Number(operation.productionIndex || 0),
+      parts
+    }
+  }));
+  return true;
 }
 
 function showOperationModal(wrapper, operation) {
@@ -400,6 +481,15 @@ function showOperationModal(wrapper, operation) {
           <article><span>Data final</span><strong>${formatDate(operation.endDate)}</strong></article>
           <article><span>Hora final</span><strong>${endTime}</strong></article>
         </div>
+        <div class="operation-split-section">
+          <div class="section-heading">
+            <h3>Divis&atilde;o de produ&ccedil;&atilde;o</h3>
+            <button class="secondary-button divide-production" type="button">Dividir produ&ccedil;&atilde;o</button>
+          </div>
+          <p class="form-error split-warning" hidden></p>
+          <div class="operation-splits-target"></div>
+          <button class="secondary-button add-split" type="button" hidden>+ Adicionar divis&atilde;o</button>
+        </div>
         <div class="form-actions modal-actions">
           <button class="secondary-button close-modal" type="button">Cancelar</button>
           <button class="primary-button" type="submit">Recalcular</button>
@@ -416,8 +506,37 @@ function showOperationModal(wrapper, operation) {
       backdrop.querySelector('[name="peopleMachine"]').value = select.value;
     });
   });
+  const splitsTarget = backdrop.querySelector('.operation-splits-target');
+  const addSplitButton = backdrop.querySelector('.add-split');
+  const renderSplits = parts => {
+    splitsTarget.innerHTML = parts.map((part, index) => splitRowTemplate(index, part, operation, machineOptions)).join('');
+    addSplitButton.hidden = false;
+    backdrop.querySelector('.split-warning').hidden = true;
+  };
+  backdrop.querySelector('.divide-production').addEventListener('click', () => {
+    const total = Number(operation.produceQty || 0);
+    const half = Number((total / 2).toFixed(3));
+    renderSplits([
+      { quantity: half, startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount },
+      { quantity: Number((total - half).toFixed(3)), startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount }
+    ]);
+  });
+  addSplitButton.addEventListener('click', () => {
+    const parts = collectSplitRows(backdrop, operation);
+    parts.push({ quantity: 0, startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount });
+    renderSplits(parts);
+  });
+  splitsTarget.addEventListener('click', event => {
+    if (!event.target.classList.contains('remove-split')) return;
+    event.target.closest('.operation-split-row')?.remove();
+    backdrop.querySelectorAll('.operation-split-row').forEach((row, index) => {
+      row.dataset.splitIndex = String(index);
+      row.querySelector('strong').textContent = `Parte ${index + 1}`;
+    });
+  });
   backdrop.querySelector('form').addEventListener('submit', event => {
     event.preventDefault();
+    if (!dispatchSplit(wrapper, operation, backdrop)) return;
     dispatchDate(wrapper, operation, backdrop);
     dispatchConfig(wrapper, operation, backdrop);
     backdrop.remove();

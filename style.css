@@ -1648,6 +1648,41 @@ thead tr:nth-child(2) th {
   gap: 16px;
 }
 
+.operation-split-section {
+  display: grid;
+  gap: 12px;
+}
+
+.operation-splits-target {
+  display: grid;
+  gap: 10px;
+}
+
+.operation-split-row {
+  display: grid;
+  grid-template-columns: 90px repeat(4, minmax(120px, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.operation-split-row strong {
+  align-self: center;
+  color: var(--petroleum-dark);
+}
+
+.operation-split-row label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .modal-actions {
   justify-content: flex-end;
 }
@@ -1677,7 +1712,8 @@ thead tr:nth-child(2) th {
   .summary-grid,
   .compact-summary,
   .planning-inner-grid,
-  .transport-row {
+  .transport-row,
+  .operation-split-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1710,6 +1746,7 @@ thead tr:nth-child(2) th {
   .consumed-material-header,
   .consumed-material-row,
   .transport-row,
+  .operation-split-row,
   .inventory-grid {
     grid-template-columns: 1fr;
   }
