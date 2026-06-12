@@ -28,6 +28,11 @@ export async function api(path, options = {}) {
   });
 
   if (!response.ok) {
+    if (response.status === 401 && path !== '/auth/login') {
+      clearToken();
+      window.dispatchEvent(new CustomEvent('planejamento:navigate'));
+      throw new Error('Sess\u00e3o expirada. Fa\u00e7a login novamente.');
+    }
     const payload = await response.json().catch(() => ({ error: 'Falha na requisicao.' }));
     throw new Error(payload.error || 'Falha na requisicao.');
   }

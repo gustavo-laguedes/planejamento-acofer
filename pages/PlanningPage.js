@@ -32,7 +32,21 @@ function formatDate(value) {
 }
 
 function formatDateOnly(value) {
-  return value ? new Date(`${value}T00:00:00`).toLocaleDateString('pt-BR') : '';
+  if (!isValidDateOnly(value)) return '';
+  return new Date(`${String(value).slice(0, 10)}T00:00:00`).toLocaleDateString('pt-BR');
+}
+
+function isValidDateOnly(value) {
+  const dateValue = String(value || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) return false;
+  const date = new Date(`${dateValue}T00:00:00`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === dateValue;
+}
+
+function formatPeriod(startDate, endDate) {
+  const start = formatDateOnly(startDate);
+  const end = formatDateOnly(endDate);
+  return start && end ? `${start} at\u00e9 ${end}` : 'Per\u00edodo n\u00e3o informado';
 }
 
 function parsePtBrDecimal(value, fallback = NaN) {
@@ -261,6 +275,20 @@ export function PlanningPage() {
 
   function toast(error) {
     window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message || error }));
+  }
+
+  function normalizePlanningPayload(sourcePayload = payload(), planningCode = draft.planningCode) {
+    const planningStartDate = sourcePayload.planningStartDate || sourcePayload.startDate || sourcePayload.selectedDate || draft.planningStartDate;
+    const planningEndDate = sourcePayload.planningEndDate || sourcePayload.endDate || draft.planningEndDate || planningStartDate;
+    return {
+      ...sourcePayload,
+      selectedDate: planningStartDate,
+      startDate: planningStartDate,
+      endDate: planningEndDate,
+      planningStartDate,
+      planningEndDate,
+      planningCode
+    };
   }
 
   function renderTabs() {
@@ -857,7 +885,8 @@ export function PlanningPage() {
     const timelineTarget = target.querySelector('.timeline-target');
     const flowsTarget = target.querySelector('.production-flows-target');
     const notice = target.querySelector('.unsimulated-notice');
-    target.querySelector('.final-summary-panel').hidden = true;
+    const oldSummaryPanel = target.querySelector('.final-summary-panel');
+    if (oldSummaryPanel) oldSummaryPanel.hidden = true;
     timelineTarget.innerHTML = '';
     timelineTarget.appendChild(CalendarTimeline(result.days, result.operations, result.summary));
     flowsTarget.innerHTML = renderProductionFlows(result);
@@ -876,26 +905,78 @@ export function PlanningPage() {
     if (notice) notice.hidden = !hasPendingSimulationChanges;
   }
 
-  function renderFinalSummary(result, planningCode) {
+  function summaryCards(result, planningCode) {
     const firstOperation = result.operations[0];
     const lastOperation = result.operations[result.operations.length - 1];
     const productions = result.summary.productions || [];
     const transports = draft.productions.reduce((sum, production) => sum + (production.transports || []).length, 0);
-    const cards = [
+    const alerts = [];
+    if (!isValidDateOnly(draft.planningStartDate) || !isValidDateOnly(draft.planningEndDate)) alerts.push('Periodo do planejamento invalido.');
+    if (!result.operations.length) alerts.push('Nenhuma operacao produtiva foi gerada.');
+    const rawMaterialWarnings = result.operations.filter(operation => operation.isInitialRawMaterial && Number(operation.stockQty || 0) < Number(operation.requiredQty || 0));
+    if (rawMaterialWarnings.length) alerts.push('Existem materias-primas iniciais com estoque insuficiente.');
+    return [
       ['C&oacute;digo previsto', planningCode],
-      ['Per&iacute;odo', `${formatDateOnly(result.summary.planningStartDate || draft.planningStartDate)} ate ${formatDateOnly(result.summary.planningEndDate || draft.planningEndDate)}`],
+      ['Per&iacute;odo planejado', formatPeriod(result.summary.planningStartDate || draft.planningStartDate, result.summary.planningEndDate || draft.planningEndDate)],
       ['Produ&ccedil;&otilde;es inclu&iacute;das', productions.length || draft.productions.length],
       ['Materiais finais', productions.map(production => production.materialName).join(', ') || result.summary.materialName],
       ['Quantidades', productions.map(production => `${formatPtBrDecimal(production.plannedQty)} ${production.plannedUnit || ''}`.trim()).join(' | ') || `${formatPtBrDecimal(result.summary.plannedQty)} ${result.summary.plannedUnit || ''}`.trim()],
       ['Turnos', draft.shifts.length],
       ['Transportes', transports],
       ['Total de opera&ccedil;&otilde;es', result.operations.length],
-      ['In&iacute;cio/fim estimado', `${formatDateOnly(result.summary.startDate)} ${firstOperation?.startTime || ''} ate ${formatDateOnly(result.summary.endDate)} ${lastOperation?.endTime || ''}`]
+      ['In&iacute;cio/fim estimado', `${formatDateOnly(result.summary.startDate)} ${firstOperation?.startTime || ''} at\u00e9 ${formatDateOnly(result.summary.endDate)} ${lastOperation?.endTime || ''}`],
+      ['Observa&ccedil;&otilde;es / alertas', alerts.join(' ') || 'Sem alertas.']
     ];
-    const panel = target.querySelector('.final-summary-panel');
-    panel.querySelector('.final-summary-grid').innerHTML = cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${escapeHtml(value)}</strong></article>`).join('');
-    panel.hidden = false;
-    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function openFinalSummaryModal(result, planningCode) {
+    page.querySelector('.planning-summary-modal')?.remove();
+    const cards = summaryCards(result, planningCode);
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop planning-summary-modal';
+    backdrop.innerHTML = `
+      <div class="modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="planning-summary-title">
+        <div class="modal-header">
+          <h2 id="planning-summary-title">Resumo do planejamento</h2>
+          <button class="link-button close-modal" type="button">Fechar</button>
+        </div>
+        <div class="final-summary-grid summary-grid compact-summary">
+          ${cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${escapeHtml(value)}</strong></article>`).join('')}
+        </div>
+        <div class="form-actions modal-actions">
+          <button class="secondary-button close-modal" type="button">Voltar/Editar</button>
+          <button class="primary-button launch-planning" type="button">Lan&ccedil;ar planejamento</button>
+        </div>
+      </div>
+    `;
+    async function launchPlanning(button) {
+      button.disabled = true;
+      try {
+        const saved = await api('/planning/plans', { method: 'POST', body: lastPayload });
+        localStorage.removeItem(DRAFT_KEY);
+        draft = defaultDraft();
+        lastPayload = null;
+        currentSimulation = null;
+        backdrop.remove();
+        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Planejamento ${saved.plan.code || saved.plan.id} lancado.` }));
+        activeTab = 'history';
+        sessionStorage.setItem('planejamento_planning_tab', activeTab);
+        await render();
+      } catch (error) {
+        button.disabled = false;
+        toast(error);
+      }
+    }
+
+    backdrop.querySelector('.launch-planning').addEventListener('click', event => {
+      launchPlanning(event.currentTarget).catch(toast);
+    });
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop || event.target.classList.contains('close-modal')) {
+        backdrop.remove();
+      }
+    });
+    page.appendChild(backdrop);
   }
 
   async function renderSimulationTab() {
@@ -943,15 +1024,6 @@ export function PlanningPage() {
             <h2>Fluxo produtivo por produ&ccedil;&atilde;o</h2>
           </div>
           <div class="production-flows-target"></div>
-        </div>
-        <div class="panel final-summary-panel" hidden>
-          <div class="section-heading">
-            <h2>Resumo final</h2>
-          </div>
-          <div class="final-summary-grid summary-grid compact-summary"></div>
-          <div class="form-actions">
-            <button class="primary-button launch-planning" type="button">Lan&ccedil;ar planejamento</button>
-          </div>
         </div>
       </div>
     `;
@@ -1286,30 +1358,10 @@ export function PlanningPage() {
         const simulation = await simulateCurrent();
         if (!simulation) return;
         draft.planningCode = draft.planningCode || generatePlanningCode(draft.productions.length);
-        lastPayload = { ...(lastPayload || payload()), planningCode: draft.planningCode };
+        lastPayload = normalizePlanningPayload(lastPayload || payload(), draft.planningCode);
         saveDraftNow();
-        renderFinalSummary(currentSimulation, draft.planningCode);
+        openFinalSummaryModal(currentSimulation, draft.planningCode);
         window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Resumo do planejamento ${draft.planningCode} pronto para lancamento.` }));
-      } catch (error) {
-        toast(error);
-      }
-    });
-
-    target.querySelector('.launch-planning').addEventListener('click', async () => {
-      try {
-        const simulation = await simulateCurrent();
-        if (!simulation) return;
-        draft.planningCode = draft.planningCode || generatePlanningCode(draft.productions.length);
-        lastPayload = { ...(lastPayload || payload()), planningCode: draft.planningCode };
-        const saved = await api('/planning/plans', { method: 'POST', body: lastPayload });
-        localStorage.removeItem(DRAFT_KEY);
-        draft = defaultDraft();
-        lastPayload = null;
-        currentSimulation = null;
-        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Planejamento ${saved.plan.code || saved.plan.id} lancado.` }));
-        activeTab = 'history';
-        sessionStorage.setItem('planejamento_planning_tab', activeTab);
-        await render();
       } catch (error) {
         toast(error);
       }
@@ -1334,7 +1386,7 @@ export function PlanningPage() {
       historyTarget.appendChild(DataTable({
         columns: [
           { label: 'C&oacute;digo do planejamento', key: 'code' },
-          { label: 'Per&iacute;odo', render: row => `${formatDateOnly(row.start_date)} ate ${formatDateOnly(row.end_date)}`, sortValue: row => row.start_date },
+          { label: 'Per&iacute;odo', render: row => row.period_label || formatPeriod(row.start_date, row.end_date), sortValue: row => row.start_date || '' },
           { label: 'Produ&ccedil;&otilde;es', render: row => {
             const children = Array.isArray(row.schedule_tree?.children) ? row.schedule_tree.children : [];
             const match = String(row.material_name || '').match(/^(\d+)\s+produ/i);

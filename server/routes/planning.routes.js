@@ -5,6 +5,46 @@ import { createPlanningPdf } from '../../services/pdf.service.js';
 
 const router = Router();
 
+function isValidDateOnly(value) {
+  const dateValue = dateOnlyValue(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) return false;
+  const date = new Date(`${dateValue}T00:00:00`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === dateValue;
+}
+
+function normalizeDateOnly(...values) {
+  const value = values.find(isValidDateOnly);
+  return value ? dateOnlyValue(value) : null;
+}
+
+function dateOnlyValue(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  return String(value || '').slice(0, 10);
+}
+
+function normalizeJsonObject(value) {
+  if (value && typeof value === 'object') return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function formatDateBr(value) {
+  const dateValue = normalizeDateOnly(value);
+  if (!dateValue) return '';
+  return dateValue.split('-').reverse().join('/');
+}
+
+function formatPeriodLabel(startDate, endDate) {
+  const start = formatDateBr(startDate);
+  const end = formatDateBr(endDate);
+  return start && end ? `${start} at\u00e9 ${end}` : 'Per\u00edodo n\u00e3o informado';
+}
+
 async function planningContext(db, payload = {}) {
   const materialId = Number(payload.materialId);
   const materialCode = String(payload.materialCode || '').trim();
@@ -52,6 +92,23 @@ router.post('/plans', async (req, res, next) => {
   try {
     const db = requireDb();
     const plan = buildPlan(req.body, await planningContext(db, req.body));
+    const planningStartDate = normalizeDateOnly(
+      req.body.planningStartDate,
+      req.body.startDate,
+      req.body.selectedDate,
+      plan.summary.planningStartDate,
+      plan.summary.startDate
+    );
+    const planningEndDate = normalizeDateOnly(
+      req.body.planningEndDate,
+      req.body.endDate,
+      plan.summary.planningEndDate,
+      plan.summary.endDate,
+      planningStartDate
+    );
+    if (!planningStartDate || !planningEndDate) {
+      return res.status(400).json({ error: 'Periodo do planejamento invalido.' });
+    }
     const saved = await db.begin(async tx => {
       const [created] = await tx`
         INSERT INTO production_plans (
@@ -61,7 +118,7 @@ router.post('/plans', async (req, res, next) => {
         VALUES (
           ${plan.code}, ${plan.summary.materialName}, ${plan.summary.materialCode}, ${plan.summary.machineName || ''},
           ${Number(plan.summary.peopleCount || 0)}, ${plan.summary.plannedQty}, ${plan.summary.plannedUnit},
-          ${plan.summary.hoursPerDay}, ${plan.summary.startDate}, ${plan.summary.endDate}, 'planned', ${plan.summary.dateMode},
+          ${plan.summary.hoursPerDay}, ${planningStartDate}, ${planningEndDate}, 'planned', ${plan.summary.dateMode},
           ${JSON.stringify(plan.tree)}::jsonb, ${JSON.stringify(plan.operations)}::jsonb, NULL
         )
         RETURNING *
@@ -69,7 +126,7 @@ router.post('/plans', async (req, res, next) => {
       for (const day of plan.days) {
         await tx`
           INSERT INTO production_plan_days (plan_id, planned_date, material_name, material_code, machine_name, people_count, planned_qty, planned_unit)
-          VALUES (${created.id}, ${day.planned_date}, ${day.material_name}, ${day.material_code}, ${day.machine_name}, ${day.people_count}, ${day.planned_qty}, ${day.planned_unit})
+          VALUES (${created.id}, ${day.planned_date}, ${day.material_name}, ${day.material_code}, ${day.machine_name || ''}, ${Number(day.people_count || 0)}, ${day.planned_qty}, ${day.planned_unit})
         `;
       }
       return created;
@@ -89,7 +146,13 @@ router.get('/plans', async (req, res, next) => {
       ORDER BY created_at DESC
       LIMIT 100
     `;
-    res.json(rows);
+    res.json(rows.map(row => ({
+      ...row,
+      start_date: normalizeDateOnly(row.start_date),
+      end_date: normalizeDateOnly(row.end_date),
+      period_label: formatPeriodLabel(row.start_date, row.end_date),
+      schedule_tree: normalizeJsonObject(row.schedule_tree)
+    })));
   } catch (error) {
     next(error);
   }
