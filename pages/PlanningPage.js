@@ -673,16 +673,28 @@ export function PlanningPage() {
     return String(node.materialId ?? node.materialCode ?? node.materialName);
   }
 
+  function normalizedFlowQuantities(node) {
+    const stockUsedQty = Number(node.stockUsedQty || 0);
+    const produceQty = Number(node.produceQty || 0);
+    const requiredQty = Math.max(Number(node.requiredQty || 0), stockUsedQty + produceQty);
+    return {
+      requiredQty,
+      stockUsedQty: Math.min(stockUsedQty, requiredQty),
+      produceQty: Math.min(produceQty, requiredQty)
+    };
+  }
+
   function mergeFlowNode(targetNode, sourceNode) {
     const productionKey = String(sourceNode.productionKey || `production-${Number(sourceNode.productionIndex || 0)}`);
+    const sourceQuantities = normalizedFlowQuantities(sourceNode);
     if (!targetNode.productionKeys.has(productionKey)) {
-      targetNode.requiredQty = Number(targetNode.requiredQty || 0) + Number(sourceNode.requiredQty || 0);
-      targetNode.stockUsedQty = Number(targetNode.stockUsedQty || 0) + Number(sourceNode.stockUsedQty || 0);
-      targetNode.produceQty = Number(targetNode.produceQty || 0) + Number(sourceNode.produceQty || 0);
+      targetNode.requiredQty = Number(targetNode.requiredQty || 0) + sourceQuantities.requiredQty;
+      targetNode.stockUsedQty = Number(targetNode.stockUsedQty || 0) + sourceQuantities.stockUsedQty;
+      targetNode.produceQty = Number(targetNode.produceQty || 0) + sourceQuantities.produceQty;
     } else {
-      targetNode.requiredQty = Math.max(Number(targetNode.requiredQty || 0), Number(sourceNode.requiredQty || 0));
-      targetNode.stockUsedQty = Math.max(Number(targetNode.stockUsedQty || 0), Number(sourceNode.stockUsedQty || 0));
-      targetNode.produceQty = Math.max(Number(targetNode.produceQty || 0), Number(sourceNode.produceQty || 0));
+      targetNode.requiredQty = Math.max(Number(targetNode.requiredQty || 0), sourceQuantities.requiredQty);
+      targetNode.stockUsedQty = Math.max(Number(targetNode.stockUsedQty || 0), sourceQuantities.stockUsedQty);
+      targetNode.produceQty = Math.max(Number(targetNode.produceQty || 0), sourceQuantities.produceQty);
     }
     targetNode.stockQty = Math.max(Number(targetNode.stockQty || 0), Number(sourceNode.stockQty || 0));
     targetNode.forceStockOnly = targetNode.forceStockOnly || sourceNode.forceStockOnly;
@@ -708,8 +720,10 @@ export function PlanningPage() {
       const key = flowNodeKey(node);
       if (!nodes.has(key)) {
         const productionKey = String(node.productionKey || `production-${Number(node.productionIndex || 0)}`);
+        const quantities = normalizedFlowQuantities(node);
         nodes.set(key, {
           ...node,
+          ...quantities,
           flowKey: key,
           flowOrder: nodes.size,
           children: [],
