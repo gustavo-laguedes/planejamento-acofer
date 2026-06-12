@@ -2195,9 +2195,7 @@ body.calendar-fullscreen-open {
   min-width: var(--calendar-day-width, 260px);
   height: var(--machine-row-height, 104px);
   border-right: 1px solid var(--line);
-  background:
-    linear-gradient(to right, rgba(15, 76, 92, 0.08) 1px, transparent 1px) 0 0 / calc(100% / 4) 100%,
-    #fbfcfd;
+  background: #fbfcfd;
 }
 
 .machine-row:last-child,
@@ -2230,6 +2228,7 @@ body.calendar-fullscreen-open {
 
 .machine-day-cell .gantt-bar {
   min-height: 24px;
+  min-width: 112px;
   z-index: 5;
 }
 
@@ -2335,6 +2334,12 @@ body.calendar-fullscreen-open {
 .operation-split-section {
   display: grid;
   gap: 12px;
+}
+
+.split-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .operation-splits-target {

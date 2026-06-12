@@ -413,6 +413,50 @@ function productionBreakdown(operation) {
   return stableProductionBreakdown([...grouped.values()]);
 }
 
+function splitRootOperationId(operation = {}) {
+  const id = String(operation.splitParentOperationId || operation.operationId || operation.materialId || '');
+  return id.includes(':parte:') ? id.split(':parte:')[0] : id;
+}
+
+function splitPartsFromOperations(parentId, operationList = []) {
+  return operationList
+    .filter(item => String(item.splitParentOperationId || '') === String(parentId))
+    .sort((left, right) =>
+      Number(left.splitPartNumber || 0) - Number(right.splitPartNumber || 0)
+      || dateTimeMs(left.startDate, operationStartTime(left)) - dateTimeMs(right.startDate, operationStartTime(right))
+    )
+    .map(item => ({
+      quantity: Number(item.produceQty || 0),
+      startDate: item.startDate,
+      startTime: operationStartTime(item),
+      machineName: item.machineName,
+      peopleCount: item.peopleCount,
+      productionModelName: item.productionModelName
+    }));
+}
+
+function operationWithSplitParent(operation, operationList = []) {
+  if (!operation?.splitParentOperationId) return operation;
+  const parentId = splitRootOperationId(operation);
+  const siblings = operationList.filter(item => String(item.splitParentOperationId || '') === String(parentId));
+  if (!siblings.length) return operation;
+  const ordered = siblings.slice().sort((left, right) =>
+    dateTimeMs(left.startDate, operationStartTime(left)) - dateTimeMs(right.startDate, operationStartTime(right))
+  );
+  const last = ordered[ordered.length - 1];
+  return {
+    ...operation,
+    operationId: parentId,
+    splitParentOperationId: null,
+    splitParts: splitPartsFromOperations(parentId, operationList),
+    produceQty: Number(siblings.reduce((sum, item) => sum + Number(item.produceQty || 0), 0).toFixed(3)),
+    startDate: ordered[0]?.startDate || operation.startDate,
+    startTime: operationStartTime(ordered[0]) || operationStartTime(operation),
+    endDate: last?.endDate || operation.endDate,
+    endTime: operationEndTime(last) || operationEndTime(operation)
+  };
+}
+
 function productivitySummary(operation, breakdown = productionBreakdown(operation)) {
   const items = breakdown.length ? breakdown : [operation];
   const labels = [...new Set(items.map(item => {
@@ -929,7 +973,7 @@ function normalizeSplitQuantity(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
-function splitRowTemplate(index, part, operation, machineOptions) {
+function splitRowTemplate(index, part, operation, machineOptions, totalParts = 0) {
   const models = modelOptions(operation);
   const selectedValue = optionValue({
     machineName: part.machineName || operation.machineName,
@@ -958,7 +1002,7 @@ function splitRowTemplate(index, part, operation, machineOptions) {
           ${models.length ? models.map(model => `<option value="${escapeAttr(model.modelName)}" ${String(model.modelName) === String(selectedModel) ? 'selected' : ''}>${escapeAttr(model.label || model.modelName)}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
         </select>
       </label>
-      ${index > 1 ? '<button class="link-button danger remove-split" type="button">Remover</button>' : ''}
+      ${totalParts > 1 ? '<button class="link-button danger remove-split" type="button">Remover</button>' : ''}
     </article>
   `;
 }
@@ -1033,6 +1077,17 @@ function dispatchSplit(wrapper, operation, modal) {
     }
   }));
   return true;
+}
+
+function dispatchRemoveSplit(wrapper, operation) {
+  wrapper.dispatchEvent(new CustomEvent('operation-split-remove', {
+    bubbles: true,
+    detail: {
+      operationId: splitRootOperationId(operation),
+      materialId: String(operation.materialId),
+      productionIndex: Number(operation.productionIndex || 0)
+    }
+  }));
 }
 
 function confirmManualNonWorkingDates(modal, operation) {
@@ -1113,7 +1168,10 @@ function showOperationModal(wrapper, operation) {
         <div class="operation-split-section" ${isSharedOperation ? 'hidden' : ''}>
           <div class="section-heading">
             <h3>Divis&atilde;o de produ&ccedil;&atilde;o</h3>
-            <button class="secondary-button divide-production" type="button">Dividir produ&ccedil;&atilde;o</button>
+            <div class="split-section-actions">
+              <button class="secondary-button divide-production" type="button">Dividir produ&ccedil;&atilde;o</button>
+              <button class="secondary-button danger remove-splits" type="button" hidden>Unificar produ&ccedil;&atilde;o</button>
+            </div>
           </div>
           <p class="form-error split-warning" hidden></p>
           <div class="operation-splits-target"></div>
@@ -1145,12 +1203,17 @@ function showOperationModal(wrapper, operation) {
   });
   const splitsTarget = backdrop.querySelector('.operation-splits-target');
   const addSplitButton = backdrop.querySelector('.add-split');
+  const removeSplitsButton = backdrop.querySelector('.remove-splits');
   const renderSplits = (target, parts, scopeOperation, scopeMachineOptions, addButton = null) => {
     backdrop.querySelector('.operation-modal')?.classList.add('is-split-mode');
-    target.innerHTML = parts.map((part, index) => splitRowTemplate(index, part, scopeOperation, scopeMachineOptions)).join('');
+    target.innerHTML = parts.map((part, index) => splitRowTemplate(index, part, scopeOperation, scopeMachineOptions, parts.length)).join('');
     if (addButton) addButton.hidden = false;
+    if (removeSplitsButton && target === splitsTarget) removeSplitsButton.hidden = false;
     target.closest('.operation-production-row, .operation-split-section')?.querySelector('.split-warning')?.toggleAttribute('hidden', true);
   };
+  if (operation.splitParts?.length) {
+    renderSplits(splitsTarget, operation.splitParts, operation, machineOptions, addSplitButton);
+  }
   backdrop.querySelector('.operation-split-section .divide-production')?.addEventListener('click', () => {
     const total = Number(operation.produceQty || 0);
     const half = Number((total / 2).toFixed(3));
@@ -1163,6 +1226,10 @@ function showOperationModal(wrapper, operation) {
     const parts = collectSplitRows(splitsTarget, operation);
     parts.push({ quantity: 0, startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount, productionModelName: selectedModel });
     renderSplits(splitsTarget, parts, operation, machineOptions, addSplitButton);
+  });
+  removeSplitsButton?.addEventListener('click', () => {
+    dispatchRemoveSplit(wrapper, operation);
+    backdrop.remove();
   });
   backdrop.addEventListener('click', event => {
     if (event.target.classList.contains('divide-production') && event.target.closest('.operation-production-row')) {
@@ -1367,6 +1434,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
 
   function renderMachineBoard() {
     const zoom = zoomLevels[zoomIndex];
+    const machineDayWidth = Math.max(zoom.dayWidth, 280);
     const totalMinutes = dayEnd - dayStart;
     const bodyHeight = MACHINE_CALENDAR_ORDER.length * zoom.machineRowHeight;
     const lunchBreaks = shifts
@@ -1398,7 +1466,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     }
     const capacityCache = new Map(dates.map(date => [date, capacityForDateFromSegments(date, segmentCache, shifts)]));
     board.style.setProperty('--calendar-days', String(dates.length));
-    board.style.setProperty('--calendar-day-width', `${zoom.dayWidth}px`);
+    board.style.setProperty('--calendar-day-width', `${machineDayWidth}px`);
     board.style.setProperty('--machine-row-height', `${zoom.machineRowHeight}px`);
     board.style.setProperty('--calendar-body-height', `${bodyHeight}px`);
     board.innerHTML = `
@@ -1429,7 +1497,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
                 const dayOperations = arrangeParallelSegments(daySegments).map(item => {
                   const { operation, segment } = item;
                   const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
-                  const shouldShowText = ((end - start) / totalMinutes) * zoom.dayWidth >= 78 || zoom.machineRowHeight >= 118;
+                  const shouldShowText = ((end - start) / totalMinutes) * machineDayWidth >= 96 || zoom.machineRowHeight >= 118;
                   const eventColor = operationEventColor(operation);
                   const breakdown = productionBreakdown(operation);
                   const style = machineSegmentStyle({ ...segment, visualStart: item.visualStart }, dayStart, dayEnd, item.lane, item.laneCount);
@@ -1574,7 +1642,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     if (!bar) return;
     const operation = operations.find(item => String(item.operationId || item.materialId) === String(bar.dataset.operationId));
     if (operation?.operationType === 'transport') return;
-    if (operation) showOperationModal(wrapper, operation);
+    if (operation) showOperationModal(wrapper, operationWithSplitParent(operation, operations));
   });
 
   wrapper.querySelector('[data-zoom-out]')?.addEventListener('click', () => setZoom(zoomIndex - 1));

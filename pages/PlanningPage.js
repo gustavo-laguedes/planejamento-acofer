@@ -249,7 +249,9 @@ function defaultDraft() {
     planningEndDate: addDays(start, 7),
     shifts: [defaultShift(0)],
     productions: [emptyProduction(0)],
-    stockOnlyMaterials: []
+    stockOnlyMaterials: [],
+    operationOverrides: {},
+    operationSplits: []
   };
 }
 
@@ -1523,6 +1525,7 @@ export function PlanningPage() {
 
     target.addEventListener('operation-date-change', async event => {
       const key = String(event.detail.operationId || event.detail.materialId);
+      draft.operationOverrides = draft.operationOverrides && typeof draft.operationOverrides === 'object' ? draft.operationOverrides : {};
       draft.operationOverrides[key] = {
         ...(draft.operationOverrides[key] || {}),
         startDate: event.detail.startDate,
@@ -1545,6 +1548,7 @@ export function PlanningPage() {
 
     target.addEventListener('operation-config-change', async event => {
       const changes = Array.isArray(event.detail.changes) ? event.detail.changes : [event.detail];
+      draft.operationOverrides = draft.operationOverrides && typeof draft.operationOverrides === 'object' ? draft.operationOverrides : {};
       changes.forEach(change => {
         const key = String(change.operationId || change.materialId);
         const override = {
@@ -1573,6 +1577,7 @@ export function PlanningPage() {
 
     target.addEventListener('operation-split-change', async event => {
       const splits = Array.isArray(event.detail.splits) ? event.detail.splits : [event.detail];
+      draft.operationSplits = Array.isArray(draft.operationSplits) ? draft.operationSplits : [];
       const operationIds = new Set(splits.map(split => String(split.operationId || split.materialId)));
       draft.operationSplits = (draft.operationSplits || []).filter(split => !operationIds.has(String(split.operationId)));
       splits.forEach(split => {
@@ -1583,6 +1588,19 @@ export function PlanningPage() {
           parts: split.parts
         });
       });
+      saveDraftNow();
+      try {
+        await simulateCurrent();
+      } catch (error) {
+        toast(error);
+      }
+    });
+
+    target.addEventListener('operation-split-remove', async event => {
+      const operationId = String(event.detail.operationId || event.detail.materialId || '');
+      if (!operationId) return;
+      draft.operationSplits = (draft.operationSplits || [])
+        .filter(split => String(split.operationId) !== operationId);
       saveDraftNow();
       try {
         await simulateCurrent();
