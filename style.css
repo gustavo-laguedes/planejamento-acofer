@@ -1723,8 +1723,19 @@ thead tr:nth-child(2) th {
 .gantt-zoom-controls {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.calendar-view-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-right: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafb;
+  padding: 3px;
 }
 
 .gantt-zoom-controls .secondary-button {
@@ -1733,6 +1744,24 @@ thead tr:nth-child(2) th {
   padding: 0;
   font-size: 18px;
   line-height: 1;
+}
+
+.gantt-zoom-controls .calendar-view-toggle .secondary-button {
+  width: auto;
+  min-width: 92px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.gantt-zoom-controls .calendar-view-toggle .secondary-button.is-active {
+  border-color: var(--petroleum);
+  background: #ffffff;
+  color: var(--petroleum-dark);
+  box-shadow: 0 4px 10px rgba(15, 76, 92, 0.12);
 }
 
 .gantt-zoom-controls .fullscreen-button {
@@ -1819,7 +1848,8 @@ body.calendar-fullscreen-open {
 }
 
 .gantt-date.non-working-day,
-.agenda-day-column.non-working-day {
+.agenda-day-column.non-working-day,
+.machine-day-cell.non-working-day {
   background-image:
     repeating-linear-gradient(
       135deg,
@@ -1918,6 +1948,10 @@ body.calendar-fullscreen-open {
 }
 
 .agenda-day-column.non-working-day {
+  background-color: #f7fafb;
+}
+
+.machine-day-cell.non-working-day {
   background-color: #f7fafb;
 }
 
@@ -2039,6 +2073,129 @@ body.calendar-fullscreen-open {
   color: var(--event-text, #263142);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.machine-grid {
+  --machine-axis-width: 118px;
+  display: grid;
+  grid-template-columns: var(--machine-axis-width) max(100%, calc(var(--calendar-days) * var(--calendar-day-width, 260px)));
+  grid-template-rows: 74px var(--calendar-body-height, 832px);
+  width: max(100%, calc(var(--machine-axis-width) + (var(--calendar-days) * var(--calendar-day-width, 260px))));
+  min-width: max(100%, calc(var(--machine-axis-width) + (var(--calendar-days) * var(--calendar-day-width, 260px))));
+}
+
+.machine-corner {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 10;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-height: 74px;
+  padding: 9px 10px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: #eef5f7;
+  color: var(--petroleum-dark);
+}
+
+.machine-corner span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.machine-dates {
+  display: grid;
+  grid-template-columns: repeat(var(--calendar-days), minmax(var(--calendar-day-width, 260px), 1fr));
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  min-height: 74px;
+  background: #eef5f7;
+  border-bottom: 1px solid var(--line);
+}
+
+.machine-dates .gantt-date {
+  min-height: 74px;
+}
+
+.machine-axis {
+  position: sticky;
+  left: 0;
+  z-index: 7;
+  height: var(--calendar-body-height, 832px);
+  border-right: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.machine-axis-row {
+  display: grid;
+  align-items: center;
+  height: var(--machine-row-height, 104px);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--petroleum-dark);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.machine-days {
+  display: grid;
+  grid-template-rows: repeat(8, var(--machine-row-height, 104px));
+  height: var(--calendar-body-height, 832px);
+  background: #ffffff;
+}
+
+.machine-row {
+  display: grid;
+  grid-template-columns: repeat(var(--calendar-days), minmax(var(--calendar-day-width, 260px), 1fr));
+  height: var(--machine-row-height, 104px);
+  border-bottom: 1px solid var(--line);
+}
+
+.machine-day-cell {
+  position: relative;
+  min-width: var(--calendar-day-width, 260px);
+  height: var(--machine-row-height, 104px);
+  border-right: 1px solid var(--line);
+  background:
+    linear-gradient(to right, rgba(15, 76, 92, 0.08) 1px, transparent 1px) 0 0 / calc(100% / 4) 100%,
+    #fbfcfd;
+}
+
+.machine-row:last-child,
+.machine-axis-row:last-child {
+  border-bottom: 0;
+}
+
+.machine-day-cell:last-child {
+  border-right: 0;
+}
+
+.machine-lunch-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--lunch-left);
+  width: var(--lunch-width);
+  display: grid;
+  place-items: center;
+  background: rgba(152, 162, 179, 0.26);
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.machine-day-cell .gantt-bar {
+  min-height: 24px;
+  z-index: 5;
 }
 
 .operation-detail-grid {

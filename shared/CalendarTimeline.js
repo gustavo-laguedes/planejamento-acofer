@@ -243,6 +243,53 @@ const PRODUCTION_STAGE_COLORS = [
 
 const TRANSPORT_COLOR = { bg: '#f3f5f7', border: '#c6ced6', text: '#3d4752' };
 const SEQUENTIAL_EVENT_VISUAL_GAP_MINUTES = 1;
+const CALENDAR_VIEW_STORAGE_KEY = 'planejamento_calendar_view';
+const MACHINE_CALENDAR_ORDER = [
+  'Trefila',
+  'EC-125',
+  'EC-60',
+  'Focus-8',
+  'Aco-8',
+  'MT-200',
+  'MT-150',
+  'MT-100'
+];
+
+function normalizeMachineName(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function machineLabel(machineName) {
+  return machineName === 'Aco-8' ? 'A&ccedil;o-8' : escapeAttr(machineName);
+}
+
+function operationMachineNames(operation) {
+  const breakdown = productionBreakdown(operation);
+  const names = breakdown.length > 1
+    ? breakdown.map(item => item.machineName || operation.machineName)
+    : [operation.machineName];
+  return [...new Set(names.filter(Boolean).map(String))];
+}
+
+function savedCalendarView() {
+  try {
+    return sessionStorage.getItem(CALENDAR_VIEW_STORAGE_KEY) || 'time';
+  } catch {
+    return 'time';
+  }
+}
+
+function saveCalendarView(viewMode) {
+  try {
+    sessionStorage.setItem(CALENDAR_VIEW_STORAGE_KEY, viewMode);
+  } catch {
+    // Ignore blocked storage; the view still works for the current component instance.
+  }
+}
 
 function segmentMinutes(segment, dayStart, dayEnd) {
   const start = clampMinutes(parseTime(segment.startTime, minutesToTime(dayStart)), dayStart, dayEnd);
@@ -264,6 +311,17 @@ function segmentStyle(segment, dayStart, dayEnd, hourHeight) {
 function laneStyle(lane, laneCount) {
   const width = 100 / Math.max(laneCount, 1);
   return `--event-left: calc(8px + ${lane * width}%); --event-width: calc(${width}% - 16px);`;
+}
+
+function machineSegmentStyle(segment, dayStart, dayEnd, lane, laneCount) {
+  const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
+  const visualStart = Number.isFinite(segment.visualStart)
+    ? clampMinutes(segment.visualStart, dayStart, end)
+    : start;
+  const left = ((visualStart - dayStart) / (dayEnd - dayStart)) * 100;
+  const width = (Math.max(end - visualStart, 1) / (dayEnd - dayStart)) * 100;
+  const laneHeight = 100 / Math.max(laneCount, 1);
+  return `--event-left: calc(${left}% + 4px); --event-width: calc(${width}% - 8px); --event-top: calc(${lane * laneHeight}% + 5px); --event-height: calc(${laneHeight}% - 10px);`;
 }
 
 function colorStyle(color) {
@@ -1088,14 +1146,15 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   const wrapper = document.createElement('section');
   wrapper.className = 'calendar-gantt';
   const zoomLevels = [
-    { dayWidth: 170, hourHeight: 58 },
-    { dayWidth: 210, hourHeight: 72 },
-    { dayWidth: 260, hourHeight: 88 },
-    { dayWidth: 320, hourHeight: 108 },
-    { dayWidth: 390, hourHeight: 132 }
+    { dayWidth: 170, hourHeight: 58, machineRowHeight: 76 },
+    { dayWidth: 210, hourHeight: 72, machineRowHeight: 88 },
+    { dayWidth: 260, hourHeight: 88, machineRowHeight: 104 },
+    { dayWidth: 320, hourHeight: 108, machineRowHeight: 122 },
+    { dayWidth: 390, hourHeight: 132, machineRowHeight: 144 }
   ];
   const topPad = 18;
   let zoomIndex = 0;
+  let viewMode = savedCalendarView();
 
   if (!operations.length) {
     wrapper.innerHTML = '<div class="empty-state">Simule um planejamento para visualizar o calend&aacute;rio.</div>';
@@ -1139,6 +1198,10 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
 
   wrapper.innerHTML = `
     <div class="gantt-zoom-controls" aria-label="Zoom do calend&aacute;rio">
+      <div class="calendar-view-toggle" role="group" aria-label="Visualiza&ccedil;&atilde;o do calend&aacute;rio">
+        <button class="secondary-button is-active" type="button" data-calendar-view="time">Por tempo</button>
+        <button class="secondary-button" type="button" data-calendar-view="machines">Por m&aacute;quinas</button>
+      </div>
       <button class="secondary-button" type="button" data-zoom-out aria-label="Diminuir zoom">-</button>
       <button class="secondary-button" type="button" data-zoom-in aria-label="Aumentar zoom">+</button>
       <button class="secondary-button fullscreen-button" type="button" data-fullscreen aria-label="Tela cheia">Tela cheia</button>
@@ -1179,7 +1242,131 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     renderBoard();
   }
 
+  function setViewMode(nextMode) {
+    viewMode = nextMode === 'machines' ? 'machines' : 'time';
+    saveCalendarView(viewMode);
+    wrapper.querySelectorAll('[data-calendar-view]').forEach(button => {
+      const isActive = button.dataset.calendarView === viewMode;
+      button.classList.toggle('is-active', isActive);
+      button.setAttribute('aria-pressed', String(isActive));
+    });
+    renderBoard();
+  }
+
+  function renderOperationButton(operation, segment, item, style, shouldShowText, colorStyleText) {
+    const startTime = operationStartTime(operation);
+    const endTime = operationEndTime(operation);
+    const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
+    const isTransport = operation.operationType === 'transport';
+    const breakdown = isTransport ? [] : productionBreakdown(operation);
+    const shortLabel = isTransport ? 'TR' : `${operation.peopleCount || '-'}p`;
+    return `
+      <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${style} ${colorStyleText}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+        ${shouldShowText && isTransport ? `
+          <strong>Transporte</strong>
+          <span>${operation.materialName || '-'}</span>
+          <span>${operation.originLocationName || '-'} -&gt; ${operation.destinationLocationName || '-'}</span>
+          <small>${formatHours(operation.transportHours)}h | ${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
+        ` : shouldShowText ? `
+          <strong>${operation.materialName}</strong>
+          <span>${quantity || '-'}</span>
+          <span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
+          ${breakdown.length > 1 ? `<small>${breakdown.map(part => `${escapeAttr(part.productionTitle || `P${Number(part.productionIndex || 0) + 1}`)}: ${formatQty(part.quantity)}`).join(' | ')}</small>` : ''}
+          <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
+        ` : `<span class="gantt-compact-label">${escapeAttr(shortLabel)}</span>`}
+      </button>
+    `;
+  }
+
+  function operationEventColor(operation) {
+    const isTransport = operation.operationType === 'transport';
+    const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
+    const productionColorIndex = stableProductionIndex(operation);
+    const palette = PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length];
+    const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
+    const productionBaseColor = palette[0];
+    return isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
+  }
+
+  function renderMachineBoard() {
+    const zoom = zoomLevels[zoomIndex];
+    const totalMinutes = dayEnd - dayStart;
+    const bodyHeight = MACHINE_CALENDAR_ORDER.length * zoom.machineRowHeight;
+    const lunchBreaks = shifts
+      .filter(shift => shift.lunchEnd > shift.lunchStart && shift.lunchEnd > dayStart && shift.lunchStart < dayEnd)
+      .map(shift => ({
+        label: shift.label,
+        lunchStart: shift.lunchStart,
+        lunchEnd: shift.lunchEnd,
+        left: (clampMinutes(shift.lunchStart, dayStart, dayEnd) / totalMinutes) * 100,
+        width: ((clampMinutes(shift.lunchEnd, dayStart, dayEnd) - clampMinutes(shift.lunchStart, dayStart, dayEnd)) / totalMinutes) * 100
+      }))
+      .filter(shift => shift.width > 0);
+    const board = wrapper.querySelector('.gantt-board');
+    board.style.setProperty('--calendar-days', String(dates.length));
+    board.style.setProperty('--calendar-day-width', `${zoom.dayWidth}px`);
+    board.style.setProperty('--machine-row-height', `${zoom.machineRowHeight}px`);
+    board.style.setProperty('--calendar-body-height', `${bodyHeight}px`);
+    board.innerHTML = `
+      <div class="machine-grid">
+        <div class="machine-corner">
+          <strong>M&aacute;quina</strong>
+          <span>Ocupa&ccedil;&atilde;o</span>
+        </div>
+        <div class="machine-dates">
+          ${dates.map(date => {
+            const blockedDay = nonWorkingInfo(date);
+            return `
+              <div class="gantt-date${blockedDay ? ' non-working-day' : ''}" data-date="${date}" title="${escapeAttr(blockedDay?.name || '')}">
+                <strong>${formatDateLabel(date)}</strong>
+                <span>${formatDate(date)}</span>
+              </div>
+            `;
+          }).join('')}
+        </div>
+        <div class="machine-axis">
+          ${MACHINE_CALENDAR_ORDER.map(machine => `<div class="machine-axis-row">${machineLabel(machine)}</div>`).join('')}
+        </div>
+        <div class="machine-days">
+          ${MACHINE_CALENDAR_ORDER.map(machine => `
+            <div class="machine-row" data-machine="${escapeAttr(machine)}">
+              ${dates.map(date => {
+                const blockedDay = nonWorkingInfo(date);
+                const daySegments = operations
+                  .filter(operation => operation.operationType !== 'transport')
+                  .filter(operation => operationMachineNames(operation).some(name => normalizeMachineName(name) === normalizeMachineName(machine)))
+                  .flatMap(operation => {
+                    const segments = operationDaySegments(operation, dates, dayStart, dayEnd, lunchBreaks).get(date) || [];
+                    return segments.map(segment => ({ operation, segment }));
+                  });
+                const dayOperations = arrangeParallelSegments(daySegments).map(item => {
+                  const { operation, segment } = item;
+                  const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
+                  const shouldShowText = ((end - start) / totalMinutes) * zoom.dayWidth >= 78 || zoom.machineRowHeight >= 118;
+                  const eventColor = operationEventColor(operation);
+                  const breakdown = productionBreakdown(operation);
+                  const style = machineSegmentStyle({ ...segment, visualStart: item.visualStart }, dayStart, dayEnd, item.lane, item.laneCount);
+                  return renderOperationButton(operation, segment, item, style, shouldShowText, eventColorStyle(eventColor, breakdown, colorForProduction));
+                }).join('');
+                return `
+                  <div class="machine-day-cell${blockedDay ? ' non-working-day' : ''}" data-date="${date}">
+                    ${lunchBreaks.map(band => `<span class="machine-lunch-band" style="--lunch-left: ${band.left}%; --lunch-width: ${band.width}%;">Pausa ${escapeAttr(band.label.replace(/^Turno\s*/i, 'T'))}</span>`).join('')}
+                    ${dayOperations}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
   function renderBoard() {
+    if (viewMode === 'machines') {
+      renderMachineBoard();
+      return;
+    }
     const zoom = zoomLevels[zoomIndex];
     const totalMinutes = dayEnd - dayStart;
     const bodyHeight = topPad + (totalMinutes / 60) * zoom.hourHeight;
@@ -1315,6 +1502,9 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
 
   wrapper.querySelector('[data-zoom-out]')?.addEventListener('click', () => setZoom(zoomIndex - 1));
   wrapper.querySelector('[data-zoom-in]')?.addEventListener('click', () => setZoom(zoomIndex + 1));
+  wrapper.querySelectorAll('[data-calendar-view]').forEach(button => {
+    button.addEventListener('click', () => setViewMode(button.dataset.calendarView));
+  });
   wrapper.querySelector('[data-fullscreen]')?.addEventListener('click', () => {
     wrapper.classList.add('is-calendar-fullscreen');
     document.body.classList.add('calendar-fullscreen-open');
@@ -1332,6 +1522,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     renderBoard();
   });
 
+  setViewMode(viewMode);
   setZoom(zoomIndex);
   focusFirstOperation(wrapper, dates, operations);
 
