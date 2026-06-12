@@ -13,8 +13,8 @@ const PRODUCTION_THEMES = [
 ];
 
 const planningTabs = [
-  { id: 'simulation', label: 'Simulacao' },
-  { id: 'history', label: 'Historico de Planejamentos' }
+  { id: 'simulation', label: 'Simulação' },
+  { id: 'history', label: 'Histórico de Planejamentos' }
 ];
 
 function today() {
@@ -107,7 +107,7 @@ function formatPtBrDecimal(value) {
 function formatStatus(value) {
   const labels = {
     planned: 'Planejado',
-    launched: 'Lancado',
+    launched: 'Lançado',
     canceled: 'Cancelado'
   };
   return labels[String(value || '').toLowerCase()] || value || 'Sem status';
@@ -119,6 +119,17 @@ function formatDuration(minutes) {
   const mins = total % 60;
   if (!hours) return `${mins} min`;
   return mins ? `${hours}h ${String(mins).padStart(2, '0')}min` : `${hours}h`;
+}
+
+function formatHourDuration(value) {
+  const totalMinutes = Math.max(Math.round(Number(value || 0) * 60), 0);
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')} h/dia`;
+}
+
+function isPlanningRootName(value) {
+  return ['Plano de producao', 'Plano de produção'].includes(String(value || ''));
 }
 
 function generatePlanningCode(productionCount = 1, date = new Date()) {
@@ -451,10 +462,10 @@ export function PlanningPage() {
       productionModelName: firstProduction.productionModelName,
       shifts: draft.shifts.map(shift => ({
         label: shift.label,
-        hoursPerDay: parsePtBrDecimal(shift.hoursPerDay, 8),
+        hoursPerDay: String(shift.hoursPerDay || '').trim() || '8,48',
         shiftStartTime: shift.shiftStartTime,
         pauseLabel: shift.pauseLabel,
-        pauseHours: parsePtBrDecimal(shift.pauseHours, 0),
+        pauseHours: String(shift.pauseHours || '').trim() || '0',
         shiftEndTime: shift.shiftEndTime,
         teamAvailable: Number(shift.teamAvailable || 0)
       })),
@@ -472,14 +483,14 @@ export function PlanningPage() {
       return false;
     }
     if (draft.planningEndDate < draft.planningStartDate) {
-      form.elements.planningEndDate.setCustomValidity('A data final deve ser maior ou igual a data inicial.');
+      form.elements.planningEndDate.setCustomValidity('A data final deve ser maior ou igual à data inicial.');
       form.reportValidity();
       return false;
     }
     form.elements.planningEndDate.setCustomValidity('');
     const invalidProduction = draft.productions.find(production => !materialById(production.materialId) || !(Number(production.plannedQty) > 0));
     if (invalidProduction) {
-      toast('Selecione material e quantidade maior que zero em todas as producoes.');
+      toast('Selecione material e quantidade maior que zero em todas as produções.');
       return false;
     }
     const invalidDesiredDate = draft.productions.find(production =>
@@ -498,7 +509,7 @@ export function PlanningPage() {
       || !shift.shiftEndTime
     );
     if (invalidShift) {
-      toast('Revise os horarios e pausas dos turnos.');
+      toast('Revise os horários e pausas dos turnos.');
       return false;
     }
     const invalidTransport = draft.productions.some(production => {
@@ -861,7 +872,7 @@ export function PlanningPage() {
   }
 
   function drawProductionFlowConnectors() {
-    target.querySelectorAll('[data-flow-graph]').forEach(graph => {
+    page.querySelectorAll('[data-flow-graph]').forEach(graph => {
       const svg = graph.querySelector('.production-flow-svg');
       const edgeScript = graph.querySelector('[data-flow-edges]');
       if (!svg || !edgeScript) return;
@@ -900,7 +911,7 @@ export function PlanningPage() {
   }
 
   function renderProductionFlows(result) {
-    const trees = result.tree?.children?.length && result.tree.materialName === 'Plano de producao'
+    const trees = result.tree?.children?.length && isPlanningRootName(result.tree.materialName)
       ? result.tree.children
       : result.tree ? [result.tree] : [];
     const summary = result.summary.productions || [];
@@ -950,7 +961,7 @@ export function PlanningPage() {
     const productions = result.summary.productions || [];
     const transports = draft.productions.reduce((sum, production) => sum + (production.transports || []).length, 0);
     const alerts = [];
-    if (!isValidDateOnly(draft.planningStartDate) || !isValidDateOnly(draft.planningEndDate)) alerts.push('Periodo do planejamento invalido.');
+    if (!isValidDateOnly(draft.planningStartDate) || !isValidDateOnly(draft.planningEndDate)) alerts.push('Período do planejamento inválido.');
     if (!result.operations.length) alerts.push('Nenhuma operacao produtiva foi gerada.');
     const rawMaterialWarnings = result.operations.filter(operation => operation.isInitialRawMaterial && Number(operation.stockQty || 0) < Number(operation.requiredQty || 0));
     if (rawMaterialWarnings.length) alerts.push('Existem materias-primas iniciais com estoque insuficiente.');
@@ -1016,16 +1027,18 @@ export function PlanningPage() {
       }
     });
     page.appendChild(backdrop);
+    requestAnimationFrame(drawProductionFlowConnectors);
+    setTimeout(drawProductionFlowConnectors, 80);
   }
 
   function planTreeRoots(tree) {
     if (!tree || typeof tree !== 'object') return [];
-    return Array.isArray(tree.children) && tree.materialName === 'Plano de producao' ? tree.children : [tree];
+    return Array.isArray(tree.children) && isPlanningRootName(tree.materialName) ? tree.children : [tree];
   }
 
   function productionRowsFromTree(tree) {
     return planTreeRoots(tree).map((node, index) => ({
-      title: node.productionTitle || `Producao ${Number(node.productionIndex ?? index) + 1}`,
+      title: node.productionTitle || `Produção ${Number(node.productionIndex ?? index) + 1}`,
       materialName: node.materialName,
       materialCode: node.materialCode,
       plannedQty: node.requiredQty,
@@ -1041,7 +1054,7 @@ export function PlanningPage() {
       ...operation,
       sequence: index + 1,
       linkedProductions: Array.isArray(operation.productionItems) && operation.productionItems.length
-        ? operation.productionItems.map(item => `${item.productionTitle || `Producao ${Number(item.productionIndex || 0) + 1}`}: ${formatPtBrDecimal(item.quantity)} ${item.unit || operation.unit || ''}`.trim())
+        ? operation.productionItems.map(item => `${item.productionTitle || `Produção ${Number(item.productionIndex || 0) + 1}`}: ${formatPtBrDecimal(item.quantity)} ${item.unit || operation.unit || ''}`.trim())
         : [operation.productionTitle].filter(Boolean)
     }));
   }
@@ -1058,7 +1071,7 @@ export function PlanningPage() {
     planTreeRoots(tree).forEach(visit);
     operations.forEach(operation => {
       if (Number(operation.teamAvailable || 0) && Number(operation.peopleCount || 0) > Number(operation.teamAvailable || 0)) {
-        alerts.push(`Equipe excedida em ${operation.materialName}: ${operation.peopleCount} pessoas para ${operation.teamAvailable} disponiveis.`);
+        alerts.push(`Equipe excedida em ${operation.materialName}: ${operation.peopleCount} pessoas para ${operation.teamAvailable} disponíveis.`);
       }
     });
     return [...new Set(alerts)];
@@ -1082,7 +1095,7 @@ export function PlanningPage() {
   function renderFlowTree(node, level = 0) {
     if (!node) return '';
     const status = node.isInitialRawMaterial
-      ? Number(node.stockQty || 0) >= Number(node.requiredQty || 0) ? 'Materia-prima inicial com saldo' : 'Materia-prima inicial / comprar'
+      ? Number(node.stockQty || 0) >= Number(node.requiredQty || 0) ? 'Matéria-prima inicial com saldo' : 'Matéria-prima inicial / comprar'
       : Number(node.produceQty || 0) > 0 ? 'Produzir' : 'Usar saldo';
     return `
       <li>
@@ -1101,8 +1114,8 @@ export function PlanningPage() {
   function renderPlanFlowDetail(tree) {
     const roots = planTreeRoots(tree);
     return roots.length
-      ? `<div class="flow-tree-list">${roots.map(root => `<ul>${renderFlowTree(root)}</ul>`).join('')}</div>`
-      : '<p class="muted-text">Fluxo produtivo nao registrado.</p>';
+      ? renderFlowGraph(roots)
+      : '<p class="muted-text">Fluxo produtivo não registrado.</p>';
   }
 
   function openPlanDetailModal(detail) {
@@ -1115,9 +1128,6 @@ export function PlanningPage() {
     const firstOperation = operations[0];
     const lastOperation = operations[operations.length - 1];
     const alerts = planAlerts(tree, operations);
-    const materials = productions.length
-      ? productions.map(production => `${production.materialName} (${formatPtBrDecimal(production.plannedQty)} ${production.unit || ''})`.trim())
-      : [`${plan.material_name || ''} (${formatPtBrDecimal(plan.planned_qty)} ${plan.planned_unit || ''})`.trim()].filter(Boolean);
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop planning-detail-modal';
     backdrop.innerHTML = `
@@ -1131,50 +1141,46 @@ export function PlanningPage() {
         </div>
 
         <section class="planning-detail-section detail-summary-strip">
-          <article><span>Codigo</span><strong>${escapeHtml(plan.code || plan.id)}</strong></article>
-          <article><span>Periodo planejado</span><strong>${escapeHtml(formatPeriod(plan.start_date, plan.end_date))}</strong></article>
+          <article><span>Código</span><strong>${escapeHtml(plan.code || plan.id)}</strong></article>
+          <article><span>Período planejado</span><strong>${escapeHtml(formatPeriod(plan.start_date, plan.end_date))}</strong></article>
           <article><span>Status</span><strong>${escapeHtml(formatStatus(plan.status))}</strong></article>
-          <article><span>Operacoes</span><strong>${operations.length}</strong></article>
-          <article><span>Inicio/fim estimado</span><strong>${escapeHtml(`${formatDateOnly(firstOperation?.startDate)} ${firstOperation?.startTime || ''} ate ${formatDateOnly(lastOperation?.endDate)} ${lastOperation?.endTime || ''}`.trim())}</strong></article>
+          <article><span>Operações</span><strong>${operations.length}</strong></article>
+          <article><span>Início/fim estimado</span><strong>${escapeHtml(`${formatDateOnly(firstOperation?.startDate)} ${firstOperation?.startTime || ''} até ${formatDateOnly(lastOperation?.endDate)} ${lastOperation?.endTime || ''}`.trim())}</strong></article>
         </section>
 
         <section class="planning-detail-section">
-          <h3>Producoes incluidas</h3>
+          <h3>Produções incluídas</h3>
           ${renderDetailTable([
-            { label: 'Producao', render: row => escapeHtml(row.title) },
+            { label: 'Produção', render: row => escapeHtml(row.title) },
             { label: 'Material final', render: row => `${escapeHtml(row.materialName || '')}<br><span class="muted-text">${escapeHtml(row.materialCode || '')}</span>` },
             { label: 'Quantidade', render: row => escapeHtml(`${formatPtBrDecimal(row.plannedQty)} ${row.unit || ''}`.trim()) },
-            { label: 'Maquina', key: 'machineName' },
+            { label: 'Máquina', key: 'machineName' },
             { label: 'Pessoas', key: 'peopleCount' },
             { label: 'Modelo', key: 'productionModelName' }
           ], productions)}
         </section>
 
-        <section class="planning-detail-section planning-detail-two-cols">
-          <div>
-            <h3>Materiais finais</h3>
-            <div class="readonly-chip-list">${chips(materials, 'Sem materiais finais')}</div>
-          </div>
-          <div>
-            <h3>Turnos e transportes</h3>
-            <p>${escapeHtml(`${formatPtBrDecimal(plan.hours_per_day)} h/dia`)}</p>
-            <p class="muted-text">${transports.length} transporte(s) no calendario.</p>
+        <section class="planning-detail-section planning-detail-shifts">
+          <h3>Turnos e transportes</h3>
+          <div class="planning-detail-inline">
+            <p>${escapeHtml(formatHourDuration(plan.hours_per_day))}</p>
+            <p class="muted-text">${transports.length} transporte(s) no calendário.</p>
           </div>
         </section>
 
         <section class="planning-detail-section">
-          <h3>Operacoes do calendario</h3>
+          <h3>Cronograma operacional</h3>
           ${renderDetailTable([
             { label: '#', render: row => row.sequence },
             { label: 'Material', render: row => escapeHtml(row.materialName || '') },
-            { label: 'Tipo', render: row => row.operationType === 'transport' ? 'Transporte' : 'Producao' },
+            { label: 'Tipo', render: row => row.operationType === 'transport' ? 'Transporte' : 'Produção' },
             { label: 'Quantidade', render: row => escapeHtml(`${formatPtBrDecimal(row.produceQty)} ${row.unit || ''}`.trim()) },
-            { label: 'Maquina', key: 'machineName' },
+            { label: 'Máquina', key: 'machineName' },
             { label: 'Pessoas', key: 'peopleCount' },
-            { label: 'Inicio', render: row => escapeHtml(`${formatDateOnly(row.startDate)} ${row.startTime || ''}`.trim()) },
+            { label: 'Início', render: row => escapeHtml(`${formatDateOnly(row.startDate)} ${row.startTime || ''}`.trim()) },
             { label: 'Fim', render: row => escapeHtml(`${formatDateOnly(row.endDate)} ${row.endTime || ''}`.trim()) },
-            { label: 'Duracao', render: row => escapeHtml(formatDuration(row.totalMinutes)) },
-            { label: 'Producoes vinculadas', render: row => escapeHtml(row.linkedProductions.join(' | ') || '-') }
+            { label: 'Duração', render: row => escapeHtml(formatDuration(row.totalMinutes)) },
+            { label: 'Produções vinculadas', render: row => escapeHtml(row.linkedProductions.join(' | ') || '-') }
           ], operations)}
         </section>
 
@@ -1184,7 +1190,7 @@ export function PlanningPage() {
         </section>
 
         <section class="planning-detail-section">
-          <h3>Alertas e observacoes</h3>
+          <h3>Alertas e observações</h3>
           ${alerts.length ? `<ul class="planning-alert-list">${alerts.map(alert => `<li>${escapeHtml(alert)}</li>`).join('')}</ul>` : '<p class="muted-text">Sem alertas registrados.</p>'}
         </section>
       </div>
@@ -1193,6 +1199,8 @@ export function PlanningPage() {
       if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
     });
     page.appendChild(backdrop);
+    requestAnimationFrame(drawProductionFlowConnectors);
+    setTimeout(drawProductionFlowConnectors, 80);
   }
 
   async function renderSimulationTab() {
@@ -1577,7 +1585,7 @@ export function PlanningPage() {
         lastPayload = normalizePlanningPayload(lastPayload || payload(), draft.planningCode);
         saveDraftNow();
         openFinalSummaryModal(currentSimulation, draft.planningCode);
-        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Resumo do planejamento ${draft.planningCode} pronto para lancamento.` }));
+        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Resumo do planejamento ${draft.planningCode} pronto para lançamento.` }));
       } catch (error) {
         toast(error);
       }
@@ -1606,7 +1614,7 @@ export function PlanningPage() {
           { label: 'Produ&ccedil;&otilde;es', render: row => {
             const children = Array.isArray(row.schedule_tree?.children) ? row.schedule_tree.children : [];
             const match = String(row.material_name || '').match(/^(\d+)\s+produ/i);
-            return children.length && row.schedule_tree?.materialName === 'Plano de producao' ? children.length : Number(match?.[1] || 1);
+            return children.length && isPlanningRootName(row.schedule_tree?.materialName) ? children.length : Number(match?.[1] || 1);
           } },
           { label: 'Status', key: 'status' },
           { label: 'A&ccedil;&otilde;es', render: row => `
@@ -1633,7 +1641,7 @@ export function PlanningPage() {
 
     async function cancelPlan(id) {
       if (!confirm('Confirma o cancelamento deste planejamento?')) return;
-      await api(`/planning/plans/${id}/cancel`, { method: 'POST', body: { reason: 'Cancelado pelo usuario' } });
+      await api(`/planning/plans/${id}/cancel`, { method: 'POST', body: { reason: 'Cancelado pelo usuário' } });
       await loadHistory();
     }
 
