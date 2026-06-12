@@ -14,6 +14,15 @@ function eachDate(startDate, endDate) {
   return dates;
 }
 
+function minDate(...dates) {
+  return dates.filter(Boolean).sort()[0] || null;
+}
+
+function maxDate(...dates) {
+  const sorted = dates.filter(Boolean).sort();
+  return sorted[sorted.length - 1] || null;
+}
+
 function dayDiff(startDate, endDate) {
   const start = Date.UTC(...startDate.split('-').map((part, index) => index === 1 ? Number(part) - 1 : Number(part)));
   const end = Date.UTC(...endDate.split('-').map((part, index) => index === 1 ? Number(part) - 1 : Number(part)));
@@ -244,6 +253,9 @@ const PRODUCTION_STAGE_COLORS = [
 const TRANSPORT_COLOR = { bg: '#f3f5f7', border: '#c6ced6', text: '#3d4752' };
 const SEQUENTIAL_EVENT_VISUAL_GAP_MINUTES = 1;
 const CALENDAR_VIEW_STORAGE_KEY = 'planejamento_calendar_view';
+const CALENDAR_RANGE_MARGIN_DAYS = 3;
+const CALENDAR_MAX_EXTRA_DAYS = 14;
+const CALENDAR_MAX_VISIBLE_DAYS = 45;
 const MACHINE_CALENDAR_ORDER = [
   'Trefila',
   'EC-125',
@@ -497,6 +509,27 @@ function capacityForDate(date, operations, dates, shifts) {
   });
 }
 
+function capacityForDateFromSegments(date, operationSegments, shifts) {
+  return shifts.map(shift => {
+    const segments = [];
+    for (const [operation, byDate] of operationSegments.entries()) {
+      const dayParts = byDate.get(date) || [];
+      for (const segment of dayParts) {
+        const { start, end } = segmentMinutes(segment, shift.shiftStart, shift.shiftEnd);
+        segments.push({ operation, start, end });
+      }
+    }
+    const used = peakPeople(segments);
+    const available = shift.teamAvailable;
+    return {
+      label: shift.label,
+      used,
+      available,
+      exceeded: available > 0 && used > available
+    };
+  });
+}
+
 function capacityTooltip(items) {
   return items.map(item => (
     item.exceeded
@@ -507,6 +540,10 @@ function capacityTooltip(items) {
 
 function renderCapacityHeader(date, operations, dates, shifts, blockedDay) {
   const capacity = capacityForDate(date, operations, dates, shifts);
+  return renderCapacityHeaderWithCapacity(date, capacity, blockedDay);
+}
+
+function renderCapacityHeaderWithCapacity(date, capacity, blockedDay) {
   const capacityText = capacityTooltip(capacity);
   const title = [blockedDay?.name, capacityText].filter(Boolean).join('\n');
   return `
@@ -628,7 +665,8 @@ function operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart
     const startDate = segment.date || operation.startDate;
     const endDate = segment.endDate || segment.date || operation.endDate;
     if (!startDate || !endDate) return;
-    eachDate(startDate, endDate).forEach(date => {
+    dates.forEach(date => {
+      if (date < startDate || date > endDate) return;
       if (!byDate.has(date)) return;
       if (nonWorkingInfo(date) && !(operation.forcedNonWorkingDates || []).includes(date)) return;
       const startTime = date === startDate ? segment.startTime : minutesToTime(shiftStart);
@@ -1190,9 +1228,19 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   }
 
   const knownDates = operations.flatMap(operation => [operation.startDate, operation.endDate]).filter(Boolean).sort();
-  const calendarStartDate = addDays(knownDates[0], -15);
-  const calendarEndDate = addDays(knownDates[knownDates.length - 1], 15);
+  const plannedStartDate = config.planningStartDate || config.startDate || config.selectedDate || knownDates[0];
+  const plannedEndDate = config.planningEndDate || config.endDate || plannedStartDate || knownDates[knownDates.length - 1];
+  const operationStartDate = knownDates[0];
+  const operationEndDate = knownDates[knownDates.length - 1];
+  const calendarStartDate = minDate(plannedStartDate, addDays(operationStartDate, -CALENDAR_RANGE_MARGIN_DAYS)) || operationStartDate;
+  const naturalEndDate = maxDate(plannedEndDate, addDays(operationEndDate, CALENDAR_RANGE_MARGIN_DAYS)) || operationEndDate;
+  const hardEndDate = addDays(plannedEndDate || calendarStartDate, CALENDAR_MAX_EXTRA_DAYS);
+  let calendarEndDate = naturalEndDate > hardEndDate ? hardEndDate : naturalEndDate;
+  if (dayDiff(calendarStartDate, calendarEndDate) + 1 > CALENDAR_MAX_VISIBLE_DAYS) {
+    calendarEndDate = addDays(calendarStartDate, CALENDAR_MAX_VISIBLE_DAYS - 1);
+  }
   const dates = eachDate(calendarStartDate, calendarEndDate);
+  const isRangeClipped = Boolean(operationEndDate && operationEndDate > calendarEndDate);
   const stageIndexes = new Map();
   operations
     .filter(operation => operation.operationType !== 'transport')
@@ -1235,6 +1283,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
       <button class="secondary-button fullscreen-button" type="button" data-fullscreen aria-label="Tela cheia">Tela cheia</button>
       <button class="secondary-button fullscreen-close" type="button" data-fullscreen-close aria-label="Sair da tela cheia">X</button>
     </div>
+    ${isRangeClipped ? '<p class="calendar-range-alert">A produ&ccedil;&atilde;o ultrapassa muito o per&iacute;odo planejado. Verifique produtividade, quantidade ou turnos.</p>' : ''}
     <div class="gantt-board gantt-board-full"></div>
     <div class="calendar-tooltip" hidden></div>
   `;
@@ -1331,6 +1380,23 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
       }))
       .filter(shift => shift.width > 0);
     const board = wrapper.querySelector('.gantt-board');
+    const machineOperations = new Map();
+    for (const machine of MACHINE_CALENDAR_ORDER) {
+      const normalizedMachine = normalizeMachineName(machine);
+      machineOperations.set(machine, operations.filter(operation =>
+        operation.operationType !== 'transport'
+        && operationMachineNames(operation).some(name => normalizeMachineName(name) === normalizedMachine)
+      ));
+    }
+    const segmentCache = new Map();
+    for (const machineOps of machineOperations.values()) {
+      for (const operation of machineOps) {
+        if (!segmentCache.has(operation)) {
+          segmentCache.set(operation, operationDaySegments(operation, dates, dayStart, dayEnd, lunchBreaks));
+        }
+      }
+    }
+    const capacityCache = new Map(dates.map(date => [date, capacityForDateFromSegments(date, segmentCache, shifts)]));
     board.style.setProperty('--calendar-days', String(dates.length));
     board.style.setProperty('--calendar-day-width', `${zoom.dayWidth}px`);
     board.style.setProperty('--machine-row-height', `${zoom.machineRowHeight}px`);
@@ -1344,7 +1410,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         <div class="machine-dates">
           ${dates.map(date => {
             const blockedDay = nonWorkingInfo(date);
-            return renderCapacityHeader(date, operations, dates, shifts, blockedDay);
+            return renderCapacityHeaderWithCapacity(date, capacityCache.get(date) || [], blockedDay);
           }).join('')}
         </div>
         <div class="machine-axis">
@@ -1355,11 +1421,9 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
             <div class="machine-row" data-machine="${escapeAttr(machine)}">
               ${dates.map(date => {
                 const blockedDay = nonWorkingInfo(date);
-                const daySegments = operations
-                  .filter(operation => operation.operationType !== 'transport')
-                  .filter(operation => operationMachineNames(operation).some(name => normalizeMachineName(name) === normalizeMachineName(machine)))
+                const daySegments = (machineOperations.get(machine) || [])
                   .flatMap(operation => {
-                    const segments = operationDaySegments(operation, dates, dayStart, dayEnd, lunchBreaks).get(date) || [];
+                    const segments = segmentCache.get(operation)?.get(date) || [];
                     return segments.map(segment => ({ operation, segment }));
                   });
                 const dayOperations = arrangeParallelSegments(daySegments).map(item => {
@@ -1400,6 +1464,12 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         style: lunchStyle(shift.lunchStart, shift.lunchEnd, dayStart, dayEnd, zoom.hourHeight)
       }));
     const board = wrapper.querySelector('.gantt-board');
+    const lunchBreaks = shifts.map(shift => ({ lunchStart: shift.lunchStart, lunchEnd: shift.lunchEnd }));
+    const segmentCache = new Map(operations.map(operation => [
+      operation,
+      operationDaySegments(operation, dates, dayStart, dayEnd, lunchBreaks)
+    ]));
+    const capacityCache = new Map(dates.map(date => [date, capacityForDateFromSegments(date, segmentCache, shifts)]));
     board.style.setProperty('--calendar-days', String(dates.length));
     board.style.setProperty('--calendar-day-width', `${zoom.dayWidth}px`);
     board.style.setProperty('--calendar-hour-height', `${zoom.hourHeight}px`);
@@ -1414,7 +1484,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         <div class="gantt-dates">
           ${dates.map(date => {
             const blockedDay = nonWorkingInfo(date);
-            return renderCapacityHeader(date, operations, dates, shifts, blockedDay);
+            return renderCapacityHeaderWithCapacity(date, capacityCache.get(date) || [], blockedDay);
           }).join('')}
         </div>
         <div class="agenda-time-axis">
@@ -1426,8 +1496,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
           ${dates.map(date => {
             const blockedDay = nonWorkingInfo(date);
             const daySegments = operations.flatMap(operation => {
-              const lunchBreaks = shifts.map(shift => ({ lunchStart: shift.lunchStart, lunchEnd: shift.lunchEnd }));
-              const segments = operationDaySegments(operation, dates, dayStart, dayEnd, lunchBreaks).get(date) || [];
+              const segments = segmentCache.get(operation)?.get(date) || [];
               return segments.map(segment => ({ operation, segment }));
             });
             const dayOperations = arrangeParallelSegments(daySegments).map(item => {
@@ -1513,21 +1582,23 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   wrapper.querySelectorAll('[data-calendar-view]').forEach(button => {
     button.addEventListener('click', () => setViewMode(button.dataset.calendarView));
   });
+  const normalZoomIndex = () => 0;
+  const fullscreenZoomIndex = () => Math.min(2, zoomLevels.length - 1);
   wrapper.querySelector('[data-fullscreen]')?.addEventListener('click', () => {
     wrapper.classList.add('is-calendar-fullscreen');
     document.body.classList.add('calendar-fullscreen-open');
-    renderBoard();
+    setZoom(fullscreenZoomIndex());
   });
   wrapper.querySelector('[data-fullscreen-close]')?.addEventListener('click', () => {
     wrapper.classList.remove('is-calendar-fullscreen');
     document.body.classList.remove('calendar-fullscreen-open');
-    renderBoard();
+    setZoom(normalZoomIndex());
   });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || !wrapper.classList.contains('is-calendar-fullscreen')) return;
     wrapper.classList.remove('is-calendar-fullscreen');
     document.body.classList.remove('calendar-fullscreen-open');
-    renderBoard();
+    setZoom(normalZoomIndex());
   });
 
   setViewMode(viewMode);

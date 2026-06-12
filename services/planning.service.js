@@ -13,7 +13,7 @@ function toNumber(value) {
   const dotMatches = rawValue.match(/\./g) || [];
   const normalizedValue = rawValue.includes(',')
     ? rawValue.replace(/\./g, '').replace(',', '.')
-    : dotMatches.length > 1 || /^\d{1,3}\.\d{3}$/.test(rawValue)
+    : dotMatches.length > 1
       ? rawValue.replace(/\./g, '')
       : rawValue;
   const number = Number(normalizedValue || 0);
@@ -385,6 +385,7 @@ function operationRank(material, context, operationOverrides = {}, stack = [], p
 
 function buildAggregatedOperations({ material, quantity, context, requestedMachine, requestedPeople, operationOverrides = {}, stockLedger = makeStockLedger(context), productionIndex = 0, productionTitle = '', forcedStockOnly = new Set() }) {
   const states = new Map();
+  const MAX_REQUIREMENT_EXPANSIONS = 10000;
 
   function stateFor(currentMaterial) {
     const key = String(currentMaterial.id);
@@ -402,37 +403,48 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
     return states.get(key);
   }
 
-  stateFor(material).requiredQty = toNumber(quantity);
-
-  let changed = true;
+  const queue = [{
+    material,
+    quantity: toNumber(quantity),
+    path: [String(material.id)]
+  }];
   let guard = 0;
-  while (changed && guard < 200) {
-    changed = false;
+  while (queue.length && guard < MAX_REQUIREMENT_EXPANSIONS) {
     guard += 1;
-    for (const state of [...states.values()]) {
-      const currentMaterial = state.material;
-      const useStockBalance = forcedStockOnly.has(stockOnlyKey(productionIndex, currentMaterial.id));
-      const stockQty = stockLedger.available(currentMaterial);
-      const stockUsedQty = useStockBalance ? Math.min(stockQty, toNumber(state.requiredQty)) : 0;
-      const produceQty = Math.max(toNumber(state.requiredQty) - stockUsedQty, 0);
-      state.stockAvailable = stockQty;
-      state.stockUsedQty = stockUsedQty;
-      state.produceQty = produceQty;
-      state.forceStockOnly = useStockBalance;
-      const deltaProduceQty = Number((produceQty - state.expandedProduceQty).toFixed(6));
-      if (deltaProduceQty <= 0) continue;
-      state.expandedProduceQty = produceQty;
-      if (currentMaterial.is_initial_raw_material === true) continue;
-      const scopedMaterial = { ...currentMaterial, operationId: `${productionIndex}:${currentMaterial.id}`, productionIndex };
-      const inputs = selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex);
-      for (const input of inputs) {
-        const inputMaterial = context.materialsById.get(String(input.input_material_id));
-        if (!inputMaterial) continue;
-        const inputState = stateFor(inputMaterial);
-        inputState.requiredQty = Number((toNumber(inputState.requiredQty) + deltaProduceQty * toNumber(input.qty_per_output || 1)).toFixed(6));
-        changed = true;
-      }
+    const item = queue.shift();
+    const currentMaterial = item.material;
+    const state = stateFor(currentMaterial);
+    state.requiredQty = Number((toNumber(state.requiredQty) + toNumber(item.quantity)).toFixed(6));
+    const useStockBalance = forcedStockOnly.has(stockOnlyKey(productionIndex, currentMaterial.id));
+    const stockQty = stockLedger.available(currentMaterial);
+    const stockUsedQty = useStockBalance ? Math.min(stockQty, toNumber(state.requiredQty)) : 0;
+    const produceQty = Math.max(toNumber(state.requiredQty) - stockUsedQty, 0);
+    state.stockAvailable = stockQty;
+    state.stockUsedQty = stockUsedQty;
+    state.produceQty = produceQty;
+    state.forceStockOnly = useStockBalance;
+    const deltaProduceQty = Number((produceQty - state.expandedProduceQty).toFixed(6));
+    if (deltaProduceQty <= 0 || currentMaterial.is_initial_raw_material === true) continue;
+    state.expandedProduceQty = produceQty;
+    const scopedMaterial = { ...currentMaterial, operationId: `${productionIndex}:${currentMaterial.id}`, productionIndex };
+    const inputs = selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex);
+    for (const input of inputs) {
+      const inputMaterial = context.materialsById.get(String(input.input_material_id));
+      if (!inputMaterial) continue;
+      const inputMaterialId = String(inputMaterial.id);
+      if (item.path.includes(inputMaterialId)) continue;
+      queue.push({
+        material: inputMaterial,
+        quantity: Number((deltaProduceQty * toNumber(input.qty_per_output || 1)).toFixed(6)),
+        path: [...item.path, inputMaterialId]
+      });
     }
+  }
+
+  if (queue.length) {
+    const error = new Error('A necessidade de materiais ficou grande demais. Verifique o fluxo produtivo, fatores de conversão ou ciclos entre materiais.');
+    error.status = 400;
+    throw error;
   }
 
   for (const state of states.values()) {
@@ -1167,7 +1179,7 @@ function buildSinglePlan(payload, context) {
     productionIndex: 0,
     productionTitle: 'Produção 1'
   });
-  const operations = scheduleOperations(applyOperationSplits(applyProductionTransports(built.operations, production, context), payload), context.matrixRows, {
+  const operations = scheduleOperations(applyProductionTransports(built.operations, production, context), context.matrixRows, {
     dateMode: payload.dateMode,
     selectedDate: payload.selectedDate || payload.startDate,
     hoursPerDay: payload.hoursPerDay,
@@ -1297,7 +1309,7 @@ export function buildPlan(payload, context) {
   const trees = builtProductions.map(item => item.tree);
   const tree = trees.length === 1 ? trees[0] : { materialName: 'Plano de produção', children: trees };
   const aggregatedOperations = builtProductions.flatMap(item => item.operations);
-  const operations = scheduleOperations(applyOperationSplits(aggregatedOperations, payload), context.matrixRows, {
+  const operations = scheduleOperations(aggregatedOperations, context.matrixRows, {
     dateMode: 'start',
     selectedDate: payload.planningStartDate || payload.selectedDate || payload.startDate,
     hoursPerDay: payload.hoursPerDay,
