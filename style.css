@@ -2079,7 +2079,7 @@ body.calendar-fullscreen-open {
   --machine-axis-width: 118px;
   display: grid;
   grid-template-columns: var(--machine-axis-width) max(100%, calc(var(--calendar-days) * var(--calendar-day-width, 260px)));
-  grid-template-rows: 74px var(--calendar-body-height, 832px);
+  grid-template-rows: 92px var(--calendar-body-height, 832px);
   width: max(100%, calc(var(--machine-axis-width) + (var(--calendar-days) * var(--calendar-day-width, 260px))));
   min-width: max(100%, calc(var(--machine-axis-width) + (var(--calendar-days) * var(--calendar-day-width, 260px))));
 }
@@ -2092,7 +2092,7 @@ body.calendar-fullscreen-open {
   display: grid;
   align-content: center;
   gap: 2px;
-  min-height: 74px;
+  min-height: 92px;
   padding: 9px 10px;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -2112,13 +2112,13 @@ body.calendar-fullscreen-open {
   position: sticky;
   top: 0;
   z-index: 8;
-  min-height: 74px;
+  min-height: 92px;
   background: #eef5f7;
   border-bottom: 1px solid var(--line);
 }
 
 .machine-dates .gantt-date {
-  min-height: 74px;
+  min-height: 92px;
 }
 
 .machine-axis {

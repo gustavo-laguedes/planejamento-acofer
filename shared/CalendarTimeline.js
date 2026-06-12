@@ -454,11 +454,16 @@ function normalizeShiftConfig(config = {}) {
 
 function peakPeople(items) {
   const points = [];
+  const seen = new Set();
   items.forEach(item => {
     const people = Number(item.operation.peopleCount || 0);
     if (!people || item.operation.operationType === 'transport') return;
     const { start, end } = item;
     if (end <= start) return;
+    const operationKey = String(item.operation.operationId || item.operation.materialId || item.operation.materialName || '');
+    const segmentKey = `${operationKey}:${start}:${end}`;
+    if (seen.has(segmentKey)) return;
+    seen.add(segmentKey);
     points.push({ minute: start, delta: people });
     points.push({ minute: end, delta: -people });
   });
@@ -493,7 +498,30 @@ function capacityForDate(date, operations, dates, shifts) {
 }
 
 function capacityTooltip(items) {
-  return items.map(item => `${item.label}: equipe ${item.used}/${item.available || 0}${item.exceeded ? ' - Equipe excedida' : ''}`).join('\n');
+  return items.map(item => (
+    item.exceeded
+      ? `${item.label}: Equipe excedida: ${item.used} pessoas usadas simultaneamente, ${item.available || 0} disponiveis.`
+      : `${item.label}: equipe ${item.used}/${item.available || 0}`
+  )).join('\n');
+}
+
+function renderCapacityHeader(date, operations, dates, shifts, blockedDay) {
+  const capacity = capacityForDate(date, operations, dates, shifts);
+  const capacityText = capacityTooltip(capacity);
+  const title = [blockedDay?.name, capacityText].filter(Boolean).join('\n');
+  return `
+    <div class="gantt-date${capacity.some(item => item.exceeded) ? ' team-exceeded' : ''}${blockedDay ? ' non-working-day' : ''}" data-date="${date}" title="${escapeAttr(title)}">
+      <strong>${formatDateLabel(date)}</strong>
+      <span>${formatDate(date)}</span>
+      <div class="team-capacity-list">
+        ${capacity.map(item => `
+          <small class="team-capacity${item.exceeded ? ' exceeded' : ''}" title="${escapeAttr(item.exceeded ? `Equipe excedida: ${item.used} pessoas usadas simultaneamente, ${item.available || 0} disponiveis.` : `${item.label}: Equipe ${item.used}/${item.available || 0}`)}">
+            ${escapeAttr(item.label.replace(/^Turno\s*/i, 'T'))}: ${item.used}/${item.available || 0}${item.exceeded ? ' !' : ''}
+          </small>
+        `).join('')}
+      </div>
+    </div>
+  `;
 }
 
 function lunchStyle(lunchStart, lunchEnd, dayStart, dayEnd, hourHeight) {
@@ -1316,12 +1344,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         <div class="machine-dates">
           ${dates.map(date => {
             const blockedDay = nonWorkingInfo(date);
-            return `
-              <div class="gantt-date${blockedDay ? ' non-working-day' : ''}" data-date="${date}" title="${escapeAttr(blockedDay?.name || '')}">
-                <strong>${formatDateLabel(date)}</strong>
-                <span>${formatDate(date)}</span>
-              </div>
-            `;
+            return renderCapacityHeader(date, operations, dates, shifts, blockedDay);
           }).join('')}
         </div>
         <div class="machine-axis">
@@ -1390,23 +1413,8 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         </div>
         <div class="gantt-dates">
           ${dates.map(date => {
-            const capacity = capacityForDate(date, operations, dates, shifts);
             const blockedDay = nonWorkingInfo(date);
-            const capacityText = capacityTooltip(capacity);
-            const title = [blockedDay?.name, capacityText].filter(Boolean).join('\n');
-            return `
-              <div class="gantt-date${capacity.some(item => item.exceeded) ? ' team-exceeded' : ''}${blockedDay ? ' non-working-day' : ''}" data-date="${date}" title="${escapeAttr(title)}">
-                <strong>${formatDateLabel(date)}</strong>
-                <span>${formatDate(date)}</span>
-                <div class="team-capacity-list">
-                  ${capacity.map(item => `
-                    <small class="team-capacity${item.exceeded ? ' exceeded' : ''}" title="${escapeAttr(`${item.label}: Equipe ${item.used}/${item.available || 0}${item.exceeded ? ' - Equipe excedida' : ''}`)}">
-                      ${escapeAttr(item.label.replace(/^Turno\s*/i, 'T'))}: ${item.used}/${item.available || 0}${item.exceeded ? ' !' : ''}
-                    </small>
-                  `).join('')}
-                </div>
-              </div>
-            `;
+            return renderCapacityHeader(date, operations, dates, shifts, blockedDay);
           }).join('')}
         </div>
         <div class="agenda-time-axis">
