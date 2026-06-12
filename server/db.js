@@ -3,7 +3,7 @@ import postgres from 'postgres';
 const connectionString = process.env.DATABASE_URL;
 
 if (!connectionString) {
-  console.warn('DATABASE_URL nao configurada. As rotas de banco falharao ate o .env ser preenchido.');
+  console.warn('DATABASE_URL não configurada. As rotas de banco falharão até o .env ser preenchido.');
 }
 
 export const sql = connectionString
@@ -17,7 +17,7 @@ export const sql = connectionString
 
 export function requireDb() {
   if (!sql) {
-    const error = new Error('DATABASE_URL nao configurada no backend.');
+    const error = new Error('DATABASE_URL não configurada no backend.');
     error.status = 500;
     throw error;
   }

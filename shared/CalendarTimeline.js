@@ -71,6 +71,47 @@ function formatQty(value) {
   return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 }
 
+const LOCAL_HOLIDAYS = [
+  { date: '2026-01-01', name: 'Confraternizacao Universal', type: 'nacional' },
+  { date: '2026-02-17', name: 'Carnaval', type: 'nacional' },
+  { date: '2026-04-03', name: 'Sexta-feira Santa', type: 'nacional' },
+  { date: '2026-04-21', name: 'Tiradentes', type: 'nacional' },
+  { date: '2026-05-01', name: 'Dia do Trabalho', type: 'nacional' },
+  { date: '2026-06-04', name: 'Corpus Christi', type: 'nacional' },
+  { date: '2026-09-07', name: 'Independencia do Brasil', type: 'nacional' },
+  { date: '2026-10-12', name: 'Nossa Senhora Aparecida', type: 'nacional' },
+  { date: '2026-11-02', name: 'Finados', type: 'nacional' },
+  { date: '2026-11-15', name: 'Proclamacao da Republica', type: 'nacional' },
+  { date: '2026-11-20', name: 'Dia Nacional de Zumbi e da Consciencia Negra', type: 'nacional' },
+  { date: '2026-12-25', name: 'Natal', type: 'nacional' },
+  { date: '2026-07-10', name: 'Aniversario de Pindamonhangaba', type: 'municipal' }
+];
+
+function holidayForDate(date) {
+  return LOCAL_HOLIDAYS.find(holiday => holiday.date === date) || null;
+}
+
+function isWeekend(date) {
+  const day = new Date(`${date}T00:00:00`).getDay();
+  return day === 0 || day === 6;
+}
+
+function nonWorkingInfo(date) {
+  const holiday = holidayForDate(date);
+  if (holiday) return { kind: 'holiday', name: holiday.name };
+  if (isWeekend(date)) return { kind: 'weekend', name: 'Fim de semana' };
+  return null;
+}
+
+function confirmProductionDate(date) {
+  const info = nonWorkingInfo(date);
+  if (!info) return true;
+  if (info.kind === 'holiday') {
+    return window.confirm(`Esta data \u00e9 feriado: ${info.name}. Deseja manter produ\u00e7\u00e3o mesmo assim?`);
+  }
+  return window.confirm('Esta data \u00e9 fim de semana. Deseja manter produ\u00e7\u00e3o mesmo assim?');
+}
+
 function formatHours(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return '';
@@ -267,7 +308,7 @@ function productionBreakdown(operation) {
     : [{
       productionIndex: Number(operation.productionIndex || 0),
       productionKey: operation.productionKey || `production-${Number(operation.productionIndex || 0)}`,
-      productionTitle: operation.productionTitle || `Producao ${Number(operation.productionIndex || 0) + 1}`,
+      productionTitle: operation.productionTitle || `Produção ${Number(operation.productionIndex || 0) + 1}`,
       quantity: Number(operation.produceQty || 0),
       unit: operation.unit || ''
     }];
@@ -321,8 +362,8 @@ function breakdownText(operation) {
   if (items.length <= 1) return [];
   return [
     '',
-    'Producoes:',
-    ...items.map(item => `${item.productionTitle || `Producao ${Number(item.productionIndex || 0) + 1}`}: ${formatQty(item.quantity)} ${item.unit || operation.unit || ''}`.trim())
+    'Produções:',
+    ...items.map(item => `${item.productionTitle || `Produção ${Number(item.productionIndex || 0) + 1}`}: ${formatQty(item.quantity)} ${item.unit || operation.unit || ''}`.trim())
   ];
 }
 
@@ -488,7 +529,8 @@ function splitSegmentByLunchBreaks(segment, lunchBreaks, shiftStart, shiftEnd) {
 
 function operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart, lunchEnd) {
   const lunchBreaks = normalizeLunchBreaks(lunchStart, lunchEnd);
-  const baseSegments = operation.segments?.length ? operation.segments : [{
+  const hasExplicitSegments = Boolean(operation.segments?.length);
+  const baseSegments = hasExplicitSegments ? operation.segments : [{
     date: operation.startDate,
     startTime: operationStartTime(operation),
     endDate: operation.endDate,
@@ -502,6 +544,7 @@ function operationDaySegments(operation, dates, shiftStart, shiftEnd, lunchStart
     if (!startDate || !endDate) return;
     eachDate(startDate, endDate).forEach(date => {
       if (!byDate.has(date)) return;
+      if (nonWorkingInfo(date) && !(operation.forcedNonWorkingDates || []).includes(date)) return;
       const startTime = date === startDate ? segment.startTime : minutesToTime(shiftStart);
       const endTime = date === endDate ? segment.endTime : minutesToTime(shiftEnd);
       splitSegmentByLunchBreaks({ ...segment, date, startTime, endDate: date, endTime }, lunchBreaks, shiftStart, shiftEnd)
@@ -584,6 +627,7 @@ function operationForProductionRow(row, operation) {
     unit: row.dataset.unit || operation.unit,
     machineName,
     peopleCount: Number(peopleCount || 0),
+    productionModelName: row.querySelector('[name="productionModel"]')?.value || operation.productionModelName,
     productivityOptions: productionBreakdown(operation).find(item =>
       Number(item.productionIndex || 0) === Number(row.dataset.productionIndex || 0)
     )?.productivityOptions || operation.productivityOptions || []
@@ -601,7 +645,7 @@ function productionConfigTemplate(item, operation) {
   return `
     <article class="operation-production-row" data-operation-id="${escapeAttr(item.operationId || operation.operationId || operation.materialId)}" data-material-id="${escapeAttr(item.materialId || operation.materialId)}" data-production-index="${Number(item.productionIndex || 0)}" data-quantity="${escapeAttr(item.quantity || 0)}" data-unit="${escapeAttr(item.unit || operation.unit || '')}">
       <div class="operation-production-heading">
-        <strong>${escapeAttr(item.productionTitle || `Producao ${Number(item.productionIndex || 0) + 1}`)}</strong>
+        <strong>${escapeAttr(item.productionTitle || `Produção ${Number(item.productionIndex || 0) + 1}`)}</strong>
         <span>${formatQty(item.quantity)} ${escapeAttr(item.unit || operation.unit || '')}</span>
       </div>
       <label>Quantidade
@@ -695,7 +739,7 @@ function tooltipText(operation) {
       'Transporte',
       `Material: ${operation.materialName || '-'}`,
       `Rota: ${operation.originLocationName || '-'} -> ${operation.destinationLocationName || '-'}`,
-      `Duracao: ${formatHours(operation.transportHours)}h`,
+      `Duração: ${formatHours(operation.transportHours)}h`,
       '',
       `Data inicial: ${formatDate(operation.startDate)}`,
       `Hora inicial: ${operationStartTime(operation)}`,
@@ -708,7 +752,7 @@ function tooltipText(operation) {
   return [
     `Material: ${operation.materialName || '-'}`,
     `Quantidade: ${quantity || '-'}`,
-    `Maquina: ${operation.machineName || '-'}`,
+    `Máquina: ${operation.machineName || '-'}`,
     `Pessoas: ${people || '-'}`,
     '',
     `Data inicial: ${formatDate(operation.startDate)}`,
@@ -750,20 +794,29 @@ function dispatchDate(wrapper, operation, modal) {
 }
 
 function normalizeSplitQuantity(value) {
-  const number = Number(String(value ?? '').replace(/\./g, '').replace(',', '.'));
+  const raw = String(value ?? '').trim();
+  const dotMatches = raw.match(/\./g) || [];
+  const normalized = raw.includes(',')
+    ? raw.replace(/\./g, '').replace(',', '.')
+    : dotMatches.length > 1 || /^\d{1,3}\.\d{3}$/.test(raw)
+      ? raw.replace(/\./g, '')
+      : raw;
+  const number = Number(normalized);
   return Number.isFinite(number) ? number : 0;
 }
 
 function splitRowTemplate(index, part, operation, machineOptions) {
+  const models = modelOptions(operation);
   const selectedValue = optionValue({
     machineName: part.machineName || operation.machineName,
     peopleCount: part.peopleCount || operation.peopleCount
   });
+  const selectedModel = part.productionModelName || operation.productionModelName || models[0]?.modelName || '';
   return `
     <article class="operation-split-row" data-split-index="${index}">
       <strong>Parte ${index + 1}</strong>
       <label>Quantidade
-        <input name="splitQty" type="number" step="0.001" min="0.001" value="${escapeAttr(part.quantity)}" required />
+        <input name="splitQty" type="text" inputmode="decimal" value="${escapeAttr(part.quantity)}" required />
       </label>
       <label>Data inicial
         <input name="splitStartDate" type="date" value="${escapeAttr(part.startDate || operation.startDate || '')}" required />
@@ -774,6 +827,11 @@ function splitRowTemplate(index, part, operation, machineOptions) {
       <label>M&aacute;quina / pessoas
         <select name="splitMachinePeople" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
           ${machineOptionTags(machineOptions, selectedValue)}
+        </select>
+      </label>
+      <label>Modelo de produ&ccedil;&atilde;o
+        <select name="splitProductionModel" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
+          ${models.length ? models.map(model => `<option value="${escapeAttr(model.modelName)}" ${String(model.modelName) === String(selectedModel) ? 'selected' : ''}>${escapeAttr(model.label || model.modelName)}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
         </select>
       </label>
       ${index > 1 ? '<button class="link-button danger remove-split" type="button">Remover</button>' : ''}
@@ -789,7 +847,8 @@ function collectSplitRows(container, operation) {
       startDate: row.querySelector('[name="splitStartDate"]')?.value,
       startTime: row.querySelector('[name="splitStartTime"]')?.value,
       machineName,
-      peopleCount: Number(peopleCount || 0)
+      peopleCount: Number(peopleCount || 0),
+      productionModelName: row.querySelector('[name="splitProductionModel"]')?.value || null
     };
   });
 }
@@ -852,6 +911,22 @@ function dispatchSplit(wrapper, operation, modal) {
   return true;
 }
 
+function confirmManualNonWorkingDates(modal, operation) {
+  const dates = [];
+  const operationDate = modal.querySelector('[name="operationStartDate"]')?.value;
+  const operationTime = modal.querySelector('[name="operationStartTime"]')?.value || operationStartTime(operation);
+  if (operationDate && (operationDate !== operation.startDate || operationTime !== operationStartTime(operation))) {
+    dates.push(operationDate);
+  }
+  modal.querySelectorAll('[name="splitStartDate"]').forEach(input => {
+    if (input.value) dates.push(input.value);
+  });
+  for (const date of [...new Set(dates)]) {
+    if (!confirmProductionDate(date)) return false;
+  }
+  return true;
+}
+
 function showOperationModal(wrapper, operation) {
   const machineOptions = operation.productivityOptions || [];
   const models = modelOptions(operation);
@@ -884,23 +959,23 @@ function showOperationModal(wrapper, operation) {
           <article><span>Material</span><strong>${operation.materialName}</strong></article>
           <article><span>Quantidade total</span><strong>${formatQty(operation.produceQty)} ${operation.unit || ''}</strong></article>
           ${isSharedOperation ? '' : `
-            <label>M&aacute;quina
+            <label class="split-hide-when-active">M&aacute;quina
               <select name="machinePeople" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
                 ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.machineName}</option>`).join('')}
               </select>
             </label>
-            <label>Pessoas
+            <label class="split-hide-when-active">Pessoas
               <select name="peopleMachine" ${machineOptions.length > 1 ? '' : 'disabled data-locked="true"'}>
                 ${machineOptions.map(option => `<option value="${optionValue(option)}" ${optionValue(option) === operationValue(operation) ? 'selected' : ''}>${option.peopleCount}</option>`).join('')}
               </select>
             </label>
-            <label>Modelo de produ&ccedil;&atilde;o
+            <label class="split-hide-when-active">Modelo de produ&ccedil;&atilde;o
               <select name="productionModel" ${models.length > 1 ? '' : 'disabled data-locked="true"'}>
                 ${models.length ? models.map(model => `<option value="${model.modelName}" ${String(model.modelName) === String(selectedModel) ? 'selected' : ''}>${model.label || model.modelName}</option>`).join('') : `<option value="">${productionModelFallback(operation)}</option>`}
               </select>
             </label>
           `}
-          <article><span>Produtividade</span><strong>${escapeAttr(productivityLabel)}</strong></article>
+          <article class="split-hide-when-active"><span>Produtividade</span><strong>${escapeAttr(productivityLabel)}</strong></article>
           <label>Data inicial
             <input name="operationStartDate" type="date" value="${operation.startDate || ''}" required />
           </label>
@@ -947,6 +1022,7 @@ function showOperationModal(wrapper, operation) {
   const splitsTarget = backdrop.querySelector('.operation-splits-target');
   const addSplitButton = backdrop.querySelector('.add-split');
   const renderSplits = (target, parts, scopeOperation, scopeMachineOptions, addButton = null) => {
+    backdrop.querySelector('.operation-modal')?.classList.add('is-split-mode');
     target.innerHTML = parts.map((part, index) => splitRowTemplate(index, part, scopeOperation, scopeMachineOptions)).join('');
     if (addButton) addButton.hidden = false;
     target.closest('.operation-production-row, .operation-split-section')?.querySelector('.split-warning')?.toggleAttribute('hidden', true);
@@ -955,13 +1031,13 @@ function showOperationModal(wrapper, operation) {
     const total = Number(operation.produceQty || 0);
     const half = Number((total / 2).toFixed(3));
     renderSplits(splitsTarget, [
-      { quantity: half, startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount },
-      { quantity: Number((total - half).toFixed(3)), startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount }
+      { quantity: half, startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount, productionModelName: selectedModel },
+      { quantity: Number((total - half).toFixed(3)), startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount, productionModelName: selectedModel }
     ], operation, machineOptions, addSplitButton);
   });
   addSplitButton.addEventListener('click', () => {
     const parts = collectSplitRows(splitsTarget, operation);
-    parts.push({ quantity: 0, startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount });
+    parts.push({ quantity: 0, startDate: operation.startDate, startTime, machineName: operation.machineName, peopleCount: operation.peopleCount, productionModelName: selectedModel });
     renderSplits(splitsTarget, parts, operation, machineOptions, addSplitButton);
   });
   backdrop.addEventListener('click', event => {
@@ -974,8 +1050,8 @@ function showOperationModal(wrapper, operation) {
       const total = Number(row.dataset.quantity || scopeOperation.produceQty || 0);
       const half = Number((total / 2).toFixed(3));
       renderSplits(target, [
-        { quantity: half, startDate: operation.startDate, startTime, machineName: scopeOperation.machineName, peopleCount: scopeOperation.peopleCount },
-        { quantity: Number((total - half).toFixed(3)), startDate: operation.startDate, startTime, machineName: scopeOperation.machineName, peopleCount: scopeOperation.peopleCount }
+        { quantity: half, startDate: operation.startDate, startTime, machineName: scopeOperation.machineName, peopleCount: scopeOperation.peopleCount, productionModelName: scopeOperation.productionModelName },
+        { quantity: Number((total - half).toFixed(3)), startDate: operation.startDate, startTime, machineName: scopeOperation.machineName, peopleCount: scopeOperation.peopleCount, productionModelName: scopeOperation.productionModelName }
       ], scopeOperation, scopeMachineOptions, addButton);
       return;
     }
@@ -985,7 +1061,7 @@ function showOperationModal(wrapper, operation) {
       const scopeMachineOptions = scopeOperation.productivityOptions || machineOptions;
       const target = row.querySelector('.operation-splits-target');
       const parts = collectSplitRows(target, scopeOperation);
-      parts.push({ quantity: 0, startDate: operation.startDate, startTime, machineName: scopeOperation.machineName, peopleCount: scopeOperation.peopleCount });
+      parts.push({ quantity: 0, startDate: operation.startDate, startTime, machineName: scopeOperation.machineName, peopleCount: scopeOperation.peopleCount, productionModelName: scopeOperation.productionModelName });
       renderSplits(target, parts, scopeOperation, scopeMachineOptions, row.querySelector('.add-split'));
       return;
     }
@@ -999,6 +1075,7 @@ function showOperationModal(wrapper, operation) {
   });
   backdrop.querySelector('form').addEventListener('submit', event => {
     event.preventDefault();
+    if (!confirmManualNonWorkingDates(backdrop, operation)) return;
     if (!dispatchSplit(wrapper, operation, backdrop)) return;
     dispatchDate(wrapper, operation, backdrop);
     dispatchConfig(wrapper, operation, backdrop);
@@ -1064,6 +1141,8 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     <div class="gantt-zoom-controls" aria-label="Zoom do calend&aacute;rio">
       <button class="secondary-button" type="button" data-zoom-out aria-label="Diminuir zoom">-</button>
       <button class="secondary-button" type="button" data-zoom-in aria-label="Aumentar zoom">+</button>
+      <button class="secondary-button fullscreen-button" type="button" data-fullscreen aria-label="Tela cheia">Tela cheia</button>
+      <button class="secondary-button fullscreen-close" type="button" data-fullscreen-close aria-label="Sair da tela cheia">X</button>
     </div>
     <div class="gantt-board gantt-board-full"></div>
     <div class="calendar-tooltip" hidden></div>
@@ -1125,8 +1204,11 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         <div class="gantt-dates">
           ${dates.map(date => {
             const capacity = capacityForDate(date, operations, dates, shifts);
+            const blockedDay = nonWorkingInfo(date);
+            const capacityText = capacityTooltip(capacity);
+            const title = [blockedDay?.name, capacityText].filter(Boolean).join('\n');
             return `
-              <div class="gantt-date${capacity.some(item => item.exceeded) ? ' team-exceeded' : ''}" data-date="${date}" title="${escapeAttr(capacityTooltip(capacity))}">
+              <div class="gantt-date${capacity.some(item => item.exceeded) ? ' team-exceeded' : ''}${blockedDay ? ' non-working-day' : ''}" data-date="${date}" title="${escapeAttr(title)}">
                 <strong>${formatDateLabel(date)}</strong>
                 <span>${formatDate(date)}</span>
                 <div class="team-capacity-list">
@@ -1147,6 +1229,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         </div>
         <div class="agenda-days">
           ${dates.map(date => {
+            const blockedDay = nonWorkingInfo(date);
             const daySegments = operations.flatMap(operation => {
               const lunchBreaks = shifts.map(shift => ({ lunchStart: shift.lunchStart, lunchEnd: shift.lunchEnd }));
               const segments = operationDaySegments(operation, dates, dayStart, dayEnd, lunchBreaks).get(date) || [];
@@ -1186,7 +1269,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               `;
             }).join('');
             return `
-              <div class="agenda-day-column" data-date="${date}">
+              <div class="agenda-day-column${blockedDay ? ' non-working-day' : ''}" data-date="${date}">
                 ${hourMarks.map(minutes => `
                   <span class="agenda-hour-line" style="--time-top: calc(var(--calendar-top-pad) + ${((minutes - dayStart) / 60) * zoom.hourHeight}px)"></span>
                 `).join('')}
@@ -1232,6 +1315,22 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
 
   wrapper.querySelector('[data-zoom-out]')?.addEventListener('click', () => setZoom(zoomIndex - 1));
   wrapper.querySelector('[data-zoom-in]')?.addEventListener('click', () => setZoom(zoomIndex + 1));
+  wrapper.querySelector('[data-fullscreen]')?.addEventListener('click', () => {
+    wrapper.classList.add('is-calendar-fullscreen');
+    document.body.classList.add('calendar-fullscreen-open');
+    renderBoard();
+  });
+  wrapper.querySelector('[data-fullscreen-close]')?.addEventListener('click', () => {
+    wrapper.classList.remove('is-calendar-fullscreen');
+    document.body.classList.remove('calendar-fullscreen-open');
+    renderBoard();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !wrapper.classList.contains('is-calendar-fullscreen')) return;
+    wrapper.classList.remove('is-calendar-fullscreen');
+    document.body.classList.remove('calendar-fullscreen-open');
+    renderBoard();
+  });
 
   setZoom(zoomIndex);
   focusFirstOperation(wrapper, dates, operations);

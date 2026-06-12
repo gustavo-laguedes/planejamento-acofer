@@ -33,7 +33,7 @@ router.post('/', async (req, res, next) => {
 
     const db = requireDb();
     const [location] = await db`SELECT id FROM locations WHERE id = ${locationId}`;
-    if (!location) return res.status(400).json({ error: 'Local informado nao existe.' });
+    if (!location) return res.status(400).json({ error: 'Local informado não existe.' });
 
     const [row] = await db`
       INSERT INTO machines (name, location_id, active)
@@ -55,7 +55,7 @@ router.put('/:id', async (req, res, next) => {
 
     const db = requireDb();
     const [location] = await db`SELECT id FROM locations WHERE id = ${locationId}`;
-    if (!location) return res.status(400).json({ error: 'Local informado nao existe.' });
+    if (!location) return res.status(400).json({ error: 'Local informado não existe.' });
 
     const [row] = await db`
       UPDATE machines
@@ -66,7 +66,7 @@ router.put('/:id', async (req, res, next) => {
       WHERE id = ${req.params.id}
       RETURNING *
     `;
-    if (!row) return res.status(404).json({ error: 'Maquina nao encontrada.' });
+    if (!row) return res.status(404).json({ error: 'Máquina não encontrada.' });
     res.json(row);
   } catch (error) {
     next(error);

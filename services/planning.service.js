@@ -10,11 +10,52 @@ function dateKey(date) {
 
 function toNumber(value) {
   const rawValue = String(value ?? '').trim();
+  const dotMatches = rawValue.match(/\./g) || [];
   const normalizedValue = rawValue.includes(',')
     ? rawValue.replace(/\./g, '').replace(',', '.')
-    : rawValue;
+    : dotMatches.length > 1 || /^\d{1,3}\.\d{3}$/.test(rawValue)
+      ? rawValue.replace(/\./g, '')
+      : rawValue;
   const number = Number(normalizedValue || 0);
   return Number.isFinite(number) ? number : 0;
+}
+
+const LOCAL_HOLIDAYS = [
+  { date: '2026-01-01', name: 'Confraternizacao Universal', type: 'nacional' },
+  { date: '2026-02-17', name: 'Carnaval', type: 'nacional' },
+  { date: '2026-04-03', name: 'Sexta-feira Santa', type: 'nacional' },
+  { date: '2026-04-21', name: 'Tiradentes', type: 'nacional' },
+  { date: '2026-05-01', name: 'Dia do Trabalho', type: 'nacional' },
+  { date: '2026-06-04', name: 'Corpus Christi', type: 'nacional' },
+  { date: '2026-09-07', name: 'Independencia do Brasil', type: 'nacional' },
+  { date: '2026-10-12', name: 'Nossa Senhora Aparecida', type: 'nacional' },
+  { date: '2026-11-02', name: 'Finados', type: 'nacional' },
+  { date: '2026-11-15', name: 'Proclamacao da Republica', type: 'nacional' },
+  { date: '2026-11-20', name: 'Dia Nacional de Zumbi e da Consciencia Negra', type: 'nacional' },
+  { date: '2026-12-25', name: 'Natal', type: 'nacional' },
+  { date: '2026-07-10', name: 'Aniversario de Pindamonhangaba', type: 'municipal' }
+];
+
+function holidayForDate(date) {
+  return LOCAL_HOLIDAYS.find(holiday => holiday.date === date) || null;
+}
+
+function isWeekend(date) {
+  const day = new Date(`${date}T00:00:00`).getDay();
+  return day === 0 || day === 6;
+}
+
+function isNonWorkingDate(date, calendar) {
+  if (calendar.forceWorkDates?.has(date)) return false;
+  return isWeekend(date) || Boolean(holidayForDate(date));
+}
+
+function withForcedWorkDate(calendar, date) {
+  if (!date || !isNonWorkingDate(date, calendar)) return calendar;
+  return {
+    ...calendar,
+    forceWorkDates: new Set([...(calendar.forceWorkDates || []), date])
+  };
 }
 
 function toOperationalHours(value) {
@@ -24,6 +65,15 @@ function toOperationalHours(value) {
     return Number(durationValue[1]) + (Number(durationValue[2]) / 60);
   }
   return toNumber(value);
+}
+
+function shiftAvailableHours(shift = {}) {
+  const start = parseTime(shift.shiftStartTime, '07:00');
+  const pauseMinutes = Math.max(toOperationalHours(shift.pauseHours ?? shift.lunchHours ?? 0), 0) * 60;
+  const fallbackDailyMinutes = Math.max(toOperationalHours(shift.hoursPerDay || 8), 1 / 60) * 60;
+  let end = parseTime(shift.shiftEndTime, minutesToTime(start + fallbackDailyMinutes + pauseMinutes));
+  if (end <= start) end += 24 * 60;
+  return Math.max((end - start - pauseMinutes) / 60, 1 / 60);
 }
 
 function normalizedMaterialKey(operation) {
@@ -248,7 +298,7 @@ function operationForMaterial(material, state, productionOrder, context, request
     produceQty: Number(produceQty.toFixed(3)),
     unit: material.primary_unit,
     forceStockOnly: state.forceStockOnly === true,
-    status: produceQty <= 0 ? 'Estoque suficiente' : 'Produzir diferenÃ§a',
+    status: produceQty <= 0 ? 'Estoque suficiente' : 'Produzir diferença',
     isInitialRawMaterial: material.is_initial_raw_material === true,
     productionModelName,
     productionModelOptions: modelOptions,
@@ -480,7 +530,7 @@ function groupOperations(operations) {
       operationId: sourceOperationId,
       productionIndex: Number(operation.productionIndex || 0),
       productionKey: operation.productionKey || `production-${Number(operation.productionIndex || 0)}`,
-      productionTitle: operation.productionTitle || `Producao ${Number(operation.productionIndex || 0) + 1}`,
+      productionTitle: operation.productionTitle || `Produção ${Number(operation.productionIndex || 0) + 1}`,
       materialId: operation.materialId,
       materialName: operation.materialName,
       machineName: operation.machineName,
@@ -567,7 +617,7 @@ function applyProductionTransports(operations, production, context) {
           operationId,
           productionIndex: production.productionIndex,
           productionKey: `production-${production.productionIndex}`,
-          productionTitle: `Producao ${production.productionIndex + 1}`,
+      productionTitle: `Produção ${production.productionIndex + 1}`,
           productionOrder: toNumber(sourceOperation.productionOrder) + 0.5 + (transportIndex / 100),
           materialId: transport.material.id,
           materialName: transport.material.name,
@@ -647,7 +697,7 @@ function applyOperationSplits(operations, payload = {}) {
     const total = toNumber(operation.produceQty);
     const sum = parts.reduce((amount, part) => amount + toNumber(part.quantity), 0);
     if (Math.abs(sum - total) > 0.001) {
-      const error = new Error(`A soma das divisoes de ${operation.materialName} deve ser ${total}.`);
+      const error = new Error(`A soma das divisões de ${operation.materialName} deve ser ${total}.`);
       error.status = 400;
       throw error;
     }
@@ -665,6 +715,7 @@ function applyOperationSplits(operations, payload = {}) {
       peopleCount: Number(part.peopleCount || operation.peopleCount || 0),
       startDate: part.startDate || operation.startDate,
       startTime: part.startTime || operation.startTime,
+      productionModelName: part.productionModelName || operation.productionModelName,
       productionOrder: toNumber(operation.productionOrder) + (index / 100)
     }));
     splitMap.set(parentId, replacements);
@@ -796,6 +847,7 @@ function calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime
 }
 
 function workWindowsForDate(date, calendar) {
+  if (isNonWorkingDate(date, calendar)) return [];
   if (Array.isArray(calendar.shifts)) {
     return calendar.shifts
       .flatMap(shift => workWindowsForShift(date, shift.shiftStart, shift.shiftEnd, shift.lunchStart, shift.lunchEnd, shift.dailyMinutes))
@@ -851,8 +903,7 @@ function scheduleForward(cursor, durationMinutes, calendar) {
     current = nextWorkStart(current, calendar);
     const window = windowForCursor(current, calendar);
     if (!window) {
-      const next = firstWindow(addDays(current.date, 1), calendar);
-      current = { date: next.date, minutes: next.start };
+      current = nextWorkStart({ date: addDays(current.date, 1), minutes: 0 }, calendar);
       continue;
     }
     const available = window.end - current.minutes;
@@ -873,8 +924,7 @@ function scheduleBackward(cursor, durationMinutes, calendar) {
     const window = workWindowsForDate(current.date, calendar)
       .find(item => current.minutes > item.start && current.minutes <= item.end);
     if (!window) {
-      const previous = workWindowsForDate(addDays(current.date, -1), calendar).at(-1);
-      current = { date: previous.date, minutes: previous.end };
+      current = previousWorkEnd({ date: addDays(current.date, -1), minutes: 24 * 60 }, calendar);
       continue;
     }
     const available = current.minutes - window.start;
@@ -954,14 +1004,15 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     };
   };
 
-  const scheduledItem = (item, slot) => ({
+  const scheduledItem = (item, slot, scheduleCalendar = calendar) => ({
     ...item,
     daysNeeded: eachSegmentDayCount(slot.start.date, slot.end.date),
     startDate: slot.start.date,
     startTime: minutesToTime(slot.start.minutes),
     endDate: slot.end.date,
     endTime: minutesToTime(slot.end.minutes),
-    segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, calendar)
+    forcedNonWorkingDates: [...(scheduleCalendar.forceWorkDates || [])],
+    segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, scheduleCalendar)
   });
 
   const enriched = source.map(enrich);
@@ -995,8 +1046,9 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       const operationCursor = operation.startDate ? { date: operation.startDate, minutes: parseTime(operation.startTime, minutesToTime(shiftStart)) } : null;
       const overrideCursor = overrideStartCursor(override, startCursor.date, shiftStart) || operationCursor;
       const cursor = maxCursor(overrideCursor || startCursor, dependencyEnd, machineCursor);
-      const slot = scheduleForward(cursor, operation.totalMinutes, calendar);
-      const item = scheduledItem(operation, slot);
+      const operationCalendar = withForcedWorkDate(calendar, overrideCursor?.date || operationCursor?.date);
+      const slot = scheduleForward(cursor, operation.totalMinutes, operationCalendar);
+      const item = scheduledItem(operation, slot, operationCalendar);
       scheduledByMaterialId.set(String(operation.operationId || operation.materialId), item);
       if (operation.operationType !== 'transport') byMachine.set(operation.machineName || '', slot.end);
       scheduled.push(item);
@@ -1094,7 +1146,7 @@ function buildSinglePlan(payload, context) {
     operationOverrides,
     stockLedger,
     productionIndex: 0,
-    productionTitle: 'Producao 1',
+    productionTitle: 'Produção 1',
     forcedStockOnly: stockOnlySet(payload)
   });
   const production = {
@@ -1113,7 +1165,7 @@ function buildSinglePlan(payload, context) {
     operationOverrides,
     states: built.states,
     productionIndex: 0,
-    productionTitle: 'Producao 1'
+    productionTitle: 'Produção 1'
   });
   const operations = scheduleOperations(applyOperationSplits(applyProductionTransports(built.operations, production, context), payload), context.matrixRows, {
     dateMode: payload.dateMode,
@@ -1126,7 +1178,12 @@ function buildSinglePlan(payload, context) {
     operationSplits: payload.operationSplits
   });
   const days = buildDays(operations, material.primary_unit);
-  const hoursPerDay = Math.max(toOperationalHours(payload.hoursPerDay || 8), 1 / 60);
+  const hoursPerDay = shiftAvailableHours({
+    hoursPerDay: payload.hoursPerDay,
+    shiftStartTime: payload.shiftStartTime,
+    shiftEndTime: payload.shiftEndTime,
+    pauseHours: payload.lunchHours
+  });
   const startDate = operations.length ? operations[0].startDate : payload.selectedDate || payload.startDate;
   const endDate = operations.length ? operations[operations.length - 1].endDate : payload.selectedDate || payload.startDate;
   const finalOperation = operations[operations.length - 1];
@@ -1165,7 +1222,7 @@ function productionEntries(payload, context) {
     const materialId = Number(production.materialId);
     const material = materialId ? context.materialsById.get(String(materialId)) : index === 0 ? context.material : null;
     if (!material) {
-      const error = new Error(`Material da Producao ${index + 1} nao encontrado.`);
+      const error = new Error(`Material da Produção ${index + 1} não encontrado.`);
       error.status = 404;
       throw error;
     }
@@ -1185,7 +1242,7 @@ export function buildPlan(payload, context) {
 
   const productions = productionEntries(payload, context);
   if (!productions.length) {
-    const error = new Error('Informe pelo menos uma producao com quantidade maior que zero.');
+    const error = new Error('Informe pelo menos uma produção com quantidade maior que zero.');
     error.status = 400;
     throw error;
   }
@@ -1202,7 +1259,7 @@ export function buildPlan(payload, context) {
   const stockLedger = makeStockLedger(context);
   const forcedStockOnly = stockOnlySet(payload);
   const builtProductions = productions.map(production => {
-    const productionTitle = `Producao ${production.productionIndex + 1}`;
+    const productionTitle = `Produção ${production.productionIndex + 1}`;
     const built = buildAggregatedOperations({
       material: production.material,
       quantity: production.plannedQty,
@@ -1238,7 +1295,7 @@ export function buildPlan(payload, context) {
     };
   });
   const trees = builtProductions.map(item => item.tree);
-  const tree = trees.length === 1 ? trees[0] : { materialName: 'Plano de producao', children: trees };
+  const tree = trees.length === 1 ? trees[0] : { materialName: 'Plano de produção', children: trees };
   const aggregatedOperations = builtProductions.flatMap(item => item.operations);
   const operations = scheduleOperations(applyOperationSplits(aggregatedOperations, payload), context.matrixRows, {
     dateMode: 'start',
@@ -1256,7 +1313,7 @@ export function buildPlan(payload, context) {
   const shifts = Array.isArray(payload.shifts) && payload.shifts.length
     ? payload.shifts
     : [{ hoursPerDay: payload.hoursPerDay, shiftStartTime: payload.shiftStartTime, shiftEndTime: payload.shiftEndTime, pauseHours: payload.lunchHours }];
-  const hoursPerDay = shifts.reduce((sum, shift) => sum + Math.max(toOperationalHours(shift.hoursPerDay || 0), 0), 0) || Math.max(toOperationalHours(payload.hoursPerDay || 8), 1 / 60);
+  const hoursPerDay = shifts.reduce((sum, shift) => sum + shiftAvailableHours(shift), 0) || Math.max(toOperationalHours(payload.hoursPerDay || 8), 1 / 60);
   const selectedDate = payload.planningStartDate || payload.selectedDate || payload.startDate;
   const startDate = operations.length ? operations[0].startDate : selectedDate;
   const endDate = operations.length ? operations[operations.length - 1].endDate : payload.planningEndDate || selectedDate;
@@ -1268,7 +1325,7 @@ export function buildPlan(payload, context) {
     code: payload.planningCode || codeForPlan(new Date(), productions.length),
     summary: {
       materialId: firstMaterial.id,
-      materialName: productions.length === 1 ? firstMaterial.name : `${productions.length} producoes`,
+      materialName: productions.length === 1 ? firstMaterial.name : `${productions.length} produções`,
       materialCode: productions.length === 1 ? materialCode(firstMaterial) : '',
       plannedQty,
       plannedUnit: productions.length === 1 ? firstMaterial.primary_unit : 'itens',
@@ -1286,7 +1343,7 @@ export function buildPlan(payload, context) {
       productions: productions.map(production => ({
         productionIndex: production.productionIndex,
         productionKey: `production-${production.productionIndex}`,
-        title: `Producao ${production.productionIndex + 1}`,
+        title: `Produção ${production.productionIndex + 1}`,
         materialId: production.material.id,
         materialName: production.material.name,
         materialCode: materialCode(production.material),

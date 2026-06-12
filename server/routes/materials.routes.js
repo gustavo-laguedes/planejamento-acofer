@@ -166,7 +166,7 @@ router.put('/:id', async (req, res, next) => {
       }
       return updated;
     });
-    if (!row) return res.status(404).json({ error: 'Material nao encontrado.' });
+    if (!row) return res.status(404).json({ error: 'Material não encontrado.' });
     res.json(row);
   } catch (error) {
     next(error);

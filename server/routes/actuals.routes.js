@@ -26,7 +26,7 @@ router.post('/launches', async (req, res, next) => {
     const quantity = Number(item.quantity);
     if (!materialId || !quantity) return res.status(400).json({ error: 'Material e quantidade sao obrigatorios.' });
     const [material] = await db`SELECT * FROM materials WHERE id = ${materialId}`;
-    if (!material) return res.status(404).json({ error: 'Material nao encontrado.' });
+    if (!material) return res.status(404).json({ error: 'Material não encontrado.' });
     const materialCode = Array.isArray(material.codes) ? material.codes[0] || null : null;
     const secondaryQty = Number((quantity * Number(material.primary_to_secondary_factor || 1)).toFixed(3));
 

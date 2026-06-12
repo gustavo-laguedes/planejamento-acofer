@@ -118,7 +118,7 @@ router.post('/plans', async (req, res, next) => {
       planningStartDate
     );
     if (!planningStartDate || !planningEndDate) {
-      return res.status(400).json({ error: 'Periodo do planejamento invalido.' });
+      return res.status(400).json({ error: 'Período do planejamento inválido.' });
     }
     const saved = await db.begin(async tx => {
       const [created] = await tx`
@@ -173,7 +173,7 @@ router.get('/plans/:id', async (req, res, next) => {
   try {
     const db = requireDb();
     const [plan] = await db`SELECT * FROM production_plans WHERE id = ${req.params.id}`;
-    if (!plan) return res.status(404).json({ error: 'Plano nao encontrado.' });
+    if (!plan) return res.status(404).json({ error: 'Plano não encontrado.' });
     const days = await db`SELECT * FROM production_plan_days WHERE plan_id = ${req.params.id} ORDER BY planned_date, id`;
     res.json({
       plan: {
@@ -195,11 +195,11 @@ router.post('/plans/:id/cancel', async (req, res, next) => {
     const db = requireDb();
     const [row] = await db`
       UPDATE production_plans
-      SET status = 'canceled', canceled_at = now(), cancel_reason = ${req.body.reason || 'Cancelado pelo usuario'}
+      SET status = 'canceled', canceled_at = now(), cancel_reason = ${req.body.reason || 'Cancelado pelo usuário'}
       WHERE id = ${req.params.id}
       RETURNING *
     `;
-    if (!row) return res.status(404).json({ error: 'Plano nao encontrado.' });
+    if (!row) return res.status(404).json({ error: 'Plano não encontrado.' });
     res.json(row);
   } catch (error) {
     next(error);
@@ -225,7 +225,7 @@ router.get('/plans/:id/pdf', async (req, res, next) => {
   try {
     const db = requireDb();
     const [plan] = await db`SELECT * FROM production_plans WHERE id = ${req.params.id}`;
-    if (!plan) return res.status(404).json({ error: 'Plano nao encontrado.' });
+    if (!plan) return res.status(404).json({ error: 'Plano não encontrado.' });
     const days = await db`SELECT * FROM production_plan_days WHERE plan_id = ${req.params.id} ORDER BY planned_date`;
     const normalizedPlan = {
       ...plan,

@@ -8,7 +8,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 
 
 router.post('/csv', upload.single('file'), async (req, res, next) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'Arquivo CSV nao enviado.' });
+    if (!req.file) return res.status(400).json({ error: 'Arquivo CSV não enviado.' });
     const result = await importStockCsv({ buffer: req.file.buffer, filename: req.file.originalname });
     res.json(result);
   } catch (error) {

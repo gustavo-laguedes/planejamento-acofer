@@ -31,7 +31,7 @@ router.post('/', async (req, res, next) => {
   try {
     const code = normalizeCode(req.body.code);
     const name = normalizeName(req.body.name);
-    if (!code) return res.status(400).json({ error: 'Codigo do local e obrigatorio.' });
+    if (!code) return res.status(400).json({ error: 'Código do local é obrigatório.' });
     if (!name) return res.status(400).json({ error: 'Nome do local e obrigatorio.' });
 
     const db = requireDb();
@@ -53,7 +53,7 @@ router.put('/:id', async (req, res, next) => {
   try {
     const code = normalizeCode(req.body.code);
     const name = normalizeName(req.body.name);
-    if (!code) return res.status(400).json({ error: 'Codigo do local e obrigatorio.' });
+    if (!code) return res.status(400).json({ error: 'Código do local é obrigatório.' });
     if (!name) return res.status(400).json({ error: 'Nome do local e obrigatorio.' });
 
     const db = requireDb();
@@ -69,7 +69,7 @@ router.put('/:id', async (req, res, next) => {
       WHERE id = ${req.params.id}
       RETURNING *
     `;
-    if (!row) return res.status(404).json({ error: 'Local nao encontrado.' });
+    if (!row) return res.status(404).json({ error: 'Local não encontrado.' });
     res.json(row);
   } catch (error) {
     next(error);

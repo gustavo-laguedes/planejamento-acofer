@@ -33,8 +33,8 @@ export async function api(path, options = {}) {
       window.dispatchEvent(new CustomEvent('planejamento:navigate'));
       throw new Error('Sess\u00e3o expirada. Fa\u00e7a login novamente.');
     }
-    const payload = await response.json().catch(() => ({ error: 'Falha na requisicao.' }));
-    throw new Error(payload.error || 'Falha na requisicao.');
+    const payload = await response.json().catch(() => ({ error: 'Falha na requisição.' }));
+    throw new Error(payload.error || 'Falha na requisição.');
   }
 
   if (response.headers.get('content-type')?.includes('application/pdf')) {
