@@ -1057,6 +1057,28 @@ thead tr:nth-child(2) th {
   color: var(--danger);
 }
 
+.small-action-button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--petroleum);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.small-action-button.danger {
+  color: var(--danger);
+}
+
+.history-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .empty-state {
   padding: 28px;
   color: var(--muted);
@@ -1155,6 +1177,142 @@ thead tr:nth-child(2) th {
   background: #ffffff;
   padding: 14px;
   overflow-x: auto;
+}
+
+.planning-summary-modal .modal-actions {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.modal-subtitle {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.planning-detail-dialog {
+  display: grid;
+  gap: 18px;
+}
+
+.planning-detail-section {
+  display: grid;
+  gap: 10px;
+}
+
+.planning-detail-section h3 {
+  margin: 0;
+  color: var(--petroleum-dark);
+  font-size: 15px;
+}
+
+.detail-summary-strip {
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+}
+
+.detail-summary-strip article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.detail-summary-strip span,
+.detail-table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.detail-summary-strip strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.planning-detail-two-cols {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.detail-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 860px;
+  background: #ffffff;
+}
+
+.detail-table th,
+.detail-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.detail-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.detail-table td {
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.flow-tree-list {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+  overflow-x: auto;
+}
+
+.flow-tree-list ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.flow-tree-list li ul {
+  margin-top: 8px;
+}
+
+.flow-tree-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(4, minmax(110px, auto));
+  gap: 10px;
+  align-items: center;
+  margin-left: calc(var(--flow-level, 0) * 20px);
+  border-left: 3px solid var(--line);
+  background: #fbfcfd;
+  padding: 9px 10px;
+}
+
+.flow-tree-row em {
+  color: var(--petroleum);
+  font-style: normal;
+  font-weight: 800;
+}
+
+.planning-alert-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink);
 }
 
 .production-flow-graph {
@@ -1965,7 +2123,9 @@ thead tr:nth-child(2) th {
   .planning-inner-grid,
   .transport-row,
   .operation-production-row,
-  .operation-split-row {
+  .operation-split-row,
+  .detail-summary-strip,
+  .planning-detail-two-cols {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2000,6 +2160,8 @@ thead tr:nth-child(2) th {
   .transport-row,
   .operation-production-row,
   .operation-split-row,
+  .detail-summary-strip,
+  .planning-detail-two-cols,
   .inventory-grid {
     grid-template-columns: 1fr;
   }

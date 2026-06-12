@@ -72,6 +72,28 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function normalizeJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeJsonObject(value) {
+  if (value && typeof value === 'object') return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function formatPtBrDecimal(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '';
@@ -80,6 +102,23 @@ function formatPtBrDecimal(value) {
     minimumFractionDigits: hasDecimals ? 2 : 0,
     maximumFractionDigits: 3
   });
+}
+
+function formatStatus(value) {
+  const labels = {
+    planned: 'Planejado',
+    launched: 'Lancado',
+    canceled: 'Cancelado'
+  };
+  return labels[String(value || '').toLowerCase()] || value || 'Sem status';
+}
+
+function formatDuration(minutes) {
+  const total = Math.max(Math.round(Number(minutes || 0)), 0);
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  if (!hours) return `${mins} min`;
+  return mins ? `${hours}h ${String(mins).padStart(2, '0')}min` : `${hours}h`;
 }
 
 function generatePlanningCode(productionCount = 1, date = new Date()) {
@@ -979,6 +1018,183 @@ export function PlanningPage() {
     page.appendChild(backdrop);
   }
 
+  function planTreeRoots(tree) {
+    if (!tree || typeof tree !== 'object') return [];
+    return Array.isArray(tree.children) && tree.materialName === 'Plano de producao' ? tree.children : [tree];
+  }
+
+  function productionRowsFromTree(tree) {
+    return planTreeRoots(tree).map((node, index) => ({
+      title: node.productionTitle || `Producao ${Number(node.productionIndex ?? index) + 1}`,
+      materialName: node.materialName,
+      materialCode: node.materialCode,
+      plannedQty: node.requiredQty,
+      unit: node.unit,
+      machineName: node.machineName,
+      peopleCount: node.peopleCount,
+      productionModelName: node.productionModelName
+    }));
+  }
+
+  function operationsForDetail(detail) {
+    return normalizeJsonArray(detail.operations).map((operation, index) => ({
+      ...operation,
+      sequence: index + 1,
+      linkedProductions: Array.isArray(operation.productionItems) && operation.productionItems.length
+        ? operation.productionItems.map(item => `${item.productionTitle || `Producao ${Number(item.productionIndex || 0) + 1}`}: ${formatPtBrDecimal(item.quantity)} ${item.unit || operation.unit || ''}`.trim())
+        : [operation.productionTitle].filter(Boolean)
+    }));
+  }
+
+  function planAlerts(tree, operations = []) {
+    const alerts = [];
+    function visit(node) {
+      if (!node) return;
+      if (node.isInitialRawMaterial && Number(node.stockQty || 0) < Number(node.requiredQty || 0)) {
+        alerts.push(`Estoque insuficiente: ${node.materialName} precisa ${formatPtBrDecimal(node.requiredQty)} ${node.unit || ''} e possui ${formatPtBrDecimal(node.stockQty)}.`);
+      }
+      (node.children || []).forEach(visit);
+    }
+    planTreeRoots(tree).forEach(visit);
+    operations.forEach(operation => {
+      if (Number(operation.teamAvailable || 0) && Number(operation.peopleCount || 0) > Number(operation.teamAvailable || 0)) {
+        alerts.push(`Equipe excedida em ${operation.materialName}: ${operation.peopleCount} pessoas para ${operation.teamAvailable} disponiveis.`);
+      }
+    });
+    return [...new Set(alerts)];
+  }
+
+  function renderDetailTable(headers, rows, emptyText = 'Sem registros.') {
+    return `
+      <div class="detail-table-wrap">
+        <table class="detail-table">
+          <thead><tr>${headers.map(header => `<th>${header.label}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${rows.length ? rows.map(row => `
+              <tr>${headers.map(header => `<td>${header.render ? header.render(row) : escapeHtml(row[header.key] ?? '')}</td>`).join('')}</tr>
+            `).join('') : `<tr><td colspan="${headers.length}"><span class="muted-text">${emptyText}</span></td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function renderFlowTree(node, level = 0) {
+    if (!node) return '';
+    const status = node.isInitialRawMaterial
+      ? Number(node.stockQty || 0) >= Number(node.requiredQty || 0) ? 'Materia-prima inicial com saldo' : 'Materia-prima inicial / comprar'
+      : Number(node.produceQty || 0) > 0 ? 'Produzir' : 'Usar saldo';
+    return `
+      <li>
+        <div class="flow-tree-row" style="--flow-level: ${level}">
+          <strong>${escapeHtml(node.materialName || '')}</strong>
+          <span>Necessario ${formatPtBrDecimal(node.requiredQty)} ${escapeHtml(node.unit || '')}</span>
+          <span>Saldo ${formatPtBrDecimal(node.stockQty)} ${escapeHtml(node.unit || '')}</span>
+          <span>A produzir ${formatPtBrDecimal(node.produceQty)} ${escapeHtml(node.unit || '')}</span>
+          <em>${escapeHtml(status)}</em>
+        </div>
+        ${(node.children || []).length ? `<ul>${node.children.map(child => renderFlowTree(child, level + 1)).join('')}</ul>` : ''}
+      </li>
+    `;
+  }
+
+  function renderPlanFlowDetail(tree) {
+    const roots = planTreeRoots(tree);
+    return roots.length
+      ? `<div class="flow-tree-list">${roots.map(root => `<ul>${renderFlowTree(root)}</ul>`).join('')}</div>`
+      : '<p class="muted-text">Fluxo produtivo nao registrado.</p>';
+  }
+
+  function openPlanDetailModal(detail) {
+    page.querySelector('.planning-detail-modal')?.remove();
+    const plan = detail.plan || {};
+    const tree = normalizeJsonObject(detail.tree || plan.schedule_tree);
+    const operations = operationsForDetail(detail);
+    const productions = productionRowsFromTree(tree);
+    const transports = operations.filter(operation => operation.operationType === 'transport');
+    const firstOperation = operations[0];
+    const lastOperation = operations[operations.length - 1];
+    const alerts = planAlerts(tree, operations);
+    const materials = productions.length
+      ? productions.map(production => `${production.materialName} (${formatPtBrDecimal(production.plannedQty)} ${production.unit || ''})`.trim())
+      : [`${plan.material_name || ''} (${formatPtBrDecimal(plan.planned_qty)} ${plan.planned_unit || ''})`.trim()].filter(Boolean);
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop planning-detail-modal';
+    backdrop.innerHTML = `
+      <div class="modal wide-modal planning-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="planning-detail-title">
+        <div class="modal-header">
+          <div>
+            <h2 id="planning-detail-title">Planejamento ${escapeHtml(plan.code || plan.id)}</h2>
+            <p class="modal-subtitle">${escapeHtml(formatPeriod(plan.start_date, plan.end_date))} | ${escapeHtml(formatStatus(plan.status))}</p>
+          </div>
+          <button class="link-button close-modal" type="button">Fechar</button>
+        </div>
+
+        <section class="planning-detail-section detail-summary-strip">
+          <article><span>Codigo</span><strong>${escapeHtml(plan.code || plan.id)}</strong></article>
+          <article><span>Periodo planejado</span><strong>${escapeHtml(formatPeriod(plan.start_date, plan.end_date))}</strong></article>
+          <article><span>Status</span><strong>${escapeHtml(formatStatus(plan.status))}</strong></article>
+          <article><span>Operacoes</span><strong>${operations.length}</strong></article>
+          <article><span>Inicio/fim estimado</span><strong>${escapeHtml(`${formatDateOnly(firstOperation?.startDate)} ${firstOperation?.startTime || ''} ate ${formatDateOnly(lastOperation?.endDate)} ${lastOperation?.endTime || ''}`.trim())}</strong></article>
+        </section>
+
+        <section class="planning-detail-section">
+          <h3>Producoes incluidas</h3>
+          ${renderDetailTable([
+            { label: 'Producao', render: row => escapeHtml(row.title) },
+            { label: 'Material final', render: row => `${escapeHtml(row.materialName || '')}<br><span class="muted-text">${escapeHtml(row.materialCode || '')}</span>` },
+            { label: 'Quantidade', render: row => escapeHtml(`${formatPtBrDecimal(row.plannedQty)} ${row.unit || ''}`.trim()) },
+            { label: 'Maquina', key: 'machineName' },
+            { label: 'Pessoas', key: 'peopleCount' },
+            { label: 'Modelo', key: 'productionModelName' }
+          ], productions)}
+        </section>
+
+        <section class="planning-detail-section planning-detail-two-cols">
+          <div>
+            <h3>Materiais finais</h3>
+            <div class="readonly-chip-list">${chips(materials, 'Sem materiais finais')}</div>
+          </div>
+          <div>
+            <h3>Turnos e transportes</h3>
+            <p>${escapeHtml(`${formatPtBrDecimal(plan.hours_per_day)} h/dia`)}</p>
+            <p class="muted-text">${transports.length} transporte(s) no calendario.</p>
+          </div>
+        </section>
+
+        <section class="planning-detail-section">
+          <h3>Operacoes do calendario</h3>
+          ${renderDetailTable([
+            { label: '#', render: row => row.sequence },
+            { label: 'Material', render: row => escapeHtml(row.materialName || '') },
+            { label: 'Tipo', render: row => row.operationType === 'transport' ? 'Transporte' : 'Producao' },
+            { label: 'Quantidade', render: row => escapeHtml(`${formatPtBrDecimal(row.produceQty)} ${row.unit || ''}`.trim()) },
+            { label: 'Maquina', key: 'machineName' },
+            { label: 'Pessoas', key: 'peopleCount' },
+            { label: 'Inicio', render: row => escapeHtml(`${formatDateOnly(row.startDate)} ${row.startTime || ''}`.trim()) },
+            { label: 'Fim', render: row => escapeHtml(`${formatDateOnly(row.endDate)} ${row.endTime || ''}`.trim()) },
+            { label: 'Duracao', render: row => escapeHtml(formatDuration(row.totalMinutes)) },
+            { label: 'Producoes vinculadas', render: row => escapeHtml(row.linkedProductions.join(' | ') || '-') }
+          ], operations)}
+        </section>
+
+        <section class="planning-detail-section">
+          <h3>Fluxo produtivo</h3>
+          ${renderPlanFlowDetail(tree)}
+        </section>
+
+        <section class="planning-detail-section">
+          <h3>Alertas e observacoes</h3>
+          ${alerts.length ? `<ul class="planning-alert-list">${alerts.map(alert => `<li>${escapeHtml(alert)}</li>`).join('')}</ul>` : '<p class="muted-text">Sem alertas registrados.</p>'}
+        </section>
+      </div>
+    `;
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
+    });
+    page.appendChild(backdrop);
+  }
+
   async function renderSimulationTab() {
     await loadLookups();
     target.innerHTML = `
@@ -1394,9 +1610,11 @@ export function PlanningPage() {
           } },
           { label: 'Status', key: 'status' },
           { label: 'A&ccedil;&otilde;es', render: row => `
-            <button class="link-button" data-view="${row.id}">Visualizar</button>
-            <button class="link-button" data-pdf="${row.id}">Gerar PDF</button>
-            <button class="link-button danger" data-cancel="${row.id}">Cancelar</button>
+            <div class="history-actions">
+              <button class="small-action-button" data-view="${row.id}" type="button">Visualizar</button>
+              <button class="small-action-button" data-pdf="${row.id}" type="button">Gerar PDF</button>
+              <button class="small-action-button danger" data-cancel="${row.id}" type="button">Cancelar</button>
+            </div>
           ` }
         ],
         rows
@@ -1421,29 +1639,7 @@ export function PlanningPage() {
 
     async function viewPlan(id) {
       const detail = await api(`/planning/plans/${id}`);
-      const operations = (detail.operations || []).map(operation => ({
-        material: operation.materialName,
-        quantidade: `${formatPtBrDecimal(operation.produceQty)} ${operation.unit || ''}`,
-        maquina: operation.machineName,
-        pessoas: operation.peopleCount,
-        inicio: `${formatDateOnly(operation.startDate)} ${operation.startTime || ''}`.trim(),
-        fim: `${formatDateOnly(operation.endDate)} ${operation.endTime || ''}`.trim()
-      }));
-      const backdrop = document.createElement('div');
-      backdrop.className = 'modal-backdrop';
-      backdrop.innerHTML = `
-        <div class="modal" role="dialog" aria-modal="true">
-          <div class="modal-header">
-            <h2>${escapeHtml(detail.plan.code || detail.plan.id)}</h2>
-            <button class="link-button close-modal" type="button">Fechar</button>
-          </div>
-          <pre class="plan-json">${escapeHtml(JSON.stringify({ horasPorDia: formatPtBrDecimal(detail.plan.hours_per_day), operacoes: operations }, null, 2))}</pre>
-        </div>
-      `;
-      backdrop.addEventListener('click', event => {
-        if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
-      });
-      page.appendChild(backdrop);
+      openPlanDetailModal(detail);
     }
 
     target.querySelector('.refresh-history').addEventListener('click', () => loadHistory().catch(toast));

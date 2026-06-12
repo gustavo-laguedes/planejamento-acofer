@@ -33,6 +33,17 @@ function normalizeJsonObject(value) {
   }
 }
 
+function normalizeJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function formatDateBr(value) {
   const dateValue = normalizeDateOnly(value);
   if (!dateValue) return '';
@@ -164,7 +175,16 @@ router.get('/plans/:id', async (req, res, next) => {
     const [plan] = await db`SELECT * FROM production_plans WHERE id = ${req.params.id}`;
     if (!plan) return res.status(404).json({ error: 'Plano nao encontrado.' });
     const days = await db`SELECT * FROM production_plan_days WHERE plan_id = ${req.params.id} ORDER BY planned_date, id`;
-    res.json({ plan, days, tree: plan.schedule_tree, operations: plan.operations });
+    res.json({
+      plan: {
+        ...plan,
+        schedule_tree: normalizeJsonObject(plan.schedule_tree),
+        operations: normalizeJsonArray(plan.operations)
+      },
+      days,
+      tree: normalizeJsonObject(plan.schedule_tree),
+      operations: normalizeJsonArray(plan.operations)
+    });
   } catch (error) {
     next(error);
   }
@@ -207,7 +227,12 @@ router.get('/plans/:id/pdf', async (req, res, next) => {
     const [plan] = await db`SELECT * FROM production_plans WHERE id = ${req.params.id}`;
     if (!plan) return res.status(404).json({ error: 'Plano nao encontrado.' });
     const days = await db`SELECT * FROM production_plan_days WHERE plan_id = ${req.params.id} ORDER BY planned_date`;
-    const pdf = await createPlanningPdf(plan, days, plan.schedule_tree, plan.operations);
+    const normalizedPlan = {
+      ...plan,
+      schedule_tree: normalizeJsonObject(plan.schedule_tree),
+      operations: normalizeJsonArray(plan.operations)
+    };
+    const pdf = await createPlanningPdf(normalizedPlan, days, normalizedPlan.schedule_tree, normalizedPlan.operations);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=planejamento-${plan.code || plan.id}.pdf`);
     res.send(pdf);
