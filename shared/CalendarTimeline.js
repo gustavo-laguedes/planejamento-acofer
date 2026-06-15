@@ -333,7 +333,7 @@ function machineSegmentStyle(segment, dayStart, dayEnd, lane, laneCount) {
   const left = ((visualStart - dayStart) / (dayEnd - dayStart)) * 100;
   const width = (Math.max(end - visualStart, 1) / (dayEnd - dayStart)) * 100;
   const laneHeight = 100 / Math.max(laneCount, 1);
-  return `--event-left: calc(${left}% + 4px); --event-width: calc(${width}% - 8px); --event-top: calc(${lane * laneHeight}% + 5px); --event-height: calc(${laneHeight}% - 10px);`;
+  return `--event-left: calc(${left}% + 4px); --event-width: max(calc(${width}% - 8px), 1px); --event-top: calc(${lane * laneHeight}% + 5px); --event-height: calc(${laneHeight}% - 10px);`;
 }
 
 function colorStyle(color) {
