@@ -336,6 +336,41 @@ function machineSegmentStyle(segment, dayStart, dayEnd, lane, laneCount) {
   return `--event-left: calc(${left}% + 4px); --event-width: max(calc(${width}% - 8px), 1px); --event-top: calc(${lane * laneHeight}% + 5px); --event-height: calc(${laneHeight}% - 10px);`;
 }
 
+function shiftRangesForMachine(shifts) {
+  return shifts
+    .map(shift => ({ start: shift.shiftStart, end: shift.shiftEnd }))
+    .filter(range => range.end > range.start)
+    .sort((left, right) => left.start - right.start);
+}
+
+function rangesDuration(ranges) {
+  return ranges.reduce((sum, range) => sum + Math.max(range.end - range.start, 0), 0);
+}
+
+function rangeOffset(minutes, ranges) {
+  let offset = 0;
+  for (const range of ranges) {
+    if (minutes <= range.start) return offset;
+    if (minutes <= range.end) return offset + (minutes - range.start);
+    offset += range.end - range.start;
+  }
+  return offset;
+}
+
+function machineSegmentStyleByRanges(segment, ranges, lane, laneCount) {
+  const dayStart = ranges[0]?.start ?? 0;
+  const dayEnd = ranges[ranges.length - 1]?.end ?? 24 * 60;
+  const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
+  const totalMinutes = Math.max(rangesDuration(ranges), 1);
+  const visualStart = Number.isFinite(segment.visualStart)
+    ? clampMinutes(segment.visualStart, start, end)
+    : start;
+  const left = (rangeOffset(visualStart, ranges) / totalMinutes) * 100;
+  const width = ((rangeOffset(end, ranges) - rangeOffset(visualStart, ranges)) / totalMinutes) * 100;
+  const laneHeight = 100 / Math.max(laneCount, 1);
+  return `--event-left: calc(${left}% + 4px); --event-width: max(calc(${width}% - 8px), 1px); --event-top: calc(${lane * laneHeight}% + 5px); --event-height: calc(${laneHeight}% - 10px);`;
+}
+
 function colorStyle(color) {
   return `--event-bg: ${color.bg}; --event-border: ${color.border}; --event-text: ${color.text};`;
 }
@@ -1435,16 +1470,19 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   function renderMachineBoard() {
     const zoom = zoomLevels[zoomIndex];
     const machineDayWidth = Math.max(zoom.dayWidth, 280);
-    const totalMinutes = dayEnd - dayStart;
+    const machineRanges = shiftRangesForMachine(shifts);
+    const totalMinutes = Math.max(rangesDuration(machineRanges), 1);
+    const machineStart = machineRanges[0]?.start ?? shiftStart;
+    const machineEnd = machineRanges[machineRanges.length - 1]?.end ?? shiftEnd;
     const bodyHeight = MACHINE_CALENDAR_ORDER.length * zoom.machineRowHeight;
     const lunchBreaks = shifts
-      .filter(shift => shift.lunchEnd > shift.lunchStart && shift.lunchEnd > dayStart && shift.lunchStart < dayEnd)
+      .filter(shift => shift.lunchEnd > shift.lunchStart && shift.lunchEnd > shift.shiftStart && shift.lunchStart < shift.shiftEnd)
       .map(shift => ({
         label: shift.label,
         lunchStart: shift.lunchStart,
         lunchEnd: shift.lunchEnd,
-        left: (clampMinutes(shift.lunchStart, dayStart, dayEnd) / totalMinutes) * 100,
-        width: ((clampMinutes(shift.lunchEnd, dayStart, dayEnd) - clampMinutes(shift.lunchStart, dayStart, dayEnd)) / totalMinutes) * 100
+        left: (rangeOffset(clampMinutes(shift.lunchStart, shift.shiftStart, shift.shiftEnd), machineRanges) / totalMinutes) * 100,
+        width: ((rangeOffset(clampMinutes(shift.lunchEnd, shift.shiftStart, shift.shiftEnd), machineRanges) - rangeOffset(clampMinutes(shift.lunchStart, shift.shiftStart, shift.shiftEnd), machineRanges)) / totalMinutes) * 100
       }))
       .filter(shift => shift.width > 0);
     const board = wrapper.querySelector('.gantt-board');
@@ -1460,7 +1498,14 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     for (const machineOps of machineOperations.values()) {
       for (const operation of machineOps) {
         if (!segmentCache.has(operation)) {
-          segmentCache.set(operation, operationDaySegments(operation, dates, dayStart, dayEnd, lunchBreaks));
+          const byDate = new Map(dates.map(date => [date, []]));
+          shifts.forEach(shift => {
+            const shiftSegments = operationDaySegments(operation, dates, shift.shiftStart, shift.shiftEnd, shift.lunchStart, shift.lunchEnd);
+            dates.forEach(date => {
+              byDate.get(date)?.push(...(shiftSegments.get(date) || []));
+            });
+          });
+          segmentCache.set(operation, byDate);
         }
       }
     }
@@ -1496,11 +1541,12 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
                   });
                 const dayOperations = arrangeParallelSegments(daySegments).map(item => {
                   const { operation, segment } = item;
-                  const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
-                  const shouldShowText = ((end - start) / totalMinutes) * machineDayWidth >= 96 || zoom.machineRowHeight >= 118;
+                  const { start, end } = segmentMinutes(segment, machineStart, machineEnd);
+                  const compressedMinutes = Math.max(rangeOffset(end, machineRanges) - rangeOffset(start, machineRanges), 1);
+                  const shouldShowText = (compressedMinutes / totalMinutes) * machineDayWidth >= 96 || zoom.machineRowHeight >= 118;
                   const eventColor = operationEventColor(operation);
                   const breakdown = productionBreakdown(operation);
-                  const style = machineSegmentStyle({ ...segment, visualStart: item.visualStart }, dayStart, dayEnd, item.lane, item.laneCount);
+                  const style = machineSegmentStyleByRanges({ ...segment, visualStart: item.visualStart }, machineRanges, item.lane, item.laneCount);
                   return renderOperationButton(operation, segment, item, style, shouldShowText, eventColorStyle(eventColor, breakdown, colorForProduction));
                 }).join('');
                 return `

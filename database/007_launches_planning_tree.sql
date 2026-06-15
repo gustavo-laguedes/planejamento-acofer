@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS production_launches (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+ALTER TABLE production_launches
+  ADD COLUMN IF NOT EXISTS input_material_id BIGINT REFERENCES materials(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS input_material_name TEXT,
+  ADD COLUMN IF NOT EXISTS input_material_code TEXT,
+  ADD COLUMN IF NOT EXISTS consumed_lot TEXT,
+  ADD COLUMN IF NOT EXISTS produced_lots JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS benefit_number TEXT,
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'launched',
+  ADD COLUMN IF NOT EXISTS canceled_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+
 ALTER TABLE production_plans
   ADD COLUMN IF NOT EXISTS code TEXT,
   ADD COLUMN IF NOT EXISTS hours_per_day NUMERIC NOT NULL DEFAULT 8 CHECK (hours_per_day > 0),

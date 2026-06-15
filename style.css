@@ -263,6 +263,14 @@ select:disabled {
   max-width: 1760px;
 }
 
+.page:has(.registrations-page),
+.page:has(.launches-page),
+.page:has(.tracking-page),
+.page:has(.productivity-matrix-page) {
+  width: calc(100vw - 64px);
+  max-width: 1560px;
+}
+
 .stack {
   display: grid;
   gap: 20px;
@@ -728,6 +736,171 @@ select:disabled {
   font-size: 12px;
 }
 
+.launches-wide-panel {
+  width: 100%;
+  overflow: hidden;
+}
+
+.launches-wide-panel .table-wrap {
+  max-height: 66vh;
+}
+
+.inventory-modal,
+.production-modal {
+  width: min(1120px, 96vw);
+}
+
+.inventory-picker {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin: 14px 0 8px;
+}
+
+.inventory-search-results {
+  display: grid;
+  gap: 6px;
+  max-height: 210px;
+  overflow: auto;
+  margin-bottom: 12px;
+}
+
+.inventory-search-results button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+  color: var(--petroleum-dark);
+  text-align: left;
+  cursor: pointer;
+}
+
+.inventory-search-results button.is-selected {
+  border-color: var(--petroleum);
+  background: #eef8fa;
+}
+
+.inventory-search-results span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.inventory-card-list {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.inventory-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(320px, 1.3fr);
+  gap: 16px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 14px 14px 14px 50px;
+}
+
+.inventory-card > .remove-inventory-material {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  min-width: 26px;
+  padding: 4px 8px;
+}
+
+.inventory-card h3,
+.inventory-card p {
+  margin: 0;
+}
+
+.inventory-card p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.inventory-location-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.inventory-location-list label {
+  display: grid;
+  gap: 5px;
+}
+
+.inventory-location-list small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.inventory-modal-actions {
+  display: flex;
+  justify-content: space-between;
+}
+
+.modal-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.production-realization-form {
+  display: grid;
+  gap: 18px;
+}
+
+.production-lines-section,
+.produced-lines-target {
+  display: grid;
+  gap: 12px;
+}
+
+.produced-line {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.9fr) minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.produced-line .readonly-field {
+  min-height: 64px;
+  align-content: center;
+}
+
+.production-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.production-modal-actions .cancel-production {
+  margin-right: auto;
+}
+
+tr.production-canceled-row td:not(:last-child) {
+  background: #fff1f1;
+  color: #b42318;
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+}
+
+tr.production-canceled-row td:last-child {
+  background: #fff8f8;
+}
+
 .plan-json {
   max-height: 60vh;
   overflow: auto;
@@ -797,13 +970,13 @@ select:disabled {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 980px;
+  min-width: 1120px;
   background: #ffffff;
 }
 
 th,
 td {
-  padding: 10px 12px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--line);
   text-align: left;
   font-size: 13px;
@@ -1070,6 +1243,17 @@ thead tr:nth-child(2) th {
 
 .small-action-button.danger {
   color: var(--danger);
+}
+
+.danger-button {
+  min-height: 40px;
+  border: 1px solid #e5a3a3;
+  border-radius: 8px;
+  background: #fff1f1;
+  color: #b42318;
+  padding: 0 14px;
+  font-weight: 900;
+  cursor: pointer;
 }
 
 .history-actions {
@@ -2408,6 +2592,8 @@ body.calendar-fullscreen-open {
   .transport-row,
   .operation-production-row,
   .operation-split-row,
+  .inventory-card,
+  .produced-line,
   .detail-summary-strip,
   .planning-detail-two-cols,
   .planning-detail-shifts {
@@ -2445,6 +2631,9 @@ body.calendar-fullscreen-open {
   .transport-row,
   .operation-production-row,
   .operation-split-row,
+  .inventory-picker,
+  .inventory-card,
+  .produced-line,
   .detail-summary-strip,
   .planning-detail-two-cols,
   .planning-detail-shifts,

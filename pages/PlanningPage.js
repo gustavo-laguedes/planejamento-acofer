@@ -251,7 +251,9 @@ function defaultDraft() {
     productions: [emptyProduction(0)],
     stockOnlyMaterials: [],
     operationOverrides: {},
-    operationSplits: []
+    operationSplits: [],
+    lastPayload: null,
+    currentSimulation: null
   };
 }
 
@@ -264,7 +266,9 @@ function normalizeDraft(rawDraft) {
     productions: Array.isArray(draft.productions) && draft.productions.length ? draft.productions : [emptyProduction(0)],
     stockOnlyMaterials: Array.isArray(draft.stockOnlyMaterials) ? draft.stockOnlyMaterials : [],
     operationOverrides: draft.operationOverrides && typeof draft.operationOverrides === 'object' ? draft.operationOverrides : {},
-    operationSplits: Array.isArray(draft.operationSplits) ? draft.operationSplits : []
+    operationSplits: Array.isArray(draft.operationSplits) ? draft.operationSplits : [],
+    lastPayload: draft.lastPayload && typeof draft.lastPayload === 'object' ? draft.lastPayload : null,
+    currentSimulation: draft.currentSimulation && typeof draft.currentSimulation === 'object' ? draft.currentSimulation : null
   };
   normalized.shifts = normalized.shifts.map((shift, index) => ({
     ...defaultShift(index, shift.shiftStartTime),
@@ -319,8 +323,8 @@ export function PlanningPage() {
   let matrix = [];
   let locations = [];
   let draft = loadDraft();
-  let lastPayload = null;
-  let currentSimulation = null;
+  let lastPayload = draft.lastPayload || null;
+  let currentSimulation = draft.currentSimulation || null;
   let hasPendingSimulationChanges = false;
   let autosaveTimer = null;
   let recalculationTimer = null;
@@ -353,6 +357,8 @@ export function PlanningPage() {
   }
 
   function saveDraftNow() {
+    draft.lastPayload = lastPayload;
+    draft.currentSimulation = currentSimulation;
     localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
   }
 
@@ -946,6 +952,9 @@ export function PlanningPage() {
 
   function renderSimulation(result, form) {
     currentSimulation = result;
+    draft.currentSimulation = result;
+    draft.lastPayload = lastPayload;
+    saveDraftNow();
     hasPendingSimulationChanges = false;
     const resultsTarget = target.querySelector('.planning-results');
     const timelineTarget = target.querySelector('.timeline-target');
@@ -1480,6 +1489,8 @@ export function PlanningPage() {
       draft = defaultDraft();
       lastPayload = null;
       currentSimulation = null;
+      draft.lastPayload = null;
+      draft.currentSimulation = null;
       rerenderBuilder();
     });
 
@@ -1487,6 +1498,7 @@ export function PlanningPage() {
       updateDraftFromGeneral();
       if (!validateDraft(form)) return null;
       lastPayload = payload();
+      draft.lastPayload = lastPayload;
       const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
       renderSimulation(result, form);
       return result;

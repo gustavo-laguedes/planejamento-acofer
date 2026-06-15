@@ -54,7 +54,7 @@ export function nextSortDirection(currentDirection) {
   return null;
 }
 
-export function DataTable({ columns, rows, emptyText = 'Nenhum registro encontrado.' }) {
+export function DataTable({ columns, rows, emptyText = 'Nenhum registro encontrado.', rowClass = null }) {
   const wrapper = document.createElement('div');
   wrapper.className = 'table-wrap';
 
@@ -85,6 +85,8 @@ export function DataTable({ columns, rows, emptyText = 'Nenhum registro encontra
     body.innerHTML = '';
     sortedRows.forEach(row => {
       const tr = document.createElement('tr');
+      const className = typeof rowClass === 'function' ? rowClass(row) : '';
+      if (className) tr.className = className;
       tr.innerHTML = columns.map(column => `<td>${column.render ? column.render(row) : row[column.key] ?? ''}</td>`).join('');
       body.appendChild(tr);
     });

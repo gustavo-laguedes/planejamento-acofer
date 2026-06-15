@@ -10,7 +10,7 @@ function chips(values = [], emptyText = 'Sem informação') {
 
 export function ProductivityMatrixPage() {
   const page = document.createElement('section');
-  page.className = 'stack';
+  page.className = 'stack productivity-matrix-page';
   page.innerHTML = `
     <div class="page-header">
       <div>
