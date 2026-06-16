@@ -547,6 +547,7 @@ select:disabled {
   width: min(1360px, 100%);
   margin: 0 auto;
   padding: 32px;
+  min-width: 0;
 }
 
 .page:has(.stock-page) {
@@ -572,6 +573,17 @@ select:disabled {
 .stack {
   display: grid;
   gap: 20px;
+  min-width: 0;
+}
+
+.stack > *,
+.panel,
+.table-target,
+.stock-table-target,
+.launches-target,
+.registrations-target,
+.internal-tabs-target {
+  min-width: 0;
 }
 
 .page-header {
@@ -1599,6 +1611,11 @@ tr.production-needs-benefit-row td {
   max-height: 60vh;
   border: 1px solid var(--line);
   border-radius: 8px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
 }
 
 table {
@@ -1915,6 +1932,54 @@ thead tr:nth-child(2) th {
 
 .stock-overview-table tbody tr:hover td {
   background-image: linear-gradient(rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.34));
+}
+
+@media (max-width: 1200px) {
+  .stock-panel {
+    overflow: hidden;
+  }
+
+  .stock-table-wrap {
+    overflow-x: auto;
+    overflow-y: auto;
+  }
+
+  .stock-overview-table {
+    width: max-content;
+    min-width: max(100%, 1280px);
+  }
+
+  .stock-overview-table .col-codes {
+    width: 130px;
+  }
+
+  .stock-overview-table .col-material {
+    width: 240px;
+  }
+
+  .stock-overview-table .col-nasajon,
+  .stock-overview-table .col-adjustment {
+    width: 118px;
+  }
+
+  .stock-overview-table .col-correction {
+    width: 170px;
+  }
+
+  .stock-overview-table .col-total {
+    width: 150px;
+  }
+
+  .stock-overview-table .col-total-estimated {
+    width: 170px;
+  }
+
+  .stock-overview-table th,
+  .stock-overview-table .material-name,
+  .stock-overview-table td {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
 }
 
 .code-pill {
@@ -3374,7 +3439,7 @@ body.calendar-fullscreen-open {
   }
 
   .stock-panel {
-    overflow: visible;
+    overflow: hidden;
   }
 
   .stock-table-wrap {
