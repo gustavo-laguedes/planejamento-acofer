@@ -532,6 +532,18 @@ export function PlanningPage() {
     };
   }
 
+  function operationOverrideKeys(change) {
+    const keys = [];
+    const operationId = String(change.operationId || '');
+    const materialId = String(change.materialId || '');
+    const productionIndex = Number(change.productionIndex || 0);
+    const scopedKey = materialId ? `${productionIndex}:${materialId}` : '';
+    [operationId, scopedKey, materialId].forEach(key => {
+      if (key && !keys.includes(key)) keys.push(key);
+    });
+    return keys;
+  }
+
   function validateDraft(form) {
     if (!draft.planningStartDate || !draft.planningEndDate) {
       form.reportValidity();
@@ -1609,22 +1621,17 @@ export function PlanningPage() {
       const changes = Array.isArray(event.detail.changes) ? event.detail.changes : [event.detail];
       draft.operationOverrides = draft.operationOverrides && typeof draft.operationOverrides === 'object' ? draft.operationOverrides : {};
       changes.forEach(change => {
-        const key = String(change.operationId || change.materialId);
         const override = {
           machineName: change.machineName,
           peopleCount: change.peopleCount,
           productionModelName: change.productionModelName
         };
-        draft.operationOverrides[key] = {
-          ...(draft.operationOverrides[key] || {}),
-          ...override
-        };
-        if (!String(key).includes(':')) {
-          draft.operationOverrides[String(change.materialId)] = {
-            ...(draft.operationOverrides[String(change.materialId)] || {}),
+        operationOverrideKeys(change).forEach(key => {
+          draft.operationOverrides[key] = {
+            ...(draft.operationOverrides[key] || {}),
             ...override
           };
-        }
+        });
       });
       saveDraftNow();
       try {

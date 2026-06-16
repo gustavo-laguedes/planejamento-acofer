@@ -560,6 +560,21 @@ function productivitySummary(operation, breakdown = productionBreakdown(operatio
   return labels.join(' | ');
 }
 
+function productivityLabelForSelection(options = [], machineName, peopleCount, fallbackOperation = {}) {
+  const selected = options.find(option =>
+    option.machineName === machineName
+    && Number(option.peopleCount || 0) === Number(peopleCount || 0)
+  );
+  return productivitySummary({
+    ...fallbackOperation,
+    machineName,
+    peopleCount,
+    outputQty: selected?.outputQty,
+    outputUnit: selected?.outputUnit,
+    timeSeconds: selected?.timeSeconds
+  }, []);
+}
+
 function breakdownText(operation) {
   const items = productionBreakdown(operation);
   if (items.length <= 1) return [];
@@ -1243,7 +1258,7 @@ function showOperationModal(wrapper, operation) {
               </select>
             </label>
           `}
-          <article class="split-hide-when-active"><span>Produtividade</span><strong>${escapeAttr(productivityLabel)}</strong></article>
+          <article class="split-hide-when-active"><span>Produtividade</span><strong data-productivity-summary>${escapeAttr(productivityLabel)}</strong></article>
           <label>Data inicial
             <input name="operationStartDate" type="date" value="${operation.startDate || ''}" required />
           </label>
@@ -1281,6 +1296,9 @@ function showOperationModal(wrapper, operation) {
     select.addEventListener('change', () => {
       backdrop.querySelector('[name="machinePeople"]').value = select.value;
       backdrop.querySelector('[name="peopleMachine"]').value = select.value;
+      const [machineName, peopleCount] = select.value.split('||');
+      const summary = backdrop.querySelector('[data-productivity-summary]');
+      if (summary) summary.textContent = productivityLabelForSelection(machineOptions, machineName, peopleCount, operation);
     });
   });
   backdrop.querySelectorAll('[name="productionMachine"], [name="productionPeople"]').forEach(select => {
@@ -1288,6 +1306,24 @@ function showOperationModal(wrapper, operation) {
       const row = select.closest('.operation-production-row');
       row.querySelector('[name="productionMachine"]').value = select.value;
       row.querySelector('[name="productionPeople"]').value = select.value;
+      const summary = backdrop.querySelector('[data-productivity-summary]');
+      if (summary) {
+        const items = [...backdrop.querySelectorAll('.operation-production-row')].map(itemRow => {
+          const currentOperation = operationForProductionRow(itemRow, operation);
+          const options = currentOperation.productivityOptions || operation.productivityOptions || [];
+          const selected = options.find(option =>
+            option.machineName === currentOperation.machineName
+            && Number(option.peopleCount || 0) === Number(currentOperation.peopleCount || 0)
+          );
+          return {
+            ...currentOperation,
+            outputQty: selected?.outputQty,
+            outputUnit: selected?.outputUnit,
+            timeSeconds: selected?.timeSeconds
+          };
+        });
+        summary.textContent = productivitySummary(operation, items);
+      }
     });
   });
   const splitsTarget = backdrop.querySelector('.operation-splits-target');
