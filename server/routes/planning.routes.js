@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { requireDb } from '../db.js';
 import { buildPlan } from '../../services/planning.service.js';
 import { createPlanningPdf } from '../../services/pdf.service.js';
+import { requirePermission } from './middleware.js';
+import { recordAuditLog } from '../audit.js';
 
 const router = Router();
 
@@ -99,7 +101,7 @@ router.post('/simulate', async (req, res, next) => {
   }
 });
 
-router.post('/plans', async (req, res, next) => {
+router.post('/plans', requirePermission('planning:write'), async (req, res, next) => {
   try {
     const db = requireDb();
     const plan = buildPlan(req.body, await planningContext(db, req.body));
@@ -141,6 +143,13 @@ router.post('/plans', async (req, res, next) => {
         `;
       }
       return created;
+    });
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Criação de planejamento',
+      module: 'Planejamento',
+      description: `Criou planejamento ${saved.code || saved.id} para ${saved.material_name} (${saved.planned_qty} ${saved.planned_unit})`,
+      recordRef: saved.id
     });
     res.status(201).json({ plan: saved, days: plan.days, tree: plan.tree, operations: plan.operations });
   } catch (error) {
@@ -190,7 +199,7 @@ router.get('/plans/:id', async (req, res, next) => {
   }
 });
 
-router.post('/plans/:id/cancel', async (req, res, next) => {
+router.post('/plans/:id/cancel', requirePermission('planning:write'), async (req, res, next) => {
   try {
     const db = requireDb();
     const [row] = await db`
@@ -200,6 +209,13 @@ router.post('/plans/:id/cancel', async (req, res, next) => {
       RETURNING *
     `;
     if (!row) return res.status(404).json({ error: 'Plano não encontrado.' });
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Exclusão de planejamento',
+      module: 'Planejamento',
+      description: `Cancelou planejamento ${row.code || row.id} para ${row.material_name}`,
+      recordRef: row.id
+    });
     res.json(row);
   } catch (error) {
     next(error);

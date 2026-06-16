@@ -1,5 +1,6 @@
-import { api } from '../shared/api.js';
+import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
+import { canAccess } from '../shared/rbac.js';
 
 function chips(values = [], emptyText = 'Sem informação') {
   const items = values.filter(Boolean);
@@ -9,6 +10,7 @@ function chips(values = [], emptyText = 'Sem informação') {
 }
 
 export function ProductivityMatrixPage() {
+  const canWriteMatrix = canAccess(getCurrentUser(), 'matrix:write');
   const page = document.createElement('section');
   page.className = 'stack productivity-matrix-page';
   page.innerHTML = `
@@ -21,7 +23,7 @@ export function ProductivityMatrixPage() {
     <div class="panel">
       <div class="toolbar list-actions">
         <input class="search" placeholder="Buscar por material, máquina ou código" />
-        <button class="primary-button add-productivity" type="button">Cadastrar produtividade</button>
+        ${canWriteMatrix ? '<button class="primary-button add-productivity" type="button">Cadastrar produtividade</button>' : ''}
       </div>
       <div class="table-target"></div>
     </div>
@@ -73,7 +75,7 @@ export function ProductivityMatrixPage() {
     { label: 'Produz', render: row => `${row.output_qty} ${row.output_unit}` },
     { label: 'Segundos', render: row => formatSeconds(row) },
     { label: 'Status', render: row => row.active ? 'Ativo' : 'Inativo' },
-    { label: 'Ações', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
+    { label: 'Ações', render: row => canWriteMatrix ? `<button class="link-button" data-edit="${row.id}">Editar</button>` : '' }
   ];
 
   function parseCodes(value) {
@@ -168,6 +170,7 @@ export function ProductivityMatrixPage() {
   form.elements.materialId.addEventListener('change', updateMaterialPreview);
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (!canWriteMatrix) return;
     const material = selectedMaterial();
     const timeSeconds = parsePtBrDecimal(form.elements.timeSeconds.value);
     form.elements.timeSeconds.setCustomValidity('');
@@ -195,6 +198,7 @@ export function ProductivityMatrixPage() {
   form.elements.timeSeconds.addEventListener('input', () => form.elements.timeSeconds.setCustomValidity(''));
 
   tableTarget.addEventListener('click', async event => {
+    if (!canWriteMatrix) return;
     const editId = event.target.dataset.edit;
     if (editId) {
       const row = rows.find(item => String(item.id) === editId);
@@ -202,7 +206,7 @@ export function ProductivityMatrixPage() {
     }
   });
 
-  addButton.addEventListener('click', () => openModal());
+  addButton?.addEventListener('click', () => openModal());
   page.querySelectorAll('.close-modal').forEach(button => button.addEventListener('click', closeModal));
   modalBackdrop.addEventListener('click', event => {
     if (event.target === modalBackdrop) closeModal();

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireDb } from '../db.js';
+import { requirePermission } from './middleware.js';
 
 const router = Router();
 
@@ -27,7 +28,7 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-router.post('/', async (req, res, next) => {
+router.post('/', requirePermission('registrations:write'), async (req, res, next) => {
   try {
     const code = normalizeCode(req.body.code);
     const name = normalizeName(req.body.name);
@@ -49,7 +50,7 @@ router.post('/', async (req, res, next) => {
   }
 });
 
-router.put('/:id', async (req, res, next) => {
+router.put('/:id', requirePermission('registrations:write'), async (req, res, next) => {
   try {
     const code = normalizeCode(req.body.code);
     const name = normalizeName(req.body.name);

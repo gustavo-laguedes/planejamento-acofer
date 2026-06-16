@@ -13,7 +13,8 @@ import actualsRoutes from './routes/actuals.routes.js';
 import locationsRoutes from './routes/locations.routes.js';
 import machinesRoutes from './routes/machines.routes.js';
 import materialsRoutes from './routes/materials.routes.js';
-import { requireAuth } from './routes/middleware.js';
+import auditRoutes from './routes/audit.routes.js';
+import { requireAuth, requirePermission } from './routes/middleware.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,13 +32,14 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/imports', requireAuth, importRoutes);
-app.use('/api/stock', requireAuth, stockRoutes);
-app.use('/api/productivity', requireAuth, productivityRoutes);
-app.use('/api/planning', requireAuth, planningRoutes);
+app.use('/api/stock', requireAuth, requirePermission('stock:read'), stockRoutes);
+app.use('/api/productivity', requireAuth, requirePermission('matrix:read'), productivityRoutes);
+app.use('/api/planning', requireAuth, requirePermission('planning:read'), planningRoutes);
 app.use('/api/actuals', requireAuth, actualsRoutes);
-app.use('/api/locations', requireAuth, locationsRoutes);
-app.use('/api/machines', requireAuth, machinesRoutes);
-app.use('/api/materials', requireAuth, materialsRoutes);
+app.use('/api/locations', requireAuth, requirePermission('registrations:read'), locationsRoutes);
+app.use('/api/machines', requireAuth, requirePermission('registrations:read'), machinesRoutes);
+app.use('/api/materials', requireAuth, requirePermission('registrations:read'), materialsRoutes);
+app.use('/api/audit', requireAuth, requirePermission('log:read'), auditRoutes);
 
 app.use(express.static(frontendDir));
 app.get('*', (req, res) => {

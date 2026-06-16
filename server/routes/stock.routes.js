@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { requireDb } from '../db.js';
+import { businessDaysBetween } from '../../services/workingDays.service.js';
+import { requirePermission } from './middleware.js';
 
 const router = Router();
 
@@ -12,75 +14,111 @@ function normalizeText(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-function emptyLocation(location, inventoryQty = null) {
+function emptyLocation(location) {
   return {
     locationId: location.id,
     code: location.code,
     name: location.name,
     nasajonQty: 0,
-    errorQty: 0,
-    inventoryQty: inventoryQty === null || inventoryQty === undefined ? null : toNumber(inventoryQty)
+    errorQty: 0
   };
 }
 
-function summarizeMaterial(material, locations, stockRows, adjustmentRows, producedQty = 0) {
+function emptyCodeBreakdown(code, locations) {
+  return {
+    code,
+    stockByLocation: Object.fromEntries(locations.map(location => [String(location.id), emptyLocation(location)]))
+  };
+}
+
+function salesProjection(material, currentBalance, balanceHistory) {
+  if (material.permits_sales === false) {
+    return { salesPerDayQty: null, stockDurationDays: null, blocked: true };
+  }
+  if (!balanceHistory.current || !balanceHistory.previous) {
+    return { salesPerDayQty: 0, stockDurationDays: null, notEstimated: true };
+  }
+  const days = businessDaysBetween(balanceHistory.previous.created_at, balanceHistory.current.created_at);
+  if (days <= 0) return { salesPerDayQty: 0, stockDurationDays: null, notEstimated: true };
+  const diff = toNumber(balanceHistory.previous.total_locations_qty) - toNumber(balanceHistory.current.total_locations_qty);
+  const salesPerDayQty = Math.max(diff / days, 0);
+  return {
+    salesPerDayQty,
+    stockDurationDays: salesPerDayQty > 0 ? currentBalance / salesPerDayQty : null,
+    notEstimated: salesPerDayQty <= 0
+  };
+}
+
+function summarizeMaterial(material, locations, stockRows, correctionRows, balanceHistory = {}) {
   const codes = Array.isArray(material.codes) ? material.codes.map(String) : [];
   const codeSet = new Set(codes.map(normalizeText));
-  const adjustmentsByLocation = new Map(adjustmentRows.map(row => [String(row.location_id), row.adjustment_qty]));
-  const stockByLocation = Object.fromEntries(
-    locations.map(location => [String(location.id), emptyLocation(location, adjustmentsByLocation.get(String(location.id)))])
+  const codeBreakdown = new Map(codes.map(code => [normalizeText(code), emptyCodeBreakdown(code, locations)]));
+  const stockByLocation = Object.fromEntries(locations.map(location => [String(location.id), emptyLocation(location)]));
+  const correctionQty = toNumber(correctionRows[0]?.correction_qty);
+  const inventoryByLocation = Object.fromEntries(
+    correctionRows
+      .filter(row => row.location_id)
+      .map(row => [String(row.location_id), toNumber(row.adjustment_qty)])
   );
 
   let unmappedNasajonQty = 0;
-  let ordersQty = 0;
-  let salesQty = 0;
 
   for (const row of stockRows) {
     const productCode = normalizeText(row.product_code);
     const oldProductCode = normalizeText(row.old_product_code);
-    if (!codeSet.has(productCode) && !codeSet.has(oldProductCode)) continue;
+    const matchedCode = codes.find(code => {
+      const normalizedCode = normalizeText(code);
+      return normalizedCode && (normalizedCode === productCode || normalizedCode === oldProductCode);
+    });
+    if (!matchedCode || !codeSet.has(normalizeText(matchedCode))) continue;
 
     const nasajonQty = toNumber(row.fiscal_balance_unit);
-    ordersQty += toNumber(row.orders_unit);
-    salesQty += toNumber(row.sales_unit);
+    const errorQty = toNumber(row.error_balance_unit);
 
     const establishment = normalizeText(row.establishment);
     const location = locations.find(item => normalizeText(item.code) === establishment || normalizeText(item.name) === establishment);
     if (!location) {
-      unmappedNasajonQty += nasajonQty;
+      unmappedNasajonQty += nasajonQty + errorQty;
       continue;
     }
-    stockByLocation[String(location.id)].nasajonQty += nasajonQty;
+    const locationKey = String(location.id);
+    const breakdown = codeBreakdown.get(normalizeText(matchedCode));
+    breakdown.stockByLocation[locationKey].nasajonQty += nasajonQty;
+    breakdown.stockByLocation[locationKey].errorQty += errorQty;
+    stockByLocation[locationKey].nasajonQty += nasajonQty;
+    stockByLocation[locationKey].errorQty += errorQty;
   }
 
   const totalLocationsQty = Object.values(stockByLocation)
-    .reduce((sum, location) => sum + (location.inventoryQty === null ? toNumber(location.nasajonQty) : toNumber(location.inventoryQty)), 0);
-  const totalEstimatedQty = totalLocationsQty + toNumber(producedQty) + ordersQty - salesQty;
+    .reduce((sum, location) => sum + toNumber(location.nasajonQty) + toNumber(location.errorQty), 0) + correctionQty;
+  const projection = salesProjection(material, totalLocationsQty, balanceHistory);
 
   return {
     material: {
       id: material.id,
       name: material.name,
+      permitsSales: material.permits_sales !== false,
       active: material.active
     },
     codes,
+    codeBreakdown: [...codeBreakdown.values()],
     stockByLocation,
-    inventoryByLocation: Object.fromEntries(Object.values(stockByLocation).map(location => [String(location.locationId), location.inventoryQty])),
+    inventoryByLocation,
     totalLocationsQty,
-    producedQty: toNumber(producedQty),
+    correctionQty,
     unmappedNasajonQty,
-    ordersQty,
-    salesQty,
-    salesPerDayQty: salesQty,
-    totalEstimatedQty
+    salesPerDayQty: projection.salesPerDayQty,
+    stockDurationDays: projection.stockDurationDays,
+    salesBlocked: projection.blocked === true,
+    salesNotEstimated: projection.notEstimated === true
   };
 }
 
 async function buildInventoryTemplate(db) {
   const [materials, locations, stockRows, adjustmentRows] = await Promise.all([
-    db`SELECT id, name, codes, active FROM materials WHERE active = true ORDER BY name`,
+    db`SELECT id, name, codes, permits_sales, active FROM materials WHERE active = true ORDER BY name`,
     db`SELECT id, code, name, active FROM locations WHERE active = true ORDER BY code NULLS LAST, name`,
-    db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, orders_unit, sales_unit FROM stock_snapshot`,
+    db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit FROM stock_snapshot`,
     db`
       SELECT DISTINCT ON (material_id, location_id)
              material_id, location_id, adjustment_qty, notes, updated_at
@@ -174,9 +212,9 @@ router.get('/summary', async (req, res, next) => {
 router.get('/materials-overview', async (req, res, next) => {
   try {
     const db = requireDb();
-    const [materials, locations, stockRows, adjustmentRows, productionRows, lastImportRows] = await Promise.all([
+    const [materials, locations, stockRows, correctionRows, lastImportRows, balanceRows] = await Promise.all([
       db`
-        SELECT id, name, codes, active
+        SELECT id, name, codes, permits_sales, active
         FROM materials
         WHERE active = true
         ORDER BY name
@@ -188,43 +226,57 @@ router.get('/materials-overview', async (req, res, next) => {
         ORDER BY code NULLS LAST, name
       `,
       db`
-        SELECT establishment, product_code, old_product_code, fiscal_balance_unit, orders_unit, sales_unit
+        SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit
         FROM stock_snapshot
       `,
       db`
-        SELECT DISTINCT ON (material_id, location_id)
-               material_id, location_id, adjustment_qty, notes, updated_at
-        FROM stock_location_adjustments
-        ORDER BY material_id, location_id, updated_at DESC, id DESC
-      `,
-      db`
-        SELECT material_id, COALESCE(SUM(quantity), 0) AS produced_qty
-        FROM production_launches
-        WHERE material_id IS NOT NULL
-        GROUP BY material_id
+        SELECT DISTINCT ON (material_id)
+               material_id, correction_qty, notes, updated_at
+        FROM stock_material_corrections
+        ORDER BY material_id, updated_at DESC, id DESC
       `,
       db`
         SELECT id, filename, status, total_rows, finished_at, created_at
         FROM import_history
         ORDER BY created_at DESC
         LIMIT 1
+      `,
+      db`
+        SELECT b.material_id, b.import_id, b.total_locations_qty, h.created_at
+        FROM stock_import_material_balances b
+        JOIN (
+          SELECT id, created_at
+          FROM import_history
+          WHERE status = 'success'
+          ORDER BY created_at DESC
+          LIMIT 2
+        ) h ON h.id = b.import_id
+        ORDER BY h.created_at DESC
       `
     ]);
 
-    const adjustmentsByMaterial = new Map();
-    for (const adjustment of adjustmentRows) {
-      const key = String(adjustment.material_id);
-      if (!adjustmentsByMaterial.has(key)) adjustmentsByMaterial.set(key, []);
-      adjustmentsByMaterial.get(key).push(adjustment);
+    const correctionsByMaterial = new Map();
+    for (const correction of correctionRows) {
+      const key = String(correction.material_id);
+      if (!correctionsByMaterial.has(key)) correctionsByMaterial.set(key, []);
+      correctionsByMaterial.get(key).push(correction);
     }
-    const producedByMaterial = new Map(productionRows.map(row => [String(row.material_id), row.produced_qty]));
+    const balancesByMaterial = new Map();
+    for (const balance of balanceRows) {
+      const key = String(balance.material_id);
+      if (!balancesByMaterial.has(key)) balancesByMaterial.set(key, []);
+      balancesByMaterial.get(key).push(balance);
+    }
 
     const rows = materials.map(material => summarizeMaterial(
       material,
       locations,
       stockRows,
-      adjustmentsByMaterial.get(String(material.id)) || [],
-      producedByMaterial.get(String(material.id)) || 0
+      correctionsByMaterial.get(String(material.id)) || [],
+      {
+        current: balancesByMaterial.get(String(material.id))?.[0] || null,
+        previous: balancesByMaterial.get(String(material.id))?.[1] || null
+      }
     ));
 
     res.json({
@@ -237,7 +289,7 @@ router.get('/materials-overview', async (req, res, next) => {
   }
 });
 
-router.get('/inventory/template', async (req, res, next) => {
+router.get('/inventory/template', requirePermission('inventory:write'), async (req, res, next) => {
   try {
     const db = requireDb();
     res.json(await buildInventoryTemplate(db));
@@ -246,7 +298,7 @@ router.get('/inventory/template', async (req, res, next) => {
   }
 });
 
-router.post('/inventory/counts', async (req, res, next) => {
+router.post('/inventory/counts', requirePermission('inventory:write'), async (req, res, next) => {
   try {
     const db = requireDb();
     const notes = String(req.body.notes || '').trim() || null;
@@ -289,11 +341,11 @@ router.post('/inventory/counts', async (req, res, next) => {
   }
 });
 
-router.get('/inventory/counts', async (req, res, next) => {
+router.get('/inventory/counts', requirePermission('inventory:read'), async (req, res, next) => {
   try {
     const db = requireDb();
     const rows = await db`
-      SELECT c.id, c.notes, c.user_id, c.created_at, COUNT(i.id)::int AS item_count
+      SELECT c.id, c.notes, c.user_id, c.created_at, COUNT(DISTINCT i.material_id)::int AS item_count
       FROM inventory_counts c
       LEFT JOIN inventory_count_items i ON i.inventory_count_id = c.id
       GROUP BY c.id
@@ -306,7 +358,54 @@ router.get('/inventory/counts', async (req, res, next) => {
   }
 });
 
-router.put('/materials-overview/adjustments', async (req, res, next) => {
+router.get('/inventory/counts/:id', requirePermission('inventory:read'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    const [count] = await db`
+      SELECT id, notes, user_id, created_at
+      FROM inventory_counts
+      WHERE id = ${req.params.id}
+    `;
+    if (!count) return res.status(404).json({ error: 'Inventário não encontrado.' });
+
+    const items = await db`
+      SELECT i.id, i.material_id, i.location_id, i.previous_qty, i.counted_qty,
+             m.name AS material_name, m.codes AS material_codes,
+             l.name AS location_name, l.code AS location_code
+      FROM inventory_count_items i
+      JOIN materials m ON m.id = i.material_id
+      JOIN locations l ON l.id = i.location_id
+      WHERE i.inventory_count_id = ${req.params.id}
+      ORDER BY m.name, l.code NULLS LAST, l.name
+    `;
+
+    const materials = new Map();
+    for (const item of items) {
+      const key = String(item.material_id);
+      if (!materials.has(key)) {
+        materials.set(key, {
+          materialId: item.material_id,
+          materialName: item.material_name,
+          codes: item.material_codes || [],
+          locations: []
+        });
+      }
+      materials.get(key).locations.push({
+        locationId: item.location_id,
+        locationName: item.location_name,
+        locationCode: item.location_code,
+        previousQty: item.previous_qty,
+        countedQty: item.counted_qty
+      });
+    }
+
+    res.json({ ...count, materials: [...materials.values()] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/materials-overview/adjustments', requirePermission('stock:write'), async (req, res, next) => {
   try {
     const materialId = Number(req.body.materialId);
     const locationId = Number(req.body.locationId);
@@ -333,7 +432,33 @@ router.put('/materials-overview/adjustments', async (req, res, next) => {
   }
 });
 
-router.post('/adjustments', async (req, res, next) => {
+router.put('/materials-overview/corrections', requirePermission('stock:write'), async (req, res, next) => {
+  try {
+    const materialId = Number(req.body.materialId);
+    const correctionQty = toNumber(req.body.correctionQty);
+    const notes = String(req.body.notes || '').trim() || null;
+
+    if (!materialId) {
+      return res.status(400).json({ error: 'Material e obrigatorio.' });
+    }
+
+    const db = requireDb();
+    const [row] = await db`
+      INSERT INTO stock_material_corrections (material_id, correction_qty, notes, updated_at)
+      VALUES (${materialId}, ${correctionQty}, ${notes}, now())
+      ON CONFLICT (material_id)
+      DO UPDATE SET correction_qty = EXCLUDED.correction_qty,
+                    notes = EXCLUDED.notes,
+                    updated_at = now()
+      RETURNING *
+    `;
+    res.json(row);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/adjustments', requirePermission('stock:write'), async (req, res, next) => {
   try {
     const db = requireDb();
     const { productCode, establishment, adjustmentUnitQty, adjustmentKgQty, reason } = req.body;

@@ -1,5 +1,16 @@
 import { api } from '../shared/api.js';
+import { getCurrentUser } from '../shared/api.js';
 import { nextSortDirection, sortTableRows } from '../shared/DataTable.js';
+import { canAccess } from '../shared/rbac.js';
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
 
 function formatNumber(value) {
   return new Intl.NumberFormat('pt-BR', {
@@ -7,28 +18,71 @@ function formatNumber(value) {
   }).format(Number(value || 0));
 }
 
-function formatDate(value) {
-  return value ? new Date(value).toLocaleString('pt-BR') : '';
+function formatImportDateTime(value) {
+  if (!value) return 'Sem importação';
+  const date = new Date(value);
+  const day = date.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  const time = date.toLocaleTimeString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  return `${day} às ${time}`;
 }
 
-function renderCodes(codes) {
-  if (!codes?.length) return '<span class="muted-text">Sem códigos</span>';
-  return codes.map(code => `<span class="code-pill">${code}</span>`).join('');
+function formatSales(row) {
+  if (row.salesBlocked) return '*';
+  return formatNumber(row.salesPerDayQty || 0);
+}
+
+function formatDuration(row) {
+  if (row.salesBlocked) return '*';
+  if (row.salesNotEstimated || row.stockDurationDays === null || row.stockDurationDays === undefined) return 'Não estimado';
+  return `${formatNumber(row.stockDurationDays)} dias`;
+}
+
+function codeRows(row) {
+  return row.codeBreakdown?.length ? row.codeBreakdown : [{ code: '', stockByLocation: row.stockByLocation || {} }];
+}
+
+function renderCodes(row) {
+  const codes = row.codes || [];
+  if (!codes.length) return '<span class="muted-text">Sem códigos</span>';
+  if (codes.length === 1) return `<span class="code-pill">${escapeHtml(codes[0])}</span>`;
+  return `
+    <div class="stock-code-pill-stack">
+      ${codes.map(code => `<div class="stock-code-pill-row"><span class="code-pill">${escapeHtml(code)}</span></div>`).join('')}
+    </div>
+  `;
+}
+
+function renderCodeLocationRows(row, location, field) {
+  const rows = codeRows(row);
+  if (rows.length === 1) {
+    return formatNumber(rows[0].stockByLocation?.[String(location.id)]?.[field] ?? 0);
+  }
+  return `<div class="stock-code-stack numeric-stack">${rows.map(codeRow => (
+    `<span>${formatNumber(codeRow.stockByLocation?.[String(location.id)]?.[field] ?? 0)}</span>`
+  )).join('')}</div>`;
 }
 
 function locationCell(row, location, field) {
   return row.stockByLocation?.[String(location.id)]?.[field] ?? 0;
 }
 
-function tableMinWidth(locations) {
-  const materialWidth = 335;
-  const nasajonWidth = locations.length ? locations.length * 210 : 150;
-  const inventoryWidth = locations.length ? locations.length * 108 : 150;
-  const totalsWidth = 536;
-  return materialWidth + nasajonWidth + inventoryWidth + totalsWidth;
+function correctionCell(row, canWrite) {
+  if (!canWrite) return formatNumber(row.correctionQty || 0);
+  return `
+    <div class="correction-cell" data-material-id="${row.material.id}">
+      <input class="correction-input" type="number" step="0.001" value="${row.correctionQty || 0}" disabled />
+      <button class="icon-edit-button edit-correction" type="button" title="Editar correção" aria-label="Editar correção">✎</button>
+      <button class="icon-edit-button save-correction" type="button" title="Salvar correção" aria-label="Salvar correção" hidden>✓</button>
+    </div>
+  `;
 }
 
 export function StockPage() {
+  const canWriteStock = canAccess(getCurrentUser(), 'stock:write');
   const page = document.createElement('section');
   page.className = 'stack stock-page';
   page.innerHTML = `
@@ -65,11 +119,9 @@ export function StockPage() {
   }
 
   function renderSummary() {
-    const last = overview.lastImport
-      ? `${overview.lastImport.status} - ${overview.lastImport.filename || ''}`
-      : 'Sem importação';
+    const last = formatImportDateTime(overview.lastImport?.finished_at || overview.lastImport?.created_at);
     summaryGrid.innerHTML = `
-      <article class="metric-card"><span>Última importação</span><strong>${last}</strong><small>${formatDate(overview.lastImport?.finished_at || overview.lastImport?.created_at)}</small></article>
+      <article class="metric-card"><span>Última importação</span><strong>${escapeHtml(last)}</strong><small>${escapeHtml(overview.lastImport?.filename || '')}</small></article>
     `;
   }
 
@@ -86,24 +138,18 @@ export function StockPage() {
       ${sortableStockHeader(`Nasajon ${location.name}`, stockColumns, 'group-nasajon', sortState)}
       ${sortableStockHeader(`Erro ${location.name}`, stockColumns, 'group-nasajon', sortState)}
     `).join('');
-    const inventoryHeaders = locations.map(location => sortableStockHeader(`Inventário ${location.name}`, stockColumns, 'group-inventory', sortState)).join('');
     const nasajonCols = locations.length
       ? locations.map(() => '<col class="col-nasajon" /><col class="col-adjustment" />').join('')
-      : '<col class="col-empty" />';
-    const inventoryCols = locations.length
-      ? locations.map(() => '<col class="col-inventory" />').join('')
       : '<col class="col-empty" />';
 
     tableTarget.innerHTML = `
       <div class="table-wrap stock-table-wrap">
-        <table class="stock-overview-table" style="min-width: ${tableMinWidth(locations)}px">
+        <table class="stock-overview-table">
           <colgroup>
             <col class="col-codes" />
             <col class="col-material" />
             ${nasajonCols}
-            ${inventoryCols}
-            <col class="col-total" />
-            <col class="col-total" />
+            <col class="col-correction" />
             <col class="col-total" />
             <col class="col-total" />
             <col class="col-total-estimated" />
@@ -112,48 +158,31 @@ export function StockPage() {
             <tr>
               <th class="group-material" colspan="2">Material</th>
               <th class="group-nasajon" colspan="${Math.max(locations.length * 2, 1)}">Estoque Nasajon por local</th>
-              <th class="group-inventory" colspan="${Math.max(locations.length, 1)}">Inventário físico</th>
-              <th class="group-totals" colspan="5">Totais e movimentação</th>
+              <th class="group-totals" colspan="4">Totais e movimentação</th>
             </tr>
             <tr>
-              ${sortableStockHeader('Códigos atrelados', stockColumns, 'group-material', sortState)}
+              ${sortableStockHeader('Código', stockColumns, 'group-material', sortState)}
               ${sortableStockHeader('Nome do material', stockColumns, 'group-material', sortState)}
               ${locations.length ? nasajonHeaders : '<th class="group-nasajon">Sem locais cadastrados</th>'}
-              ${locations.length ? inventoryHeaders : '<th class="group-inventory">Sem locais cadastrados</th>'}
+              ${sortableStockHeader('Correção estoque', stockColumns, 'group-totals', sortState)}
               ${sortableStockHeader('Qtd. total locais', stockColumns, 'group-totals', sortState)}
-              ${sortableStockHeader('Pedidos', stockColumns, 'group-totals', sortState)}
-              ${sortableStockHeader('Vendas', stockColumns, 'group-totals', sortState)}
               ${sortableStockHeader('Vendas/dia', stockColumns, 'group-totals', sortState)}
-              ${sortableStockHeader('Total estimado', stockColumns, 'group-totals', sortState)}
+              ${sortableStockHeader('Duração de estoque', stockColumns, 'group-totals', sortState)}
             </tr>
           </thead>
           <tbody>
             ${rows.map(row => `
               <tr>
-                <td class="group-material code-cell">${renderCodes(row.codes)}</td>
-                <td class="group-material material-name">${row.material.name}</td>
+                <td class="group-material code-cell">${renderCodes(row)}</td>
+                <td class="group-material material-name">${escapeHtml(row.material.name)}</td>
                 ${locations.length ? locations.map(location => `
-                  <td class="group-nasajon numeric-cell">${formatNumber(locationCell(row, location, 'nasajonQty'))}</td>
-                  <td class="group-nasajon adjustment-cell">
-                    <input
-                      class="inline-number-input"
-                      type="number"
-                      step="0.001"
-                      value="${locationCell(row, location, 'errorQty')}"
-                      data-material-id="${row.material.id}"
-                      data-location-id="${location.id}"
-                      aria-label="Erro de inventário ${row.material.name} em ${location.name}"
-                    />
-                  </td>
+                  <td class="group-nasajon numeric-cell">${renderCodeLocationRows(row, location, 'nasajonQty')}</td>
+                  <td class="group-nasajon numeric-cell">${renderCodeLocationRows(row, location, 'errorQty')}</td>
                 `).join('') : '<td class="group-nasajon muted-text">0</td>'}
-                ${locations.length ? locations.map(location => `
-                  <td class="group-inventory muted-text">${row.inventoryByLocation?.[String(location.id)] ?? '-'}</td>
-                `).join('') : '<td class="group-inventory muted-text">-</td>'}
+                <td class="group-totals">${correctionCell(row, canWriteStock)}</td>
                 <td class="group-totals numeric-cell">${formatNumber(row.totalLocationsQty)}</td>
-                <td class="group-totals numeric-cell">${formatNumber(row.ordersQty)}</td>
-                <td class="group-totals numeric-cell">${formatNumber(row.salesQty)}</td>
-                <td class="group-totals numeric-cell">${formatNumber(row.salesPerDayQty)}</td>
-                <td class="group-totals numeric-cell total-estimated">${formatNumber(row.totalEstimatedQty)}</td>
+                <td class="group-totals numeric-cell">${formatSales(row)}</td>
+                <td class="group-totals numeric-cell total-estimated">${formatDuration(row)}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -174,27 +203,39 @@ export function StockPage() {
   });
   filters.elements.search.addEventListener('input', renderTable);
 
-  tableTarget.addEventListener('change', async event => {
-    if (!event.target.classList.contains('inline-number-input')) return;
-    const input = event.target;
-    input.disabled = true;
-    try {
-      await api('/stock/materials-overview/adjustments', {
-        method: 'PUT',
-        body: {
-          materialId: Number(input.dataset.materialId),
-          locationId: Number(input.dataset.locationId),
-          adjustmentQty: Number(input.value || 0)
-        }
-      });
-      await load();
-    } catch (error) {
-      window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message }));
-      input.disabled = false;
+  tableTarget.addEventListener('click', async event => {
+    if (!canWriteStock) return;
+    const editButton = event.target.closest('.edit-correction');
+    if (editButton) {
+      const cell = editButton.closest('.correction-cell');
+      cell.querySelector('.correction-input').disabled = false;
+      cell.querySelector('.correction-input').focus();
+      editButton.hidden = true;
+      cell.querySelector('.save-correction').hidden = false;
+      return;
     }
-  });
 
-  tableTarget.addEventListener('click', event => {
+    const saveButton = event.target.closest('.save-correction');
+    if (saveButton) {
+      const cell = saveButton.closest('.correction-cell');
+      const input = cell.querySelector('.correction-input');
+      saveButton.disabled = true;
+      try {
+        await api('/stock/materials-overview/corrections', {
+          method: 'PUT',
+          body: {
+            materialId: Number(cell.dataset.materialId),
+            correctionQty: Number(input.value || 0)
+          }
+        });
+        await load();
+      } catch (error) {
+        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message }));
+        saveButton.disabled = false;
+      }
+      return;
+    }
+
     const button = event.target.closest('.sortable-header');
     if (!button) return;
     const index = Number(button.dataset.sortIndex);
@@ -210,18 +251,16 @@ export function StockPage() {
 
 function buildStockColumns(locations) {
   return [
-    { label: 'Códigos atrelados', sortValue: row => (row.codes || []).join(', ') },
+    { label: 'Código', sortValue: row => (row.codes || []).join(', ') },
     { label: 'Nome do material', sortValue: row => row.material?.name || '' },
     ...locations.flatMap(location => [
       { label: `Nasajon ${location.name}`, sortValue: row => locationCell(row, location, 'nasajonQty') },
       { label: `Erro ${location.name}`, sortValue: row => locationCell(row, location, 'errorQty') }
     ]),
-    ...locations.map(location => ({ label: `Inventário ${location.name}`, sortValue: row => row.inventoryByLocation?.[String(location.id)] ?? '' })),
+    { label: 'Correção estoque', sortValue: row => row.correctionQty },
     { label: 'Qtd. total locais', sortValue: row => row.totalLocationsQty },
-    { label: 'Pedidos', sortValue: row => row.ordersQty },
-    { label: 'Vendas', sortValue: row => row.salesQty },
-    { label: 'Vendas/dia', sortValue: row => row.salesPerDayQty },
-    { label: 'Total estimado', sortValue: row => row.totalEstimatedQty }
+    { label: 'Vendas/dia', sortValue: row => row.salesPerDayQty ?? '' },
+    { label: 'Duração de estoque', sortValue: row => row.stockDurationDays ?? '' }
   ];
 }
 
@@ -231,8 +270,8 @@ function sortableStockHeader(label, columns, className, sortState) {
   const indicator = active ? sortState.direction === 'asc' ? '↑' : '↓' : '↕';
   return `
     <th class="${className}">
-      <button class="sortable-header ${active ? 'active' : ''}" type="button" data-sort-index="${index}" aria-label="Ordenar por ${label}">
-        <span>${label}</span>
+      <button class="sortable-header ${active ? 'active' : ''}" type="button" data-sort-index="${index}" aria-label="Ordenar por ${escapeHtml(label)}">
+        <span>${escapeHtml(label)}</span>
         <span class="sort-indicator" aria-hidden="true">${indicator}</span>
       </button>
     </th>

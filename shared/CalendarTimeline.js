@@ -219,36 +219,85 @@ function clampMinutes(minutes, start, end) {
 
 const PRODUCTION_STAGE_COLORS = [
   [
-    { bg: '#d8eef7', border: '#1f78a8', text: '#123942' },
-    { bg: '#e4f4fb', border: '#4b97bd', text: '#123942' },
-    { bg: '#eef9fd', border: '#72b4d0', text: '#123942' },
-    { bg: '#f6fcff', border: '#9bcfe2', text: '#123942' }
+    { bg: '#F4F6F8', border: '#2F343B', text: '#1F2937' },
+    { bg: '#F8FAFC', border: '#4B5563', text: '#1F2937' },
+    { bg: '#F9FAFB', border: '#6B7280', text: '#1F2937' },
+    { bg: '#FFFFFF', border: '#9CA3AF', text: '#1F2937' }
   ],
   [
-    { bg: '#fff2bf', border: '#d79a16', text: '#56320d' },
-    { bg: '#fff7d7', border: '#e4b544', text: '#56320d' },
-    { bg: '#fffbe8', border: '#eccb73', text: '#56320d' },
-    { bg: '#fffdf3', border: '#f1d895', text: '#56320d' }
+    { bg: '#EEF6FA', border: '#4D86A6', text: '#18384A' },
+    { bg: '#F4FAFD', border: '#6FA0BA', text: '#18384A' },
+    { bg: '#F8FCFD', border: '#9BBBD0', text: '#18384A' },
+    { bg: '#FFFFFF', border: '#B9CEDD', text: '#18384A' }
   ],
   [
-    { bg: '#dff3e8', border: '#2f8a5d', text: '#173d2e' },
-    { bg: '#e9f8ef', border: '#5aa67a', text: '#173d2e' },
-    { bg: '#f2fbf6', border: '#83bf9a', text: '#173d2e' },
-    { bg: '#f8fefa', border: '#a8d5b8', text: '#173d2e' }
+    { bg: '#ECF8F1', border: '#63B485', text: '#173D2E' },
+    { bg: '#F2FBF6', border: '#83BF9A', text: '#173D2E' },
+    { bg: '#F8FEFA', border: '#A8D5B8', text: '#173D2E' },
+    { bg: '#FFFFFF', border: '#C5E3CF', text: '#173D2E' }
   ],
   [
-    { bg: '#e7ebfb', border: '#5269b0', text: '#26376f' },
-    { bg: '#f0f3ff', border: '#7488cc', text: '#26376f' },
-    { bg: '#f6f8ff', border: '#96a5de', text: '#26376f' },
-    { bg: '#fbfcff', border: '#b7c1eb', text: '#26376f' }
+    { bg: '#FFF4E4', border: '#DE9642', text: '#56320D' },
+    { bg: '#FFF8EE', border: '#E7AA5D', text: '#56320D' },
+    { bg: '#FFFCF6', border: '#F2BF71', text: '#56320D' },
+    { bg: '#FFFFFF', border: '#F5D09A', text: '#56320D' }
   ],
   [
-    { bg: '#fbe5ef', border: '#9a4f74', text: '#552345' },
-    { bg: '#fff0f6', border: '#b96f94', text: '#552345' },
-    { bg: '#fff7fa', border: '#cf90ae', text: '#552345' },
-    { bg: '#fffafd', border: '#e0b3c8', text: '#552345' }
+    { bg: '#F6F0FA', border: '#A485B7', text: '#3C294B' },
+    { bg: '#FAF6FC', border: '#BCA4C9', text: '#3C294B' },
+    { bg: '#FDFBFE', border: '#CDBDDA', text: '#3C294B' },
+    { bg: '#FFFFFF', border: '#DDD1E5', text: '#3C294B' }
+  ],
+  [
+    { bg: '#FAEEF1', border: '#B87182', text: '#4A202D' },
+    { bg: '#FCF4F6', border: '#C98B99', text: '#4A202D' },
+    { bg: '#FEFAFB', border: '#D7A1AE', text: '#4A202D' },
+    { bg: '#FFFFFF', border: '#E4BDC6', text: '#4A202D' }
+  ],
+  [
+    { bg: '#EAF7F6', border: '#5AA9A4', text: '#163F3D' },
+    { bg: '#F1FAF9', border: '#78BDB8', text: '#163F3D' },
+    { bg: '#F8FDFD', border: '#9ACCC8', text: '#163F3D' },
+    { bg: '#FFFFFF', border: '#B7DDDA', text: '#163F3D' }
+  ],
+  [
+    { bg: '#FBF5E3', border: '#C29635', text: '#4F3909' },
+    { bg: '#FDF8EA', border: '#CEAA50', text: '#4F3909' },
+    { bg: '#FEFCF4', border: '#DDBB68', text: '#4F3909' },
+    { bg: '#FFFFFF', border: '#E7CF94', text: '#4F3909' }
+  ],
+  [
+    { bg: '#F1F4F6', border: '#64717D', text: '#202A33' },
+    { bg: '#F6F8F9', border: '#7D8994', text: '#202A33' },
+    { bg: '#FAFBFC', border: '#98A2AD', text: '#202A33' },
+    { bg: '#FFFFFF', border: '#B7C0C8', text: '#202A33' }
+  ],
+  [
+    { bg: '#EAF4F6', border: '#4C8993', text: '#12333A' },
+    { bg: '#F2F9FA', border: '#6DA2AA', text: '#12333A' },
+    { bg: '#F8FCFD', border: '#86B2BB', text: '#12333A' },
+    { bg: '#FFFFFF', border: '#AFCBD0', text: '#12333A' }
+  ],
+  [
+    { bg: '#F3F6E7', border: '#8C9B54', text: '#343B18' },
+    { bg: '#F8FAF0', border: '#A2AF69', text: '#343B18' },
+    { bg: '#FCFDF7', border: '#B9C47B', text: '#343B18' },
+    { bg: '#FFFFFF', border: '#CFD7A2', text: '#343B18' }
+  ],
+  [
+    { bg: '#F8F0EA', border: '#AA7452', text: '#432717' },
+    { bg: '#FBF5F1', border: '#BB8866', text: '#432717' },
+    { bg: '#FEFAF7', border: '#C99B7A', text: '#432717' },
+    { bg: '#FFFFFF', border: '#DBB79E', text: '#432717' }
+  ],
+  [
+    { bg: '#FBF0F2', border: '#C88392', text: '#4F2730' },
+    { bg: '#FDF6F7', border: '#D196A3', text: '#4F2730' },
+    { bg: '#FEFBFC', border: '#DCABB5', text: '#4F2730' },
+    { bg: '#FFFFFF', border: '#E6C1C8', text: '#4F2730' }
   ]
 ];
+const PRODUCTION_COLOR_SEQUENCE = [1, 3, 2, 4, 7, 6, 5, 8, 10, 9, 11, 12, 0];
 
 const TRANSPORT_COLOR = { bg: '#f3f5f7', border: '#c6ced6', text: '#3d4752' };
 const SEQUENTIAL_EVENT_VISUAL_GAP_MINUTES = 1;
@@ -384,6 +433,11 @@ function stableProductionIndex(item = {}) {
 
 function stableProductionKey(item = {}) {
   return item.productionKey || `production-${stableProductionIndex(item)}`;
+}
+
+function productionColorSequenceIndex(index = 0) {
+  const normalized = Math.max(Number(index) || 0, 0);
+  return PRODUCTION_COLOR_SEQUENCE[normalized % PRODUCTION_COLOR_SEQUENCE.length] || 0;
 }
 
 function eventColorStyle(color, breakdown, colorForProduction) {
@@ -1362,7 +1416,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     });
   const shifts = normalizeShiftConfig(config);
   const colorForProduction = productionKey => {
-    const productionColorIndex = stableProductionIndex({ productionKey });
+    const productionColorIndex = productionColorSequenceIndex(stableProductionIndex({ productionKey }));
     return PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length][0];
   };
   const shiftStart = Math.min(...shifts.map(shift => shift.shiftStart));
@@ -1460,7 +1514,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   function operationEventColor(operation) {
     const isTransport = operation.operationType === 'transport';
     const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
-    const productionColorIndex = stableProductionIndex(operation);
+    const productionColorIndex = productionColorSequenceIndex(stableProductionIndex(operation));
     const palette = PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length];
     const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
     const productionBaseColor = palette[0];
@@ -1623,7 +1677,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
               const shouldShowText = segment.visualIndex === 0 && ((end - start) / 60) * zoom.hourHeight >= 62;
               const shortLabel = isTransport ? 'TR' : `${operation.peopleCount || '-'}p`;
-              const productionColorIndex = stableProductionIndex(operation);
+              const productionColorIndex = productionColorSequenceIndex(stableProductionIndex(operation));
               const palette = PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length];
               const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
               const productionBaseColor = palette[0];

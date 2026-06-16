@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { requireDb } from '../db.js';
+import { requirePermission } from './middleware.js';
+import { recordAuditLog } from '../audit.js';
 
 const router = Router();
 
@@ -44,7 +46,7 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-router.post('/', async (req, res, next) => {
+router.post('/', requirePermission('matrix:write'), async (req, res, next) => {
   try {
     const db = requireDb();
     const item = req.body;
@@ -56,13 +58,20 @@ router.post('/', async (req, res, next) => {
       VALUES (${item.materialName}, ${primaryCode}, ${materialCodes}, ${item.machineName}, ${Number(item.peopleCount)}, ${Number(item.outputQty)}, ${item.outputUnit || 'un'}, ${timeSeconds / 60}, ${timeSeconds}, ${item.notes || null}, ${item.active !== false})
       RETURNING *
     `;
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Alterações na matriz de produtividade',
+      module: 'Matriz de Produtividade',
+      description: `Cadastrou produtividade de ${row.material_name} na máquina ${row.machine_name}`,
+      recordRef: row.id
+    });
     res.status(201).json(row);
   } catch (error) {
     next(error);
   }
 });
 
-router.put('/:id', async (req, res, next) => {
+router.put('/:id', requirePermission('matrix:write'), async (req, res, next) => {
   try {
     const db = requireDb();
     const item = req.body;
@@ -86,16 +95,32 @@ router.put('/:id', async (req, res, next) => {
       WHERE id = ${req.params.id}
       RETURNING *
     `;
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Alterações na matriz de produtividade',
+      module: 'Matriz de Produtividade',
+      description: `Editou produtividade de ${row.material_name} na máquina ${row.machine_name}`,
+      recordRef: row.id
+    });
     res.json(row);
   } catch (error) {
     next(error);
   }
 });
 
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', requirePermission('matrix:write'), async (req, res, next) => {
   try {
     const db = requireDb();
-    await db`UPDATE productivity_matrix SET active = false, updated_at = now() WHERE id = ${req.params.id}`;
+    const [row] = await db`UPDATE productivity_matrix SET active = false, updated_at = now() WHERE id = ${req.params.id} RETURNING *`;
+    if (row) {
+      await recordAuditLog(db, {
+        user: req.user,
+        action: 'Alterações na matriz de produtividade',
+        module: 'Matriz de Produtividade',
+        description: `Desativou produtividade de ${row.material_name} na máquina ${row.machine_name}`,
+        recordRef: row.id
+      });
+    }
     res.status(204).end();
   } catch (error) {
     next(error);

@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { requireDb } from '../db.js';
+import { requirePermission } from './middleware.js';
+import { recordAuditLog } from '../audit.js';
 
 const router = Router();
 const units = new Set(['un', 'kg']);
@@ -97,7 +99,7 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-router.post('/', async (req, res, next) => {
+router.post('/', requirePermission('registrations:write'), async (req, res, next) => {
   try {
     const valid = validateMaterial(req.body);
     if (valid.error) return res.status(400).json({ error: valid.error });
@@ -107,8 +109,8 @@ router.post('/', async (req, res, next) => {
     const models = normalizeProductionModels(req.body.productionModels, req.body.inputMaterials || req.body.inputMaterialIds);
     const row = await db.begin(async tx => {
       const [created] = await tx`
-        INSERT INTO materials (name, codes, primary_unit, secondary_unit, primary_to_secondary_factor, is_initial_raw_material, active)
-        VALUES (${valid.name}, ${codes}, ${valid.primaryUnit}, ${valid.secondaryUnit}, ${valid.factor}, ${req.body.isInitialRawMaterial === true}, ${req.body.active !== false})
+        INSERT INTO materials (name, codes, primary_unit, secondary_unit, primary_to_secondary_factor, is_initial_raw_material, permits_sales, active)
+        VALUES (${valid.name}, ${codes}, ${valid.primaryUnit}, ${valid.secondaryUnit}, ${valid.factor}, ${req.body.isInitialRawMaterial === true}, ${req.body.permitsSales !== false}, ${req.body.active !== false})
         RETURNING *
       `;
       for (const model of models) {
@@ -123,13 +125,20 @@ router.post('/', async (req, res, next) => {
       }
       return created;
     });
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Cadastro de material',
+      module: 'Cadastros',
+      description: `Cadastrou material ${row.name}${codes.length ? ` (${codes.join(', ')})` : ''}`,
+      recordRef: row.id
+    });
     res.status(201).json(row);
   } catch (error) {
     next(error);
   }
 });
 
-router.put('/:id', async (req, res, next) => {
+router.put('/:id', requirePermission('registrations:write'), async (req, res, next) => {
   try {
     const valid = validateMaterial(req.body);
     if (valid.error) return res.status(400).json({ error: valid.error });
@@ -146,6 +155,7 @@ router.put('/:id', async (req, res, next) => {
             secondary_unit = ${valid.secondaryUnit},
             primary_to_secondary_factor = ${valid.factor},
             is_initial_raw_material = ${req.body.isInitialRawMaterial === true},
+            permits_sales = ${req.body.permitsSales !== false},
             active = ${req.body.active !== false},
             updated_at = now()
         WHERE id = ${req.params.id}
@@ -167,6 +177,13 @@ router.put('/:id', async (req, res, next) => {
       return updated;
     });
     if (!row) return res.status(404).json({ error: 'Material não encontrado.' });
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Edição de material',
+      module: 'Cadastros',
+      description: `Editou material ${row.name}${codes.length ? ` (${codes.join(', ')})` : ''}`,
+      recordRef: row.id
+    });
     res.json(row);
   } catch (error) {
     next(error);

@@ -624,6 +624,7 @@ function applyProductionTransports(operations, production, context) {
       .sort((left, right) => left.index - right.index)
       .map((transport, transportIndex) => {
         const operationId = `${production.productionIndex}:transport:${transport.index}:${transport.material.id}`;
+        const transportedQty = toNumber(sourceOperation.produceQty || sourceOperation.requiredQty);
         return {
           operationType: 'transport',
           operationId,
@@ -634,10 +635,10 @@ function applyProductionTransports(operations, production, context) {
           materialId: transport.material.id,
           materialName: transport.material.name,
           materialCode: materialCode(transport.material),
-          requiredQty: 0,
+          requiredQty: transportedQty,
           stockQty: 0,
           stockUsedQty: 0,
-          produceQty: 0,
+          produceQty: transportedQty,
           unit: transport.material.primary_unit,
           status: 'Transporte',
           machineName: null,

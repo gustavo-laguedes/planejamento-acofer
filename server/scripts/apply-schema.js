@@ -14,6 +14,10 @@ const files = [
   '006_stock_location_adjustments.sql',
   '007_launches_planning_tree.sql',
   '008_production_models.sql',
+  '009_stock_sales_structure.sql',
+  '010_import_history_user_name.sql',
+  '011_app_users.sql',
+  '012_audit_logs.sql',
   '002_indexes.sql',
   '003_seed_optional.sql'
 ];

@@ -7,11 +7,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const logoPath = path.resolve(__dirname, '..', 'assets', 'logo-acofer.png');
 
 const THEMES = [
-  { border: '#48a6b5', soft: '#e8f6f8', text: '#123942' },
-  { border: '#de9642', soft: '#fff4e4', text: '#56320d' },
-  { border: '#63b485', soft: '#ecf8f1', text: '#173d2e' },
-  { border: '#7d90d8', soft: '#f0f3ff', text: '#26376f' },
-  { border: '#cf7ca4', soft: '#fff0f6', text: '#552345' }
+  { border: '#2F343B', soft: '#F4F6F8', text: '#1F2937' },
+  { border: '#D97706', soft: '#FFF7ED', text: '#1F2937' },
+  { border: '#2F343B', soft: '#F4F6F8', text: '#1F2937' },
+  { border: '#D97706', soft: '#FFF7ED', text: '#1F2937' },
+  { border: '#2F343B', soft: '#F4F6F8', text: '#1F2937' }
 ];
 
 function formatDate(value) {
@@ -146,12 +146,12 @@ function linkedProductions(operation) {
 
 function drawHeader(doc, title, plan, pageNumber) {
   doc.save();
-  doc.rect(0, 0, doc.page.width, 76).fill('#f7fafb');
-  doc.strokeColor('#d8e2e8').lineWidth(0.8).moveTo(42, 76).lineTo(doc.page.width - 42, 76).stroke();
+  doc.rect(0, 0, doc.page.width, 76).fill('#2F343B');
+  doc.strokeColor('#2F343B').lineWidth(0.8).moveTo(42, 76).lineTo(doc.page.width - 42, 76).stroke();
   if (fs.existsSync(logoPath)) doc.image(logoPath, 42, 24, { width: 48 });
-  doc.fillColor('#123942').font('Helvetica-Bold').fontSize(12).text(title, 150, 28, { width: 280 });
-  doc.fillColor('#667085').font('Helvetica').fontSize(8).text(`Planejamento ${plan.code || plan.id}`, 150, 47, { width: 260 });
-  doc.fillColor('#667085').fontSize(8).text(`Página ${pageNumber}`, doc.page.width - 130, 47, { width: 88, align: 'right' });
+  doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(12).text(title, 150, 28, { width: 280 });
+  doc.fillColor('#FFFFFF').font('Helvetica').fontSize(8).text(`Planejamento ${plan.code || plan.id}`, 150, 47, { width: 260 });
+  doc.fillColor('#FFFFFF').fontSize(8).text(`Página ${pageNumber}`, doc.page.width - 130, 47, { width: 88, align: 'right' });
   doc.restore();
   doc.y = 100;
 }
@@ -162,20 +162,20 @@ function addPage(doc, title, plan, pageNumberRef) {
   drawHeader(doc, title, plan, pageNumberRef.value);
 }
 
-function pill(doc, text, x, y, width, color = '#123942') {
-  doc.roundedRect(x, y, width, 20, 10).fill('#eef3f5');
+function pill(doc, text, x, y, width, color = '#1F2937') {
+  doc.roundedRect(x, y, width, 20, 10).fill('#F4F6F8');
   doc.fillColor(color).font('Helvetica-Bold').fontSize(8).text(text, x + 8, y + 6, { width: width - 16 });
 }
 
 function summaryCard(doc, label, value, x, y, width, height = 58) {
-  doc.roundedRect(x, y, width, height, 6).fillAndStroke('#ffffff', '#d8e2e8');
-  doc.fillColor('#667085').font('Helvetica-Bold').fontSize(7).text(label.toUpperCase(), x + 10, y + 10, { width: width - 20 });
-  doc.fillColor('#101828').font('Helvetica-Bold').fontSize(12).text(String(value ?? '-'), x + 10, y + 27, { width: width - 20, height: height - 32 });
+  doc.roundedRect(x, y, width, height, 6).fillAndStroke('#ffffff', '#D1D5DB');
+  doc.fillColor('#6B7280').font('Helvetica-Bold').fontSize(7).text(label.toUpperCase(), x + 10, y + 10, { width: width - 20 });
+  doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(12).text(String(value ?? '-'), x + 10, y + 27, { width: width - 20, height: height - 32 });
 }
 
 function sectionTitle(doc, text, x, y, width = 511) {
-  doc.fillColor('#123942').font('Helvetica-Bold').fontSize(11).text(text, x, y, { width });
-  doc.strokeColor('#d8e2e8').lineWidth(0.7).moveTo(x, y + 18).lineTo(x + width, y + 18).stroke();
+  doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(11).text(text, x, y, { width });
+  doc.strokeColor('#D1D5DB').lineWidth(0.7).moveTo(x, y + 18).lineTo(x + width, y + 18).stroke();
 }
 
 function drawTable(doc, columns, rows, x, y, width, options = {}) {
@@ -187,7 +187,7 @@ function drawTable(doc, columns, rows, x, y, width, options = {}) {
   const scaled = colWidths.map(item => (item / total) * width);
   let cursorY = y;
 
-  doc.rect(x, cursorY, width, headerHeight).fill('#123942');
+  doc.rect(x, cursorY, width, headerHeight).fill('#2F343B');
   let cursorX = x;
   columns.forEach((column, index) => {
     doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(7).text(column.label, cursorX + 5, cursorY + 8, { width: scaled[index] - 10 });
@@ -198,11 +198,11 @@ function drawTable(doc, columns, rows, x, y, width, options = {}) {
   rows.forEach((row, rowIndex) => {
     const values = columns.map(column => String(column.render ? column.render(row) : row[column.key] ?? ''));
     const rowHeight = Math.max(rowMinHeight, ...values.map((value, index) => doc.heightOfString(value || '-', { width: scaled[index] - 10, fontSize: rowFontSize }) + 12));
-    doc.rect(x, cursorY, width, rowHeight).fill(rowIndex % 2 ? '#ffffff' : '#f8fafb');
-    doc.strokeColor('#e4e7ec').lineWidth(0.5).moveTo(x, cursorY + rowHeight).lineTo(x + width, cursorY + rowHeight).stroke();
+    doc.rect(x, cursorY, width, rowHeight).fill(rowIndex % 2 ? '#ffffff' : '#F4F6F8');
+    doc.strokeColor('#D1D5DB').lineWidth(0.5).moveTo(x, cursorY + rowHeight).lineTo(x + width, cursorY + rowHeight).stroke();
     cursorX = x;
     values.forEach((value, index) => {
-      doc.fillColor('#101828').font('Helvetica').fontSize(rowFontSize).text(value || '-', cursorX + 5, cursorY + 7, { width: scaled[index] - 10, height: rowHeight - 10 });
+      doc.fillColor('#1F2937').font('Helvetica').fontSize(rowFontSize).text(value || '-', cursorX + 5, cursorY + 7, { width: scaled[index] - 10, height: rowHeight - 10 });
       cursorX += scaled[index];
     });
     cursorY += rowHeight;
@@ -210,7 +210,7 @@ function drawTable(doc, columns, rows, x, y, width, options = {}) {
 
   if (!rows.length) {
     doc.rect(x, cursorY, width, rowMinHeight).fill('#ffffff');
-    doc.fillColor('#667085').font('Helvetica').fontSize(9).text('Sem registros.', x + 8, cursorY + 8, { width: width - 16 });
+    doc.fillColor('#6B7280').font('Helvetica').fontSize(9).text('Sem registros.', x + 8, cursorY + 8, { width: width - 16 });
     cursorY += rowMinHeight;
   }
   return cursorY;
@@ -320,16 +320,16 @@ function drawFlowCard(doc, node, x, y, width, height, positions) {
   const productionIndex = Number(node.productions?.[0]?.index || node.productionIndex || 0);
   const theme = THEMES[productionIndex % THEMES.length];
   const warning = node.isInitialRawMaterial && Number(node.stockQty || 0) < Number(node.requiredQty || 0);
-  const border = warning ? '#e66f3f' : theme.border;
+  const border = warning ? '#D97706' : theme.border;
   doc.roundedRect(x, y, width, height, 7).fillAndStroke('#ffffff', border);
   doc.rect(x, y, 5, height).fill(border);
   const compact = height < 96;
   const ultra = height < 80;
-  doc.fillColor('#101828').font('Helvetica-Bold').fontSize(ultra ? 6.4 : compact ? 7.2 : 8.5).text(node.materialName || '-', x + 10, y + 8, { width: width - 18, height: ultra ? 14 : compact ? 18 : 22 });
-  doc.fillColor('#667085').font('Helvetica').fontSize(ultra ? 5.8 : 6.4).text(node.materialCode || '', x + 10, y + (ultra ? 22 : compact ? 25 : 29), { width: width - 18 });
+  doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(ultra ? 6.4 : compact ? 7.2 : 8.5).text(node.materialName || '-', x + 10, y + 8, { width: width - 18, height: ultra ? 14 : compact ? 18 : 22 });
+  doc.fillColor('#6B7280').font('Helvetica').fontSize(ultra ? 5.8 : 6.4).text(node.materialCode || '', x + 10, y + (ultra ? 22 : compact ? 25 : 29), { width: width - 18 });
   doc.roundedRect(x + 10, y + (ultra ? 31 : compact ? 36 : 43), width - 20, ultra ? 13 : compact ? 15 : 17, 8).fill(theme.soft);
   doc.fillColor(theme.text).font('Helvetica-Bold').fontSize(ultra ? 5.3 : compact ? 5.9 : 6.7).text(nodeStatus(node), x + 16, y + (ultra ? 35 : compact ? 40 : 48), { width: width - 32 });
-  doc.fillColor('#667085').font('Helvetica').fontSize(ultra ? 5.7 : compact ? 6.2 : 7).text(`Necessário: ${formatNumber(node.requiredQty)} ${node.unit || ''}`, x + 10, y + (ultra ? 50 : compact ? 57 : 69), { width: width - 20 });
+  doc.fillColor('#6B7280').font('Helvetica').fontSize(ultra ? 5.7 : compact ? 6.2 : 7).text(`Necessário: ${formatNumber(node.requiredQty)} ${node.unit || ''}`, x + 10, y + (ultra ? 50 : compact ? 57 : 69), { width: width - 20 });
   doc.text(`Saldo: ${formatNumber(node.stockQty)} ${node.unit || ''}`, x + 10, y + (ultra ? 58 : compact ? 67 : 81), { width: width - 20 });
   const origin = node.isInitialRawMaterial ? 'Origem: Compra / base' : `A produzir: ${formatNumber(node.produceQty)} ${node.unit || ''}`;
   doc.text(origin, x + 10, y + (ultra ? 66 : compact ? 77 : 93), { width: width - 20 });
@@ -339,7 +339,7 @@ function drawFlowCard(doc, node, x, y, width, height, positions) {
 function drawFlowGraph(doc, tree) {
   const roots = treeRoots(tree);
   if (!roots.length) {
-    doc.fillColor('#667085').font('Helvetica').fontSize(10).text('Fluxo produtivo não registrado.');
+    doc.fillColor('#6B7280').font('Helvetica').fontSize(10).text('Fluxo produtivo não registrado.');
     return;
   }
   const graph = buildFlowGraph(roots);
@@ -375,11 +375,11 @@ function drawFlowGraph(doc, tree) {
     const endY = to.y;
     const mid = Math.max(12, (endY - startY) / 2);
     doc.save();
-    doc.strokeColor('#9fb6c1').lineWidth(1.5)
+    doc.strokeColor('#9CA3AF').lineWidth(1.5)
       .moveTo(startX, startY)
       .bezierCurveTo(startX, startY + mid, endX, endY - mid, endX, endY)
       .stroke();
-    doc.polygon([endX, endY], [endX - 5, endY - 6], [endX + 5, endY - 6]).fill('#9fb6c1');
+    doc.polygon([endX, endY], [endX - 5, endY - 6], [endX + 5, endY - 6]).fill('#9CA3AF');
     doc.restore();
   });
 }
@@ -388,8 +388,8 @@ function drawPage1(doc, plan, rows, operations, transports, pageNumberRef) {
   addPage(doc, 'PLANEJAMENTO DE PRODUÇÃO', plan, pageNumberRef);
   const firstOperation = operations[0];
   const lastOperation = operations[operations.length - 1];
-  doc.fillColor('#123942').font('Helvetica-Bold').fontSize(18).text('PLANEJAMENTO DE PRODUÇÃO', 42, 106, { width: 510 });
-  doc.fillColor('#667085').font('Helvetica').fontSize(8).text(`Emitido em ${new Date().toLocaleString('pt-BR')}`, 42, 130);
+  doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(18).text('PLANEJAMENTO DE PRODUÇÃO', 42, 106, { width: 510 });
+  doc.fillColor('#6B7280').font('Helvetica').fontSize(8).text(`Emitido em ${new Date().toLocaleString('pt-BR')}`, 42, 130);
   pill(doc, statusLabel(plan.status), 424, 108, 126);
 
   const infoY = 154;
@@ -404,8 +404,8 @@ function drawPage1(doc, plan, rows, operations, transports, pageNumberRef) {
   info.forEach((item, index) => {
     const x = 42 + (index % 3) * 170;
     const y = infoY + Math.floor(index / 3) * 40;
-    doc.fillColor('#667085').font('Helvetica-Bold').fontSize(7).text(item[0].toUpperCase(), x, y);
-    doc.fillColor('#101828').font('Helvetica-Bold').fontSize(9.5).text(String(item[1] || '-'), x, y + 14, { width: 150 });
+    doc.fillColor('#6B7280').font('Helvetica-Bold').fontSize(7).text(item[0].toUpperCase(), x, y);
+    doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(9.5).text(String(item[1] || '-'), x, y + 14, { width: 150 });
   });
 
   const cardY = 244;
@@ -447,8 +447,8 @@ function drawSignatures(doc, plan, pageNumberRef) {
   const items = ['PCP', 'Supervisor Produção', 'Data'];
   let y = 190;
   items.forEach(label => {
-    doc.fillColor('#123942').font('Helvetica-Bold').fontSize(12).text(label, 90, y);
-    doc.strokeColor('#98a2b3').lineWidth(1).moveTo(90, y + 54).lineTo(500, y + 54).stroke();
+    doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(12).text(label, 90, y);
+    doc.strokeColor('#D1D5DB').lineWidth(1).moveTo(90, y + 54).lineTo(500, y + 54).stroke();
     y += 130;
   });
 }

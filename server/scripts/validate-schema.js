@@ -2,6 +2,8 @@ import 'dotenv/config';
 import postgres from 'postgres';
 
 const expectedTables = [
+  'app_users',
+  'audit_logs',
   'import_history',
   'locations',
   'inventory_count_items',

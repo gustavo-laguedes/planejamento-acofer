@@ -7,6 +7,9 @@ ALTER TABLE material_inputs
 ALTER TABLE import_history
   ADD COLUMN IF NOT EXISTS user_id BIGINT;
 
+ALTER TABLE import_history
+  ADD COLUMN IF NOT EXISTS user_name TEXT;
+
 CREATE TABLE IF NOT EXISTS inventory_counts (
   id BIGSERIAL PRIMARY KEY,
   notes TEXT,
@@ -46,12 +49,24 @@ ALTER TABLE production_launches
   ADD COLUMN IF NOT EXISTS input_material_id BIGINT REFERENCES materials(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS input_material_name TEXT,
   ADD COLUMN IF NOT EXISTS input_material_code TEXT,
+  ADD COLUMN IF NOT EXISTS production_model_name TEXT,
+  ADD COLUMN IF NOT EXISTS consumed_inputs JSONB NOT NULL DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS consumed_lot TEXT,
   ADD COLUMN IF NOT EXISTS produced_lots JSONB NOT NULL DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS benefit_number TEXT,
   ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'launched',
   ADD COLUMN IF NOT EXISTS canceled_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+
+UPDATE production_launches
+SET consumed_inputs = (consumed_inputs #>> '{}')::jsonb
+WHERE jsonb_typeof(consumed_inputs) = 'string'
+  AND consumed_inputs #>> '{}' <> '';
+
+UPDATE production_launches
+SET produced_lots = (produced_lots #>> '{}')::jsonb
+WHERE jsonb_typeof(produced_lots) = 'string'
+  AND produced_lots #>> '{}' <> '';
 
 ALTER TABLE production_plans
   ADD COLUMN IF NOT EXISTS code TEXT,

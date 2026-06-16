@@ -1,16 +1,17 @@
 export const TABS = [
   { id: 'planning', label: 'Planejamento' },
-  { id: 'registrations', label: 'Cadastros' },
-  { id: 'productivity', label: 'Matriz de Produtividade' },
+  { id: 'tracking', label: 'Produtividade / Acompanhamento' },
   { id: 'stock', label: 'Estoque' },
   { id: 'history', label: 'Lançamentos' },
-  { id: 'tracking', label: 'Produtividade / Acompanhamento' }
+  { id: 'registrations', label: 'Cadastros' },
+  { id: 'productivity', label: 'Matriz de Produtividade' },
+  { id: 'audit', label: 'Log' }
 ];
 
-export function Tabs(activeTab, onChange) {
+export function Tabs(activeTab, onChange, tabs = TABS) {
   const nav = document.createElement('nav');
   nav.className = 'tabs';
-  TABS.forEach(tab => {
+  tabs.forEach(tab => {
     const button = document.createElement('button');
     button.className = tab.id === activeTab ? 'tab active' : 'tab';
     button.textContent = tab.label;

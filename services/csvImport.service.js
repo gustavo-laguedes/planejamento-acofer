@@ -1,43 +1,11 @@
 import { parse } from 'csv-parse/sync';
 import { requireDb } from '../server/db.js';
 
-const COLUMN_MAP = {
-  'Estabelecimento': 'establishment',
-  'Produto - Codigo': 'product_code',
-  'Produto - Código': 'product_code',
-  'Produto - Codigo Antigo': 'old_product_code',
-  'Produto - Código Antigo': 'old_product_code',
-  'Produto - Especificacao': 'specification',
-  'Produto - Especificação': 'specification',
-  'Produto - Unidade': 'unit',
-  'Produto - Categoria': 'category',
-  'Grupo de Inventario': 'inventory_group',
-  'Grupo de Inventário': 'inventory_group',
-  'Produto - Controla Peso': 'controls_weight',
-  'Produto - Peso Teorico': 'theoretical_weight',
-  'Produto - Peso Teórico': 'theoretical_weight',
-  'Saldo Fiscal (Unidade Padrao)': 'fiscal_balance_unit',
-  'Saldo Fiscal (Unidade Padrão)': 'fiscal_balance_unit',
-  'Saldo Fiscal (KG - Flutuante)': 'fiscal_balance_kg_float',
-  'Saldo Fiscal (KG - Teorico)': 'fiscal_balance_kg_theoretical',
-  'Saldo Fiscal (KG - Teórico)': 'fiscal_balance_kg_theoretical',
-  'Saldo Erros (Unidade Padrao)': 'error_balance_unit',
-  'Saldo Erros (Unidade Padrão)': 'error_balance_unit',
-  'Saldo Erros (KG - Flutuante)': 'error_balance_kg_float',
-  'Saldo Erros (KG - Teorico)': 'error_balance_kg_theoretical',
-  'Saldo Erros (KG - Teórico)': 'error_balance_kg_theoretical',
-  'Pedidos (Unidade Padrao)': 'orders_unit',
-  'Pedidos (Unidade Padrão)': 'orders_unit',
-  'Pedidos (KG - Teorico)': 'orders_kg_theoretical',
-  'Pedidos (KG - Teórico)': 'orders_kg_theoretical',
-  'Vendas (Unidade Padrao)': 'sales_unit',
-  'Vendas (Unidade Padrão)': 'sales_unit',
-  'Vendas (KG - Teorico)': 'sales_kg_theoretical',
-  'Vendas (KG - Teórico)': 'sales_kg_theoretical',
-  'Pedidos Compra (Unidade Padrao)': 'purchase_orders_unit',
-  'Pedidos Compra (Unidade Padrão)': 'purchase_orders_unit',
-  'Pedidos Compra (KG - Teorico)': 'purchase_orders_kg_theoretical',
-  'Pedidos Compra (KG - Teórico)': 'purchase_orders_kg_theoretical'
+const NASAJON_COLUMNS = {
+  establishment: 0,
+  product_code: 1,
+  fiscal_balance_unit: 9,
+  error_balance_unit: 12
 };
 
 const INSERT_COLUMNS = [
@@ -69,46 +37,55 @@ function normalizeHeader(header) {
   return String(header || '').trim();
 }
 
-function toNumber(value) {
+function normalizeHeaderKey(value) {
+  return normalizeHeader(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+export function parseNasajonNumber(value) {
   if (value === null || value === undefined || value === '') return null;
-  const normalized = String(value).trim().replace(/\./g, '').replace(',', '.');
+  const raw = String(value).trim().replace(/\s/g, '');
+  const hasComma = raw.includes(',');
+  let normalized = raw;
+
+  if (hasComma) {
+    normalized = raw.replace(/\./g, '').replace(',', '.');
+  }
+
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function toBool(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return ['sim', 's', 'true', '1', 'yes'].includes(normalized);
+function toNumber(value) {
+  return parseNasajonNumber(value);
+}
+
+function validateNasajonHeader(headers) {
+  const required = [
+    ['estabelecimento', NASAJON_COLUMNS.establishment],
+    ['produto - codigo', NASAJON_COLUMNS.product_code],
+    ['saldo fiscal (unidade padrao)', NASAJON_COLUMNS.fiscal_balance_unit],
+    ['saldo erros (unidade padrao)', NASAJON_COLUMNS.error_balance_unit]
+  ];
+
+  for (const [expected, index] of required) {
+    if (!headers[index]) throw new Error(`CSV Nasajon sem a coluna obrigatoria na posicao ${index + 1}.`);
+    if (normalizeHeaderKey(headers[index]) !== expected) {
+      throw new Error(`Layout CSV Nasajon invalido na coluna ${index + 1}: esperado "${expected}", recebido "${headers[index]}".`);
+    }
+  }
 }
 
 function normalizeRow(row, importId) {
-  const normalized = { import_id: importId };
-
-  for (const [source, target] of Object.entries(COLUMN_MAP)) {
-    if (Object.prototype.hasOwnProperty.call(row, source)) {
-      normalized[target] = row[source];
-    }
-  }
-
-  normalized.controls_weight = toBool(normalized.controls_weight);
-
-  for (const key of [
-    'theoretical_weight',
-    'fiscal_balance_unit',
-    'fiscal_balance_kg_float',
-    'fiscal_balance_kg_theoretical',
-    'error_balance_unit',
-    'error_balance_kg_float',
-    'error_balance_kg_theoretical',
-    'orders_unit',
-    'orders_kg_theoretical',
-    'sales_unit',
-    'sales_kg_theoretical',
-    'purchase_orders_unit',
-    'purchase_orders_kg_theoretical'
-  ]) {
-    normalized[key] = toNumber(normalized[key]);
-  }
+  const normalized = {
+    import_id: importId,
+    establishment: normalizeHeader(row[NASAJON_COLUMNS.establishment]),
+    product_code: normalizeHeader(row[NASAJON_COLUMNS.product_code]),
+    fiscal_balance_unit: toNumber(row[NASAJON_COLUMNS.fiscal_balance_unit]),
+    error_balance_unit: toNumber(row[NASAJON_COLUMNS.error_balance_unit])
+  };
 
   for (const column of INSERT_COLUMNS) {
     if (normalized[column] === undefined) normalized[column] = null;
@@ -134,19 +111,53 @@ function buildInsert(rows) {
   };
 }
 
-export async function importStockCsv({ buffer, filename }) {
-  const db = requireDb();
-  const records = parse(buffer, {
-    columns: headers => headers.map(normalizeHeader),
+async function recordMaterialBalances(tx, importId) {
+  await tx`
+    INSERT INTO stock_import_material_balances (import_id, material_id, total_locations_qty)
+    SELECT ${importId}, m.id,
+           COALESCE(SUM(COALESCE(s.fiscal_balance_unit, 0) + COALESCE(s.error_balance_unit, 0)), 0)
+           + COALESCE(c.correction_qty, 0) AS total_locations_qty
+    FROM materials m
+    LEFT JOIN LATERAL unnest(COALESCE(m.codes, ARRAY[]::text[])) material_code(code) ON true
+    LEFT JOIN stock_snapshot s
+      ON lower(trim(s.product_code)) = lower(trim(material_code.code))
+    LEFT JOIN stock_material_corrections c ON c.material_id = m.id
+    WHERE m.active = true
+    GROUP BY m.id, c.correction_qty
+    ON CONFLICT (import_id, material_id)
+    DO UPDATE SET total_locations_qty = EXCLUDED.total_locations_qty
+  `;
+}
+
+export function parseNasajonCsv(buffer) {
+  const rows = parse(buffer, {
     bom: true,
     skip_empty_lines: true,
     trim: true,
     relax_column_count: true
   });
+  if (!rows.length) throw new Error('CSV Nasajon vazio.');
+  const headers = rows[0].map(normalizeHeader);
+  validateNasajonHeader(headers);
+  return rows.slice(1).filter(row => row.some(value => String(value || '').trim() !== ''));
+}
+
+function userName(user) {
+  return String(user?.name || user?.email || user?.role || '').trim() || null;
+}
+
+function userId(user) {
+  const id = Number(user?.id || user?.sub || 0);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+export async function importStockCsv({ buffer, filename, user }) {
+  const db = requireDb();
+  const records = parseNasajonCsv(buffer);
 
   const [history] = await db`
-    INSERT INTO import_history (filename, status, started_at)
-    VALUES (${filename}, 'processing', now())
+    INSERT INTO import_history (filename, status, started_at, user_id, user_name)
+    VALUES (${filename}, 'processing', now(), ${userId(user)}, ${userName(user)})
     RETURNING id
   `;
 
@@ -161,6 +172,8 @@ export async function importStockCsv({ buffer, filename }) {
         const insert = buildInsert(batch);
         await tx.unsafe(insert.sql, insert.values);
       }
+
+      await recordMaterialBalances(tx, history.id);
 
       await tx`
         UPDATE import_history

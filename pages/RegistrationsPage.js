@@ -1,7 +1,8 @@
-import { api } from '../shared/api.js';
+import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
 import { InternalTabs } from '../shared/InternalTabs.js';
 import { CodeChipsInput } from '../shared/CodeChipsInput.js';
+import { canAccess } from '../shared/rbac.js';
 
 const registrationTabs = [
   { id: 'locations', label: 'Locais' },
@@ -10,6 +11,7 @@ const registrationTabs = [
 ];
 
 export function RegistrationsPage() {
+  const canWriteRegistrations = canAccess(getCurrentUser(), 'registrations:write');
   const page = document.createElement('section');
   page.className = 'stack registrations-page';
   page.innerHTML = `
@@ -71,7 +73,7 @@ export function RegistrationsPage() {
           { label: 'Código', key: 'code' },
           { label: 'Nome do local', key: 'name' },
           { label: 'Status', render: row => row.active ? 'Ativo' : 'Inativo' },
-          { label: 'Ações', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
+          { label: 'Ações', render: row => canWriteRegistrations ? `<button class="link-button" data-edit="${row.id}">Editar</button>` : '' }
         ],
         rows
       }));
@@ -122,7 +124,7 @@ export function RegistrationsPage() {
           { label: 'Nome da máquina', key: 'name' },
           { label: 'Local', key: 'location_name' },
           { label: 'Status', render: row => row.active ? 'Ativo' : 'Inativo' },
-          { label: 'Ações', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
+          { label: 'Ações', render: row => canWriteRegistrations ? `<button class="link-button" data-edit="${row.id}">Editar</button>` : '' }
         ],
         rows
       }));
@@ -183,9 +185,10 @@ export function RegistrationsPage() {
           { label: 'Unidade secundária', key: 'secondary_unit' },
           { label: 'Fator', key: 'primary_to_secondary_factor' },
           { label: 'Matéria-prima inicial', render: row => row.is_initial_raw_material ? 'Sim' : 'Não' },
+          { label: 'Permite vendas', render: row => row.permits_sales === false ? 'Não' : 'Sim' },
           { label: 'Modelos de produção', render: row => formatProductionModels(row.production_models || row.input_materials) },
           { label: 'Status', render: row => row.active ? 'Ativo' : 'Inativo' },
-          { label: 'Ações', render: row => `<button class="link-button" data-edit="${row.id}">Editar</button>` }
+          { label: 'Ações', render: row => canWriteRegistrations ? `<button class="link-button" data-edit="${row.id}">Editar</button>` : '' }
         ],
         rows
       }));
@@ -201,6 +204,7 @@ export function RegistrationsPage() {
           <label>Unidade secundária<select name="secondaryUnit" required><option value="un">un</option><option value="kg">kg</option></select></label>
           <label>Fator fixo<input name="primaryToSecondaryFactor" type="number" step="0.001" min="0.001" required /></label>
           <label class="checkbox-line wide-field"><input name="isInitialRawMaterial" type="checkbox" /> Matéria-prima inicial</label>
+          <label class="checkbox-line wide-field"><input name="permitsSales" type="checkbox" /> Permite vendas</label>
           <label class="wide-field">Códigos atrelados<div class="codes-target"></div></label>
           <div class="wide-field consumed-selector-block">
             <div class="section-heading compact-heading">
@@ -223,6 +227,7 @@ export function RegistrationsPage() {
       form.elements.secondaryUnit.value = row?.secondary_unit || 'kg';
       form.elements.primaryToSecondaryFactor.value = row?.primary_to_secondary_factor || '';
       form.elements.isInitialRawMaterial.checked = row?.is_initial_raw_material === true;
+      form.elements.permitsSales.checked = row?.permits_sales !== false;
       updateConsumedVisibility(modal);
       form.elements.isInitialRawMaterial.addEventListener('change', () => updateConsumedVisibility(modal));
       form.addEventListener('submit', async event => {
@@ -234,6 +239,7 @@ export function RegistrationsPage() {
           secondaryUnit: form.elements.secondaryUnit.value,
           primaryToSecondaryFactor: Number(form.elements.primaryToSecondaryFactor.value),
           isInitialRawMaterial: form.elements.isInitialRawMaterial.checked,
+          permitsSales: form.elements.permitsSales.checked,
           productionModels: form.elements.isInitialRawMaterial.checked ? [] : getProductionModels(modal),
           active: true
         };
@@ -254,7 +260,7 @@ export function RegistrationsPage() {
       <div class="panel">
         <div class="section-heading">
           <h2>${title}</h2>
-          <button class="primary-button add-registration" type="button">${buttonLabel}</button>
+          ${canWriteRegistrations ? `<button class="primary-button add-registration" type="button">${buttonLabel}</button>` : ''}
         </div>
         <div class="toolbar list-actions registration-actions">
           <input class="search" placeholder="${searchPlaceholder}" />
@@ -265,6 +271,7 @@ export function RegistrationsPage() {
   }
 
   function bindListEvents(container, getRows, openModal) {
+    if (!canWriteRegistrations) return;
     container.querySelector('.add-registration').addEventListener('click', () => openModal());
     container.querySelector('.table-target').addEventListener('click', event => {
       const id = event.target.dataset.edit;

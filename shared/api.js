@@ -1,20 +1,10 @@
-const TOKEN_KEY = 'planejamento_acofer_session';
+import { getSessionToken } from './clerkAuth.js';
 
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token) {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
-}
+let currentUser = null;
 
 export async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
-  const token = getToken();
+  const token = await getSessionToken({ wait: true });
 
   if (token) headers.set('Authorization', `Bearer ${token}`);
   if (options.body && !(options.body instanceof FormData)) {
@@ -28,8 +18,7 @@ export async function api(path, options = {}) {
   });
 
   if (!response.ok) {
-    if (response.status === 401 && path !== '/auth/login') {
-      clearToken();
+    if (response.status === 401) {
       window.dispatchEvent(new CustomEvent('planejamento:navigate'));
       throw new Error('Sess\u00e3o expirada. Fa\u00e7a login novamente.');
     }
@@ -44,8 +33,13 @@ export async function api(path, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 
-export async function login(password) {
-  const payload = await api('/auth/login', { method: 'POST', body: { password } });
-  setToken(payload.token);
+export async function me() {
+  const payload = await api('/auth/me');
+  currentUser = payload.user;
+  window.PlanejamentoCurrentUser = currentUser;
   return payload;
+}
+
+export function getCurrentUser() {
+  return currentUser || window.PlanejamentoCurrentUser || null;
 }

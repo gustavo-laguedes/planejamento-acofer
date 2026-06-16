@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS import_history (
   total_rows INTEGER DEFAULT 0,
   status TEXT NOT NULL CHECK (status IN ('processing', 'success', 'error')),
   error_message TEXT,
+  user_id BIGINT,
+  user_name TEXT,
   started_at TIMESTAMPTZ DEFAULT now(),
   finished_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now()
@@ -71,9 +73,29 @@ CREATE TABLE IF NOT EXISTS materials (
   primary_unit TEXT NOT NULL CHECK (primary_unit IN ('un', 'kg')),
   secondary_unit TEXT NOT NULL CHECK (secondary_unit IN ('un', 'kg')),
   primary_to_secondary_factor NUMERIC NOT NULL CHECK (primary_to_secondary_factor > 0),
+  permits_sales BOOLEAN NOT NULL DEFAULT true,
   active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS stock_material_corrections (
+  id BIGSERIAL PRIMARY KEY,
+  material_id BIGINT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+  correction_qty NUMERIC NOT NULL DEFAULT 0,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  CONSTRAINT stock_material_corrections_unique UNIQUE (material_id)
+);
+
+CREATE TABLE IF NOT EXISTS stock_import_material_balances (
+  id BIGSERIAL PRIMARY KEY,
+  import_id BIGINT NOT NULL REFERENCES import_history(id) ON DELETE CASCADE,
+  material_id BIGINT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+  total_locations_qty NUMERIC NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  CONSTRAINT stock_import_material_balances_unique UNIQUE (import_id, material_id)
 );
 
 CREATE TABLE IF NOT EXISTS material_inputs (

@@ -58,12 +58,15 @@ Preencha `.env`:
 ```env
 PORT=3000
 DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require
-ADMIN_PASSWORD=planacofer26
-JWT_SECRET=troque-este-segredo
-SESSION_TTL_HOURS=12
+CLERK_PUBLISHABLE_KEY=pk_test_xxxxxxxxxxxxxxxxx
+CLERK_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxxx
+CLERK_ISSUER=https://your-clerk-domain.clerk.accounts.dev
+CLERK_INVITATION_REDIRECT_URL=http://localhost:3000
+SUPER_ADMIN_EMAIL=gustavo@acofer.com.br
+SUPER_ADMIN_NAME=Gustavo Guedes
 ```
 
-Em producao, prefira usar `ADMIN_PASSWORD_HASH` com bcrypt e remova `ADMIN_PASSWORD`.
+O `DATABASE_URL` continua apontando para o Neon. O Clerk passa a ser a autenticacao principal, e a tabela `app_users` guarda dados complementares como nome, funcao e status.
 
 ## Rodar
 
@@ -83,15 +86,25 @@ A aba Estoque lista uma linha por material cadastrado em `Cadastros > Materiais`
 
 Se nao houver CSV importado, os materiais aparecem com saldo `0`. O campo `Erro de inventario` e editavel direto na tabela e fica salvo em `stock_location_adjustments`.
 
-## Login
+## Autenticacao Clerk
 
-A senha inicial vem de `ADMIN_PASSWORD`. O valor inicial sugerido e:
+1. Crie uma aplicacao no Clerk.
+2. Em `User & Authentication > Email, phone, username`, habilite login por e-mail e senha.
+3. Para permitir login por usuario ou e-mail, habilite `Username` no Clerk. O sistema envia o valor digitado no campo `Usuario ou E-mail` como identificador.
+4. Em `Paths`, configure a URL da aplicacao como redirect de convites, por exemplo `http://localhost:3000`.
+5. Copie `Publishable key` para `CLERK_PUBLISHABLE_KEY`.
+6. Copie `Secret key` para `CLERK_SECRET_KEY`.
+7. Copie o dominio/issuer da instancia Clerk para `CLERK_ISSUER`, no formato `https://...clerk.accounts.dev`.
+8. Defina `SUPER_ADMIN_EMAIL` e `SUPER_ADMIN_NAME` com o primeiro usuario administrador.
+9. Rode as migrations:
 
-```text
-planacofer26
+```bash
+npm run db:schema
 ```
 
-A senha nao fica no frontend. O login chama `/api/auth/login`, recebe um token JWT e salva a sessao no navegador.
+O Super Admin inicial nao pode ser removido nem desativado. Para o primeiro acesso, crie esse usuario no painel do Clerk com o mesmo e-mail de `SUPER_ADMIN_EMAIL`, ou convide-o pelo painel do Clerk. Apos o login, o sistema cria/vincula automaticamente o perfil interno com acesso total.
+
+Super Admins veem o botao `Gestao de Usuarios` na topbar. O cadastro cria um convite no Clerk, o Clerk envia o e-mail, o usuario define a senha e, ao entrar, o perfil interno e vinculado pelo e-mail.
 
 ## Importar CSV
 

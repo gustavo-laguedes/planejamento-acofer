@@ -1,16 +1,27 @@
 import { api } from '../shared/api.js';
+import { getCurrentUser } from '../shared/api.js';
 import { CalendarTimeline } from '../shared/CalendarTimeline.js';
 import { DataTable } from '../shared/DataTable.js';
 import { InternalTabs } from '../shared/InternalTabs.js';
+import { canAccess } from '../shared/rbac.js';
 
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
 const PRODUCTION_THEMES = [
-  { start: '#0f6b7c', end: '#7cc7d4', soft: '#e8f6f8', border: '#48a6b5', text: '#123942', card: '#e8f6f8' },
-  { start: '#bd6f22', end: '#f2bf71', soft: '#fff4e4', border: '#de9642', text: '#56320d', card: '#fff4e4' },
-  { start: '#2f7d57', end: '#8fd0aa', soft: '#ecf8f1', border: '#63b485', text: '#173d2e', card: '#ecf8f1' },
-  { start: '#5269b0', end: '#aebdf0', soft: '#f0f3ff', border: '#7d90d8', text: '#26376f', card: '#f0f3ff' },
-  { start: '#9a4f74', end: '#e4a0bf', soft: '#fff0f6', border: '#cf7ca4', text: '#552345', card: '#fff0f6' }
+  { start: '#2F343B', end: '#6B7280', soft: '#F4F6F8', border: '#2F343B', text: '#1F2937', card: '#F4F6F8' },
+  { start: '#376C8A', end: '#9BBBD0', soft: '#EEF6FA', border: '#4D86A6', text: '#18384A', card: '#EEF6FA' },
+  { start: '#2F7D57', end: '#8FD0AA', soft: '#ECF8F1', border: '#63B485', text: '#173D2E', card: '#ECF8F1' },
+  { start: '#BD6F22', end: '#F2BF71', soft: '#FFF4E4', border: '#DE9642', text: '#56320D', card: '#FFF4E4' },
+  { start: '#7B5A8E', end: '#C9B2D5', soft: '#F6F0FA', border: '#A485B7', text: '#3C294B', card: '#F6F0FA' },
+  { start: '#8B4A5A', end: '#D7A1AE', soft: '#FAEEF1', border: '#B87182', text: '#4A202D', card: '#FAEEF1' },
+  { start: '#2F7F7A', end: '#9ACCC8', soft: '#EAF7F6', border: '#5AA9A4', text: '#163F3D', card: '#EAF7F6' },
+  { start: '#A77A16', end: '#DDBB68', soft: '#FBF5E3', border: '#C29635', text: '#4F3909', card: '#FBF5E3' },
+  { start: '#3F4A54', end: '#98A2AD', soft: '#F1F4F6', border: '#64717D', text: '#202A33', card: '#F1F4F6' },
+  { start: '#245D68', end: '#86B2BB', soft: '#EAF4F6', border: '#4C8993', text: '#12333A', card: '#EAF4F6' },
+  { start: '#6D7A3B', end: '#B9C47B', soft: '#F3F6E7', border: '#8C9B54', text: '#343B18', card: '#F3F6E7' },
+  { start: '#8A5B3E', end: '#C99B7A', soft: '#F8F0EA', border: '#AA7452', text: '#432717', card: '#F8F0EA' },
+  { start: '#A65F6F', end: '#DCABB5', soft: '#FBF0F2', border: '#C88392', text: '#4F2730', card: '#FBF0F2' }
 ];
+const PRODUCTION_THEME_SEQUENCE = [1, 3, 2, 4, 7, 6, 5, 8, 10, 9, 11, 12, 0];
 
 const planningTabs = [
   { id: 'simulation', label: 'Simulação' },
@@ -205,7 +216,8 @@ function emptyProduction(index = 0) {
 }
 
 function productionTheme(index = 0) {
-  return PRODUCTION_THEMES[index % PRODUCTION_THEMES.length];
+  const sequenceIndex = PRODUCTION_THEME_SEQUENCE[index % PRODUCTION_THEME_SEQUENCE.length];
+  return PRODUCTION_THEMES[sequenceIndex] || PRODUCTION_THEMES[0];
 }
 
 function productionThemeStyle(index = 0) {
@@ -303,6 +315,7 @@ function loadDraft() {
 }
 
 export function PlanningPage() {
+  const canWritePlanning = canAccess(getCurrentUser(), 'planning:write');
   const page = document.createElement('section');
   page.className = 'stack planning-page';
   page.innerHTML = `
@@ -968,7 +981,7 @@ export function PlanningPage() {
     requestAnimationFrame(drawProductionFlowConnectors);
     if (notice) notice.hidden = true;
     resultsTarget.hidden = false;
-    form.elements.save.disabled = false;
+    if (form.elements.save) form.elements.save.disabled = !canWritePlanning;
   }
 
   function restoreSimulation(form) {
@@ -1256,7 +1269,7 @@ export function PlanningPage() {
 
           <div class="form-actions">
             <button class="primary-button" name="simulate" type="submit">Simular</button>
-            <button class="secondary-button" name="save" type="button" disabled>Salvar planejamento</button>
+            ${canWritePlanning ? '<button class="secondary-button" name="save" type="button" disabled>Salvar planejamento</button>' : ''}
           </div>
         </form>
       </div>
@@ -1621,7 +1634,8 @@ export function PlanningPage() {
       }
     });
 
-    form.elements.save.addEventListener('click', async () => {
+    form.elements.save?.addEventListener('click', async () => {
+      if (!canWritePlanning) return;
       try {
         const simulation = await simulateCurrent();
         if (!simulation) return;
@@ -1665,7 +1679,7 @@ export function PlanningPage() {
             <div class="history-actions">
               <button class="small-action-button" data-view="${row.id}" type="button">Visualizar</button>
               <button class="small-action-button" data-pdf="${row.id}" type="button">Gerar PDF</button>
-              <button class="small-action-button danger" data-cancel="${row.id}" type="button">Cancelar</button>
+              ${canWritePlanning ? `<button class="small-action-button danger" data-cancel="${row.id}" type="button">Cancelar</button>` : ''}
             </div>
           ` }
         ],

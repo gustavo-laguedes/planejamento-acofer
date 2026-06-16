@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { requireDb } from '../db.js';
+import { requirePermission } from './middleware.js';
+import { recordAuditLog } from '../audit.js';
 
 const router = Router();
 
@@ -24,7 +26,7 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-router.post('/', async (req, res, next) => {
+router.post('/', requirePermission('registrations:write'), async (req, res, next) => {
   try {
     const name = normalizeName(req.body.name);
     const locationId = Number(req.body.locationId);
@@ -40,13 +42,20 @@ router.post('/', async (req, res, next) => {
       VALUES (${name}, ${locationId}, ${req.body.active !== false})
       RETURNING *
     `;
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Cadastro de máquina',
+      module: 'Cadastros',
+      description: `Cadastrou máquina ${row.name}`,
+      recordRef: row.id
+    });
     res.status(201).json(row);
   } catch (error) {
     next(error);
   }
 });
 
-router.put('/:id', async (req, res, next) => {
+router.put('/:id', requirePermission('registrations:write'), async (req, res, next) => {
   try {
     const name = normalizeName(req.body.name);
     const locationId = Number(req.body.locationId);
@@ -67,6 +76,13 @@ router.put('/:id', async (req, res, next) => {
       RETURNING *
     `;
     if (!row) return res.status(404).json({ error: 'Máquina não encontrada.' });
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Edição de máquina',
+      module: 'Cadastros',
+      description: `Editou máquina ${row.name}`,
+      recordRef: row.id
+    });
     res.json(row);
   } catch (error) {
     next(error);
