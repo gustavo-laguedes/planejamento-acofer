@@ -1,5 +1,5 @@
 import { requestPasswordReset, signInWithPassword } from '../shared/clerkAuth.js';
-import { api } from '../shared/api.js';
+import { api, me } from '../shared/api.js';
 
 export function LoginPage(initialError = '') {
   const page = document.createElement('main');
@@ -39,19 +39,22 @@ export function LoginPage(initialError = '') {
 
     error.hidden = true;
     submit.disabled = true;
+    submit.textContent = 'Entrando...';
 
     try {
       await signInWithPassword(
         String(form.get('identifier') || '').trim(),
         String(form.get('password') || '')
       );
+      await me();
       await api('/auth/events/login', { method: 'POST' }).catch(() => {});
       window.dispatchEvent(new CustomEvent('planejamento:navigate'));
     } catch (err) {
-      error.textContent = err.message;
+      error.textContent = err.message || 'Nao foi possivel entrar. Tente novamente.';
       error.hidden = false;
     } finally {
       submit.disabled = false;
+      submit.textContent = 'Entrar';
     }
   });
 

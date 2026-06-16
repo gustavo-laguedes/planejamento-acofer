@@ -4,8 +4,22 @@ import { LoginPage } from './pages/LoginPage.js';
 import { AppShell } from './pages/AppShell.js';
 
 const root = document.getElementById('app');
+const INITIAL_AUTH_TIMEOUT_MS = 7000;
+let renderRun = 0;
+
+function withTimeout(promise, ms, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    clearTimeout(timeoutId);
+  });
+}
 
 export async function render() {
+  const currentRun = ++renderRun;
   root.innerHTML = '';
   const loading = document.createElement('main');
   loading.className = 'initial-loading';
@@ -27,14 +41,29 @@ export async function render() {
   root.appendChild(loading);
 
   try {
-    const signedIn = await isSignedIn();
-    if (signedIn) await me();
+    const signedIn = await withTimeout(
+      isSignedIn(),
+      INITIAL_AUTH_TIMEOUT_MS,
+      'Nao foi possivel confirmar sua sessao. Faca login novamente.'
+    );
+    if (currentRun !== renderRun) return;
+
+    if (signedIn) {
+      await withTimeout(
+        me(),
+        INITIAL_AUTH_TIMEOUT_MS,
+        'Nao foi possivel carregar sua sessao. Faca login novamente.'
+      );
+      if (currentRun !== renderRun) return;
+    }
+
     root.innerHTML = '';
     root.appendChild(signedIn ? AppShell() : LoginPage());
   } catch (error) {
-    await signOut().catch(() => {});
+    if (currentRun !== renderRun) return;
     root.innerHTML = '';
     root.appendChild(LoginPage(error.message));
+    signOut().catch(() => {});
   }
 }
 

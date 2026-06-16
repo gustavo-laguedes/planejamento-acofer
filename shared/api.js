@@ -4,23 +4,30 @@ import { apiUrl } from './config.js';
 let currentUser = null;
 
 export async function api(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-  const token = await getSessionToken({ wait: true });
+  const {
+    authWait = true,
+    redirectOnAuthError = true,
+    ...fetchOptions
+  } = options;
+  const headers = new Headers(fetchOptions.headers || {});
+  const token = await getSessionToken({ wait: authWait });
 
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  if (options.body && !(options.body instanceof FormData)) {
+  if (fetchOptions.body && !(fetchOptions.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
 
   const response = await fetch(apiUrl(path), {
-    ...options,
+    ...fetchOptions,
     headers,
-    body: options.body instanceof FormData ? options.body : options.body ? JSON.stringify(options.body) : undefined
+    body: fetchOptions.body instanceof FormData ? fetchOptions.body : fetchOptions.body ? JSON.stringify(fetchOptions.body) : undefined
   });
 
   if (!response.ok) {
     if (response.status === 401) {
-      window.dispatchEvent(new CustomEvent('planejamento:navigate'));
+      currentUser = null;
+      window.PlanejamentoCurrentUser = null;
+      if (redirectOnAuthError) window.dispatchEvent(new CustomEvent('planejamento:navigate'));
       throw new Error('Sess\u00e3o expirada. Fa\u00e7a login novamente.');
     }
     const payload = await response.json().catch(() => ({ error: 'Falha na requisição.' }));
@@ -35,7 +42,7 @@ export async function api(path, options = {}) {
 }
 
 export async function me() {
-  const payload = await api('/auth/me');
+  const payload = await api('/auth/me', { redirectOnAuthError: false });
   currentUser = payload.user;
   window.PlanejamentoCurrentUser = currentUser;
   return payload;
