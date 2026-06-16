@@ -256,6 +256,7 @@ export function ImportHistoryPage() {
     const hasInventoryBase = template?.rows?.length && template?.locations?.length;
     const selected = new Map();
     let inventoryCandidateId = '';
+    let savingInventory = false;
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
     backdrop.innerHTML = `
@@ -375,7 +376,8 @@ export function ImportHistoryPage() {
     backdrop.querySelector('.inventory-card-list')?.addEventListener('input', captureInventoryValues);
     backdrop.querySelector('[name="inventorySearch"]')?.addEventListener('input', renderSearchResults);
     backdrop.querySelector('.add-inventory-material')?.addEventListener('click', addSelectedMaterial);
-    backdrop.querySelector('.save-inventory')?.addEventListener('click', async () => {
+    backdrop.querySelector('.save-inventory')?.addEventListener('click', async event => {
+      if (savingInventory) return;
       captureInventoryValues();
       const items = [...selected.values()].flatMap(row => template.locations.map(location => ({
         materialId: Number(row.material.id),
@@ -387,12 +389,27 @@ export function ImportHistoryPage() {
         toast('Preencha ao menos um saldo atualizado.');
         return;
       }
-      await api('/stock/inventory/counts', {
-        method: 'POST',
-        body: { notes: backdrop.querySelector('[name="notes"]').value, items }
-      });
-      backdrop.remove();
-      await renderInventory();
+      const button = event.currentTarget;
+      savingInventory = true;
+      button.disabled = true;
+      button.textContent = 'Salvando inventário...';
+      try {
+        const result = await api('/stock/inventory/counts', {
+          method: 'POST',
+          body: { notes: backdrop.querySelector('[name="notes"]').value, items }
+        });
+        const message = result?.duplicate
+          ? 'Inventário já salvo recentemente. Nenhuma duplicidade foi criada.'
+          : 'Inventário salvo com sucesso.';
+        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: message }));
+        backdrop.remove();
+        await renderInventory();
+      } catch (error) {
+        savingInventory = false;
+        button.disabled = false;
+        button.textContent = 'Salvar inventário';
+        toast(error);
+      }
     });
     page.appendChild(backdrop);
     renderInventoryCards();

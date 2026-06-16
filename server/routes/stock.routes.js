@@ -14,6 +14,8 @@ function normalizeText(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+const INVENTORY_DUPLICATE_WINDOW_SECONDS = 120;
+
 function emptyLocation(location) {
   return {
     locationId: location.id,
@@ -302,6 +304,7 @@ router.post('/inventory/counts', requirePermission('inventory:write'), async (re
   try {
     const db = requireDb();
     const notes = String(req.body.notes || '').trim() || null;
+    const userId = req.user?.id || null;
     const items = Array.isArray(req.body.items) ? req.body.items : [];
     const filledItems = items
       .map(item => ({
@@ -314,9 +317,25 @@ router.post('/inventory/counts', requirePermission('inventory:write'), async (re
     if (!filledItems.length) return res.status(400).json({ error: 'Preencha ao menos um saldo atualizado.' });
 
     const result = await db.begin(async tx => {
+      await tx`SELECT pg_advisory_xact_lock(${userId || 0}, ${filledItems.length})`;
+
+      const [duplicate] = await tx`
+        SELECT c.*
+        FROM inventory_counts c
+        JOIN inventory_count_items i ON i.inventory_count_id = c.id
+        WHERE (${userId}::bigint IS NULL OR c.user_id = ${userId})
+          AND (${userId}::bigint IS NOT NULL OR c.user_id IS NULL)
+          AND c.created_at >= now() - (${INVENTORY_DUPLICATE_WINDOW_SECONDS} || ' seconds')::interval
+        GROUP BY c.id
+        HAVING COUNT(i.id)::int = ${filledItems.length}
+        ORDER BY c.created_at DESC, c.id DESC
+        LIMIT 1
+      `;
+      if (duplicate) return { ...duplicate, duplicate: true };
+
       const [count] = await tx`
         INSERT INTO inventory_counts (notes, user_id)
-        VALUES (${notes}, NULL)
+        VALUES (${notes}, ${userId})
         RETURNING *
       `;
       for (const item of filledItems) {
@@ -335,7 +354,7 @@ router.post('/inventory/counts', requirePermission('inventory:write'), async (re
       }
       return count;
     });
-    res.status(201).json(result);
+    res.status(result.duplicate ? 200 : 201).json(result);
   } catch (error) {
     next(error);
   }

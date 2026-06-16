@@ -107,7 +107,7 @@ CLERK_PUBLISHABLE_KEY=pk_live_xxxxxxxxxxxxxxxxx
 SUPER_ADMIN_EMAIL=gustavo@acofer.com.br
 SUPER_ADMIN_NAME=Gustavo Guedes
 FRONTEND_ORIGIN=https://acofer.catrion.com.br
-CLERK_INVITATION_REDIRECT_URL=https://acofer.catrion.com.br
+CLERK_INVITATION_REDIRECT_URL=https://acofer.catrion.com.br/?accept_invitation=1
 ```
 
 O CORS permite sempre `http://localhost:3000` e tambem as origens listadas em `FRONTEND_ORIGIN`. Para mais de uma origem de frontend, separe por virgula.
@@ -127,7 +127,7 @@ O arquivo `CNAME` ja aponta para `acofer.catrion.com.br`.
 - Migrations aplicadas no banco: `npm run db:schema`.
 - Render com `npm start` e health check acessivel em `/api/health`.
 - `FRONTEND_ORIGIN=https://acofer.catrion.com.br` configurado no Render.
-- `CLERK_INVITATION_REDIRECT_URL=https://acofer.catrion.com.br` configurado no Render e no painel do Clerk.
+- `CLERK_INVITATION_REDIRECT_URL=https://acofer.catrion.com.br/?accept_invitation=1` configurado no Render e liberado no painel do Clerk.
 - `config.js` publicado no GitHub Pages com a URL do Render.
 - Login testado em `https://acofer.catrion.com.br`.
 
@@ -154,7 +154,7 @@ Se nao houver CSV importado, os materiais aparecem com saldo `0`. O campo `Erro 
 1. Crie uma aplicacao no Clerk.
 2. Em `User & Authentication > Email, phone, username`, habilite login por e-mail e senha.
 3. Para permitir login por usuario ou e-mail, habilite `Username` no Clerk. O sistema envia o valor digitado no campo `Usuario ou E-mail` como identificador.
-4. Em `Paths`, configure a URL da aplicacao como redirect de convites, por exemplo `http://localhost:3000`.
+4. Em `Paths`, libere a URL da aplicacao para redirects de convite, por exemplo `http://localhost:3000/?accept_invitation=1`.
 5. Copie `Publishable key` para `CLERK_PUBLISHABLE_KEY`.
 6. Copie `Secret key` para `CLERK_SECRET_KEY`.
 7. Copie o dominio/issuer da instancia Clerk para `CLERK_ISSUER`, no formato `https://...clerk.accounts.dev`.

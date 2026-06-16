@@ -171,6 +171,71 @@ export async function signInWithPassword(identifier, password) {
   return signIn;
 }
 
+function normalizeSignUpResult(result, fallback) {
+  return result?.signUp || result?.createdSignUp || result || fallback || null;
+}
+
+export async function acceptInvitationWithPassword(ticket, password) {
+  const clerk = await getClerk();
+  const signUpApi = clerk.client?.signUp || clerk.signUp;
+  if (!signUpApi) {
+    throw new Error('Fluxo de cadastro do Clerk indisponivel.');
+  }
+
+  authLog('aceitando convite Clerk');
+  let signUp;
+  try {
+    if (typeof signUpApi.ticket === 'function') {
+      const result = await withTimeout(
+        signUpApi.ticket({ ticket, password }),
+        SIGN_IN_TIMEOUT_MS,
+        'Tempo esgotado ao aceitar convite.'
+      );
+      if (result?.error) throw result.error;
+      signUp = normalizeSignUpResult(result, signUpApi);
+    } else if (typeof signUpApi.create === 'function') {
+      const result = await withTimeout(
+        signUpApi.create({ strategy: 'ticket', ticket, password }),
+        SIGN_IN_TIMEOUT_MS,
+        'Tempo esgotado ao aceitar convite.'
+      );
+      if (result?.error) throw result.error;
+      signUp = normalizeSignUpResult(result, signUpApi);
+    } else {
+      throw new Error('Fluxo de convite do Clerk indisponivel.');
+    }
+
+    if (signUp?.status !== 'complete' && typeof signUp?.update === 'function') {
+      const result = await withTimeout(
+        signUp.update({ password }),
+        SIGN_IN_TIMEOUT_MS,
+        'Tempo esgotado ao definir senha.'
+      );
+      if (result?.error) throw result.error;
+      signUp = normalizeSignUpResult(result, signUp);
+    }
+  } catch (error) {
+    throw new Error(friendlyAuthError(error, 'Nao foi possivel aceitar o convite. Verifique o link recebido.'));
+  }
+
+  if (signUp?.status !== 'complete' || !signUp.createdSessionId) {
+    throw new Error('Convite aceito, mas o cadastro ainda nao foi concluido no Clerk.');
+  }
+
+  authLog('ativando sessao do convite Clerk');
+  await withTimeout(
+    clerk.setActive({ session: signUp.createdSessionId }),
+    SET_ACTIVE_TIMEOUT_MS,
+    'Tempo esgotado ao ativar a sessao.'
+  );
+
+  const token = await getSessionToken({ wait: true });
+  if (!token) {
+    throw new Error('Senha criada, mas nao foi possivel obter a sessao. Tente entrar novamente.');
+  }
+  return signUp;
+}
+
 export async function requestPasswordReset(identifier) {
   const clerk = await getClerk();
   return clerk.client.signIn.create({

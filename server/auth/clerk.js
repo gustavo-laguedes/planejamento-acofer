@@ -153,6 +153,10 @@ function displayNameFromClerkUser(user, fallback = '') {
   return fullName || user?.username || fallback || primaryEmailFromClerkUser(user);
 }
 
+function invitationRedirectUrl() {
+  return String(process.env.CLERK_INVITATION_REDIRECT_URL || process.env.FRONTEND_ORIGIN || '').trim();
+}
+
 export async function getProfileForTokenPayload(payload) {
   const sql = requireDb();
   await ensureInitialSuperAdmin();
@@ -196,8 +200,9 @@ export async function inviteClerkUser({ email, name, role }) {
     public_metadata: { name, role }
   };
 
-  if (process.env.CLERK_INVITATION_REDIRECT_URL) {
-    payload.redirect_url = process.env.CLERK_INVITATION_REDIRECT_URL;
+  const redirectUrl = invitationRedirectUrl();
+  if (redirectUrl) {
+    payload.redirect_url = redirectUrl;
   }
 
   const response = await fetch('https://api.clerk.com/v1/invitations', {
