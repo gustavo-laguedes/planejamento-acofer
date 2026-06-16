@@ -1,3 +1,5 @@
+import { apiUrl } from './config.js';
+
 let clerkPromise;
 let configPromise;
 const SESSION_TOKEN_ATTEMPTS = 10;
@@ -9,7 +11,7 @@ function delay(ms) {
 
 async function loadAuthConfig() {
   if (!configPromise) {
-    configPromise = fetch('/api/auth/config')
+    configPromise = fetch(apiUrl('/auth/config'))
       .then(response => {
         if (!response.ok) throw new Error('Falha ao carregar configuracao do Clerk.');
         return response.json();

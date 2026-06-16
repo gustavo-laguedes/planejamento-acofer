@@ -16,6 +16,7 @@ server/
   scripts/
 services/
 shared/
+config.js
 index.html
 app.js
 style.css
@@ -61,12 +62,74 @@ DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require
 CLERK_PUBLISHABLE_KEY=pk_test_xxxxxxxxxxxxxxxxx
 CLERK_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxxx
 CLERK_ISSUER=https://your-clerk-domain.clerk.accounts.dev
+FRONTEND_ORIGIN=http://localhost:3000
 CLERK_INVITATION_REDIRECT_URL=http://localhost:3000
 SUPER_ADMIN_EMAIL=gustavo@acofer.com.br
 SUPER_ADMIN_NAME=Gustavo Guedes
 ```
 
 O `DATABASE_URL` continua apontando para o Neon. O Clerk passa a ser a autenticacao principal, e a tabela `app_users` guarda dados complementares como nome, funcao e status.
+
+## Deploy: Render + GitHub Pages
+
+O frontend usa `config.js` para descobrir o backend em producao:
+
+```js
+window.APP_CONFIG = {
+  API_BASE_URL: 'https://planejamento-acofer-api.onrender.com'
+};
+```
+
+Em `localhost`, o sistema ignora `API_BASE_URL` e continua usando `/api`. Em producao, as chamadas sao feitas para `API_BASE_URL + /api`, por exemplo `https://planejamento-acofer-api.onrender.com/api`.
+
+### Backend no Render
+
+Crie um Web Service apontando para este repositorio:
+
+```text
+Build Command: npm install
+Start Command: npm start
+```
+
+Use a URL publica do Render como base da API:
+
+```text
+https://planejamento-acofer-api.onrender.com
+```
+
+Configure as variaveis de ambiente no Render:
+
+```env
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require
+CLERK_SECRET_KEY=sk_live_xxxxxxxxxxxxxxxxx
+CLERK_ISSUER=https://your-clerk-domain.clerk.accounts.dev
+CLERK_PUBLISHABLE_KEY=pk_live_xxxxxxxxxxxxxxxxx
+SUPER_ADMIN_EMAIL=gustavo@acofer.com.br
+SUPER_ADMIN_NAME=Gustavo Guedes
+FRONTEND_ORIGIN=https://acofer.catrion.com.br
+CLERK_INVITATION_REDIRECT_URL=https://acofer.catrion.com.br
+```
+
+O CORS permite sempre `http://localhost:3000` e tambem as origens listadas em `FRONTEND_ORIGIN`. Para mais de uma origem de frontend, separe por virgula.
+
+### Frontend no GitHub Pages
+
+Publique a branch/pasta raiz do repositorio no GitHub Pages. Antes de publicar, confirme que `config.js` contem:
+
+```js
+API_BASE_URL: 'https://planejamento-acofer-api.onrender.com'
+```
+
+O arquivo `CNAME` ja aponta para `acofer.catrion.com.br`.
+
+### Checklist de deploy
+
+- Migrations aplicadas no banco: `npm run db:schema`.
+- Render com `npm start` e health check acessivel em `/api/health`.
+- `FRONTEND_ORIGIN=https://acofer.catrion.com.br` configurado no Render.
+- `CLERK_INVITATION_REDIRECT_URL=https://acofer.catrion.com.br` configurado no Render e no painel do Clerk.
+- `config.js` publicado no GitHub Pages com a URL do Render.
+- Login testado em `https://acofer.catrion.com.br`.
 
 ## Rodar
 

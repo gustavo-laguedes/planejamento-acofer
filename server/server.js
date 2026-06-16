@@ -21,9 +21,30 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const frontendDir = path.resolve(__dirname, '..');
+const allowedOrigins = new Set([
+  'http://localhost:3000',
+  ...String(process.env.FRONTEND_ORIGIN || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean)
+]);
+
+function applyCors(req, res, next) {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  }
+
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  return next();
+}
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(morgan('dev'));
+app.use(applyCors);
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/api/health', (req, res) => {

@@ -1,4 +1,5 @@
 import { getSessionToken } from './clerkAuth.js';
+import { apiUrl } from './config.js';
 
 let currentUser = null;
 
@@ -11,7 +12,7 @@ export async function api(path, options = {}) {
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(apiUrl(path), {
     ...options,
     headers,
     body: options.body instanceof FormData ? options.body : options.body ? JSON.stringify(options.body) : undefined
