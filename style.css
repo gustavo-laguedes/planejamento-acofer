@@ -3312,6 +3312,19 @@ body.calendar-fullscreen-open {
 }
 
 @media (max-width: 1040px) {
+  .page,
+  .page:has(.stock-page),
+  .page:has(.planning-page),
+  .page:has(.registrations-page),
+  .page:has(.launches-page),
+  .page:has(.tracking-page),
+  .page:has(.productivity-matrix-page) {
+    width: 100%;
+    max-width: 100%;
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
   .grid-form,
   .filters,
   .summary-grid,
@@ -3333,6 +3346,135 @@ body.calendar-fullscreen-open {
   .production-flow-node {
     grid-template-columns: 1fr;
   }
+
+  .table-wrap,
+  .detail-table-wrap,
+  .production-launch-table-wrap,
+  .user-table-wrap,
+  .calendar-scroll,
+  .gantt-board,
+  .production-flow-card,
+  .flow-tree-list {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+
+  .table-wrap,
+  .production-launch-table-wrap,
+  .stock-table-wrap,
+  .detail-table-wrap,
+  .user-table-wrap {
+    max-width: 100%;
+  }
+
+  .table-wrap table {
+    width: 100%;
+    min-width: max(100%, 1120px);
+  }
+
+  .stock-panel {
+    overflow: visible;
+  }
+
+  .stock-table-wrap {
+    overflow-x: auto;
+    overflow-y: auto;
+  }
+
+  .stock-overview-table {
+    width: max-content;
+    min-width: max(100%, 1280px);
+  }
+
+  .stock-overview-table .col-codes {
+    width: 130px;
+  }
+
+  .stock-overview-table .col-material {
+    width: 240px;
+  }
+
+  .stock-overview-table .col-nasajon,
+  .stock-overview-table .col-adjustment {
+    width: 118px;
+  }
+
+  .stock-overview-table .col-correction {
+    width: 170px;
+  }
+
+  .stock-overview-table .col-total {
+    width: 150px;
+  }
+
+  .stock-overview-table .col-total-estimated {
+    width: 170px;
+  }
+
+  .stock-overview-table th {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .stock-overview-table .material-name,
+  .stock-overview-table td {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .modal-backdrop {
+    align-items: start;
+    padding: 16px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .modal,
+  .wide-modal,
+  .inventory-modal,
+  .production-modal,
+  .planning-detail-dialog,
+  .user-management-modal {
+    width: min(100%, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+  }
+
+  .operation-modal {
+    width: min(860px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+  }
+
+  .operation-modal.is-floating,
+  .operation-modal.is-dragging {
+    max-width: calc(100vw - 32px);
+  }
+
+  .modal-header {
+    align-items: flex-start;
+  }
+
+  .calendar-gantt {
+    overflow: visible;
+  }
+
+  .gantt-zoom-controls {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .calendar-view-toggle {
+    margin-right: 0;
+  }
+
+  .gantt-board {
+    max-height: min(72dvh, 760px);
+    touch-action: pan-x pan-y;
+  }
+
+  .calendar-gantt.is-calendar-fullscreen {
+    height: 100dvh;
+  }
 }
 
 @media (max-width: 720px) {
@@ -3352,6 +3494,14 @@ body.calendar-fullscreen-open {
   .page {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  .tabs {
+    scrollbar-width: thin;
+  }
+
+  .tab {
+    padding: 14px 12px;
   }
 
   .grid-form,
@@ -3400,5 +3550,97 @@ body.calendar-fullscreen-open {
 
   .stock-panel {
     padding: 16px;
+  }
+
+  .modal-backdrop {
+    padding: 10px;
+  }
+
+  .modal,
+  .wide-modal,
+  .inventory-modal,
+  .production-modal,
+  .planning-detail-dialog,
+  .user-management-modal,
+  .operation-modal {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+    padding: 16px;
+  }
+
+  .modal-header {
+    gap: 10px;
+  }
+
+  .modal-header h2 {
+    font-size: 20px;
+    line-height: 1.2;
+  }
+
+  .modal-header-actions,
+  .production-modal-actions,
+  .inventory-modal-actions,
+  .modal-actions,
+  .form-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .production-modal-actions .cancel-production {
+    margin-right: 0;
+  }
+
+  .modal-header-actions button,
+  .production-modal-actions button,
+  .inventory-modal-actions button,
+  .modal-actions button,
+  .form-actions button {
+    width: 100%;
+  }
+
+  .inventory-card {
+    padding-left: 14px;
+  }
+
+  .inventory-card > .remove-inventory-material {
+    position: static;
+    justify-self: start;
+  }
+
+  .inventory-search-results button {
+    display: grid;
+  }
+
+  .stock-table-wrap {
+    max-height: 64dvh;
+  }
+
+  .gantt-zoom-controls {
+    gap: 6px;
+  }
+
+  .calendar-view-toggle {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .gantt-zoom-controls .calendar-view-toggle .secondary-button {
+    flex: 1 0 112px;
+  }
+
+  .gantt-board {
+    max-height: 68dvh;
+  }
+
+  .agenda-grid {
+    --agenda-time-width: 72px;
+  }
+
+  .machine-grid {
+    --machine-axis-width: 96px;
+  }
+
+  .calendar-tooltip {
+    max-width: calc(100vw - 24px);
   }
 }
