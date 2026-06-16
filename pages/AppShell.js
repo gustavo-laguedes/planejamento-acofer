@@ -8,6 +8,7 @@ import { ImportHistoryPage } from './ImportHistoryPage.js';
 import { TrackingPage } from './TrackingPage.js';
 import { AuditLogPage } from './AuditLogPage.js';
 import { getCurrentUser } from '../shared/api.js';
+import { internalLoadingHtml } from '../shared/InternalLoading.js';
 import { defaultTabForUser, visibleTabsForUser } from '../shared/rbac.js';
 
 const pages = {
@@ -43,8 +44,11 @@ export function AppShell() {
       activeTab = tab;
       renderPage();
     }, tabs));
-    main.innerHTML = '';
-    main.appendChild(pages[activeTab]());
+    main.innerHTML = internalLoadingHtml('Carregando pagina...');
+    requestAnimationFrame(() => {
+      main.innerHTML = '';
+      main.appendChild(pages[activeTab]());
+    });
   }
 
   shell.appendChild(Topbar());

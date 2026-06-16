@@ -2,6 +2,7 @@ import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
 import { InternalTabs } from '../shared/InternalTabs.js';
 import { CodeChipsInput } from '../shared/CodeChipsInput.js';
+import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
 
 const registrationTabs = [
@@ -54,9 +55,15 @@ export function RegistrationsPage() {
 
   async function render() {
     renderTabs();
-    if (activeTab === 'locations') return renderLocations();
-    if (activeTab === 'machines') return renderMachines();
-    return renderMaterials();
+    setInternalLoading(target, 'Carregando cadastros...');
+    try {
+      if (activeTab === 'locations') return await renderLocations();
+      if (activeTab === 'machines') return await renderMachines();
+      return await renderMaterials();
+    } catch (error) {
+      setInternalError(target, error.message || 'Nao foi possivel carregar os cadastros.');
+      throw error;
+    }
   }
 
   async function renderLocations() {

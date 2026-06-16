@@ -3,6 +3,7 @@ import { getCurrentUser } from '../shared/api.js';
 import { CalendarTimeline } from '../shared/CalendarTimeline.js';
 import { DataTable } from '../shared/DataTable.js';
 import { InternalTabs } from '../shared/InternalTabs.js';
+import { createOperationOverlay, setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
 
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
@@ -341,9 +342,42 @@ export function PlanningPage() {
   let hasPendingSimulationChanges = false;
   let autosaveTimer = null;
   let recalculationTimer = null;
+  let operationLoadingCount = 0;
+  let operationOverlay = null;
 
   function toast(error) {
     window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message || error }));
+  }
+
+  function setOperationLoading(active, text = 'Atualizando calendario...') {
+    const resultsTarget = target.querySelector('.planning-results:not([hidden])');
+    const loadingHost = resultsTarget || target.querySelector('.planning-builder-panel') || target;
+    if (!loadingHost) return;
+    loadingHost.classList.add('operation-loading-host');
+    if (active) {
+      operationLoadingCount += 1;
+      if (!operationOverlay) {
+        operationOverlay = createOperationOverlay(text);
+        loadingHost.appendChild(operationOverlay);
+      } else {
+        operationOverlay.querySelector('p').textContent = text;
+      }
+      return;
+    }
+    operationLoadingCount = Math.max(operationLoadingCount - 1, 0);
+    if (operationLoadingCount === 0 && operationOverlay) {
+      operationOverlay.remove();
+      operationOverlay = null;
+    }
+  }
+
+  async function withOperationLoading(text, action) {
+    setOperationLoading(true, text);
+    try {
+      return await action();
+    } finally {
+      setOperationLoading(false);
+    }
   }
 
   function normalizePlanningPayload(sourcePayload = payload(), planningCode = draft.planningCode) {
@@ -1315,7 +1349,7 @@ export function PlanningPage() {
         return;
       }
       clearTimeout(recalculationTimer);
-      recalculationTimer = setTimeout(() => simulateCurrent().catch(toast), 250);
+      recalculationTimer = setTimeout(() => withOperationLoading('Atualizando calendario...', simulateCurrent).catch(toast), 250);
     }
 
     function updateDraftFromGeneral() {
@@ -1520,7 +1554,7 @@ export function PlanningPage() {
     form.addEventListener('submit', async event => {
       event.preventDefault();
       try {
-        await simulateCurrent();
+        await withOperationLoading('Simulando planejamento...', simulateCurrent);
       } catch (error) {
         toast(error);
       }
@@ -1542,7 +1576,7 @@ export function PlanningPage() {
       }
       saveDraftNow();
       try {
-        await simulateCurrent();
+        await withOperationLoading('Recalculando producao...', simulateCurrent);
       } catch (error) {
         toast(error);
       }
@@ -1565,7 +1599,7 @@ export function PlanningPage() {
       }
       saveDraftNow();
       try {
-        await simulateCurrent();
+        await withOperationLoading('Atualizando calendario...', simulateCurrent);
       } catch (error) {
         toast(error);
       }
@@ -1594,7 +1628,7 @@ export function PlanningPage() {
       });
       saveDraftNow();
       try {
-        await simulateCurrent();
+        await withOperationLoading('Aplicando alteracao...', simulateCurrent);
       } catch (error) {
         toast(error);
       }
@@ -1615,7 +1649,7 @@ export function PlanningPage() {
       });
       saveDraftNow();
       try {
-        await simulateCurrent();
+        await withOperationLoading('Recalculando producao...', simulateCurrent);
       } catch (error) {
         toast(error);
       }
@@ -1628,7 +1662,7 @@ export function PlanningPage() {
         .filter(split => String(split.operationId) !== operationId);
       saveDraftNow();
       try {
-        await simulateCurrent();
+        await withOperationLoading('Atualizando fluxo produtivo...', simulateCurrent);
       } catch (error) {
         toast(error);
       }
@@ -1637,7 +1671,7 @@ export function PlanningPage() {
     form.elements.save?.addEventListener('click', async () => {
       if (!canWritePlanning) return;
       try {
-        const simulation = await simulateCurrent();
+        const simulation = await withOperationLoading('Recalculando producao...', simulateCurrent);
         if (!simulation) return;
         draft.planningCode = draft.planningCode || generatePlanningCode(draft.productions.length);
         lastPayload = normalizePlanningPayload(lastPayload || payload(), draft.planningCode);
@@ -1719,8 +1753,14 @@ export function PlanningPage() {
 
   async function render() {
     renderTabs();
-    if (activeTab === 'history') return renderHistoryTab();
-    return renderSimulationTab();
+    setInternalLoading(target, activeTab === 'history' ? 'Carregando historico...' : 'Carregando planejamento...');
+    try {
+      if (activeTab === 'history') return await renderHistoryTab();
+      return await renderSimulationTab();
+    } catch (error) {
+      setInternalError(target, error.message || 'Nao foi possivel carregar o planejamento.');
+      throw error;
+    }
   }
 
   render().catch(toast);

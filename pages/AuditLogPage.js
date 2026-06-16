@@ -1,5 +1,6 @@
 import { api } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
+import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -49,14 +50,16 @@ export function AuditLogPage() {
   const target = page.querySelector('.table-target');
 
   async function load() {
+    setInternalLoading(target, 'Carregando log...');
     const params = new URLSearchParams();
     if (form.elements.startDate.value) params.set('startDate', form.elements.startDate.value);
     if (form.elements.endDate.value) params.set('endDate', form.elements.endDate.value);
     if (form.elements.user.value.trim()) params.set('user', form.elements.user.value.trim());
 
-    const rows = await api(`/audit${params.toString() ? `?${params}` : ''}`);
-    target.innerHTML = '';
-    target.appendChild(DataTable({
+    try {
+      const rows = await api(`/audit${params.toString() ? `?${params}` : ''}`);
+      target.innerHTML = '';
+      target.appendChild(DataTable({
       columns: [
         { label: 'Data/Hora', render: row => formatDateTime(row.occurred_at), sortValue: row => row.occurred_at },
         { label: 'Usu&aacute;rio', render: row => escapeHtml(row.user_name || '-') },
@@ -67,7 +70,11 @@ export function AuditLogPage() {
       ],
       rows,
       emptyText: 'Nenhum registro de auditoria encontrado.'
-    }));
+      }));
+    } catch (error) {
+      setInternalError(target, error.message || 'Nao foi possivel carregar o log.');
+      throw error;
+    }
   }
 
   form.addEventListener('submit', event => {

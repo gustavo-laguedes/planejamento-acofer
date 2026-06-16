@@ -2,6 +2,7 @@ import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
 import { InternalTabs } from '../shared/InternalTabs.js';
 import { UploadCsvButton } from '../shared/UploadCsvButton.js';
+import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
 
 const tabs = [
@@ -869,9 +870,15 @@ export function ImportHistoryPage() {
 
   async function render() {
     renderTabs();
-    if (activeTab === 'nasajon') return renderNasajon();
-    if (activeTab === 'inventory') return renderInventory();
-    return renderProductionLaunch();
+    setInternalLoading(target, 'Carregando lancamentos...');
+    try {
+      if (activeTab === 'nasajon') return await renderNasajon();
+      if (activeTab === 'inventory') return await renderInventory();
+      return await renderProductionLaunch();
+    } catch (error) {
+      setInternalError(target, error.message || 'Nao foi possivel carregar os lancamentos.');
+      throw error;
+    }
   }
 
   render().catch(toast);

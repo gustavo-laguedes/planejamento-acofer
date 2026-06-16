@@ -1,5 +1,6 @@
 import { api } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
+import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 
 const DATE_TIME_FORMAT = new Intl.DateTimeFormat('pt-BR', {
   timeZone: 'America/Sao_Paulo',
@@ -130,15 +131,21 @@ export function TrackingPage() {
   }
 
   async function load() {
-    const tracking = await api(`/actuals/tracking?${queryString()}`);
-    summaryGrid.innerHTML = `
+    setInternalLoading(tableTarget, 'Carregando acompanhamento...');
+    try {
+      const tracking = await api(`/actuals/tracking?${queryString()}`);
+      summaryGrid.innerHTML = `
       <article class="metric-card"><span>Planejada total</span><strong>${formatNumber(tracking.summary.planned_total)}</strong></article>
       <article class="metric-card"><span>Realizada total</span><strong>${formatNumber(tracking.summary.actual_total)}</strong></article>
       <article class="metric-card"><span>Aderência</span><strong>${formatPercent(tracking.summary.adherence_percent)}</strong></article>
       <article class="metric-card"><span>Em aberto</span><strong>${formatNumber(tracking.summary.open_items)}</strong></article>
     `;
-    tableTarget.innerHTML = '';
-    tableTarget.appendChild(DataTable({ columns, rows: tracking.rows }));
+      tableTarget.innerHTML = '';
+      tableTarget.appendChild(DataTable({ columns, rows: tracking.rows }));
+    } catch (error) {
+      setInternalError(tableTarget, error.message || 'Nao foi possivel carregar o acompanhamento.');
+      throw error;
+    }
   }
 
   form.addEventListener('submit', event => {

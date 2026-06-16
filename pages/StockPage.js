@@ -1,6 +1,7 @@
 import { api } from '../shared/api.js';
 import { getCurrentUser } from '../shared/api.js';
 import { nextSortDirection, sortTableRows } from '../shared/DataTable.js';
+import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
 
 function escapeHtml(value) {
@@ -192,9 +193,15 @@ export function StockPage() {
   }
 
   async function load() {
-    overview = await api('/stock/materials-overview');
-    renderSummary();
-    renderTable();
+    setInternalLoading(tableTarget, 'Carregando estoque...');
+    try {
+      overview = await api('/stock/materials-overview');
+      renderSummary();
+      renderTable();
+    } catch (error) {
+      setInternalError(tableTarget, error.message || 'Nao foi possivel carregar o estoque.');
+      throw error;
+    }
   }
 
   filters.addEventListener('submit', event => {

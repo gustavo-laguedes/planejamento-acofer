@@ -1248,12 +1248,63 @@ function productionEntries(payload, context) {
   }).filter(production => production.plannedQty > 0);
 }
 
+function rootSplitForProduction(payload, production) {
+  const rootOperationId = `${production.productionIndex}:${production.material.id}`;
+  return splitEntries(payload).find(split =>
+    (String(split.operationId || '') === rootOperationId
+      || (
+        String(split.materialId || '') === String(production.material.id)
+        && Number(split.productionIndex || 0) === Number(production.productionIndex || 0)
+      ))
+    && Array.isArray(split.parts)
+    && split.parts.length
+  ) || null;
+}
+
+function expandRootSplitProductions(payload, productions) {
+  const rootSplitIds = new Set();
+  const expanded = [];
+  for (const production of productions) {
+    const split = rootSplitForProduction(payload, production);
+    if (!split) {
+      expanded.push(production);
+      continue;
+    }
+    const rootOperationId = `${production.productionIndex}:${production.material.id}`;
+    rootSplitIds.add(String(split.operationId || rootOperationId));
+    rootSplitIds.add(rootOperationId);
+    split.parts.forEach((part, partIndex) => {
+      expanded.push({
+        ...production,
+        plannedQty: toNumber(part.quantity),
+        machineName: part.machineName || production.machineName,
+        peopleCount: Number(part.peopleCount || production.peopleCount || 0),
+        productionModelName: part.productionModelName || production.productionModelName,
+        desiredDate: part.startDate || production.desiredDate || null,
+        splitStartDate: part.startDate || null,
+        splitStartTime: part.startTime || null,
+        originalProductionIndex: production.productionIndex,
+        splitPartNumber: partIndex + 1,
+        splitParentOperationId: `${production.productionIndex}:${production.material.id}`,
+        productionIndex: Number(`${production.productionIndex}.${String(partIndex + 1).padStart(2, '0')}`),
+        productionTitle: `Producao ${production.productionIndex + 1} - Parte ${partIndex + 1}`
+      });
+    });
+  }
+  const operationSplits = splitEntries(payload)
+    .filter(split => !rootSplitIds.has(String(split.operationId || '')))
+    .filter(split => !rootSplitIds.has(`${Number(split.productionIndex || 0)}:${split.materialId}`));
+  return { productions: expanded.filter(production => production.plannedQty > 0), operationSplits };
+}
+
 export function buildPlan(payload, context) {
   if (!Array.isArray(payload.productions) && !Array.isArray(payload.shifts) && !payload.planningStartDate && !payload.planningEndDate) {
     return buildSinglePlan(payload, context);
   }
 
-  const productions = productionEntries(payload, context);
+  const sourceProductions = productionEntries(payload, context);
+  const expanded = expandRootSplitProductions(payload, sourceProductions);
+  const productions = expanded.productions;
   if (!productions.length) {
     const error = new Error('Informe pelo menos uma produção com quantidade maior que zero.');
     error.status = 400;
@@ -1263,16 +1314,30 @@ export function buildPlan(payload, context) {
   const operationOverrides = { ...(payload.operationOverrides || {}) };
   for (const production of productions) {
     if (!production.productionModelName) continue;
-    operationOverrides[String(production.material.id)] = {
-      ...(operationOverrides[String(production.material.id)] || {}),
-      productionModelName: production.productionModelName
+    const scopedKey = `${production.productionIndex}:${production.material.id}`;
+    operationOverrides[scopedKey] = {
+      ...(operationOverrides[scopedKey] || {}),
+      productionModelName: operationOverrides[scopedKey]?.productionModelName || production.productionModelName
     };
+    if (production.splitStartDate) {
+      operationOverrides[scopedKey] = {
+        ...(operationOverrides[scopedKey] || {}),
+        startDate: production.splitStartDate,
+        startTime: production.splitStartTime
+      };
+    }
+    if (productions.length === 1) {
+      operationOverrides[String(production.material.id)] = {
+        ...(operationOverrides[String(production.material.id)] || {}),
+        productionModelName: operationOverrides[String(production.material.id)]?.productionModelName || production.productionModelName
+      };
+    }
   }
 
   const stockLedger = makeStockLedger(context);
   const forcedStockOnly = stockOnlySet(payload);
   const builtProductions = productions.map(production => {
-    const productionTitle = `Produção ${production.productionIndex + 1}`;
+    const productionTitle = production.productionTitle || `Produção ${production.productionIndex + 1}`;
     const built = buildAggregatedOperations({
       material: production.material,
       quantity: production.plannedQty,
@@ -1303,6 +1368,12 @@ export function buildPlan(payload, context) {
       tree,
       operations: applyProductionTransports(built.operations, production, context).map(operation => ({
         ...operation,
+        splitParentOperationId: production.splitParentOperationId && String(operation.materialId) === String(production.material.id)
+          ? production.splitParentOperationId
+          : operation.splitParentOperationId,
+        splitPartNumber: production.splitParentOperationId && String(operation.materialId) === String(production.material.id)
+          ? production.splitPartNumber
+          : operation.splitPartNumber,
         productionOrder: operation.productionOrder + (production.productionIndex * 1000)
       }))
     };
@@ -1319,7 +1390,7 @@ export function buildPlan(payload, context) {
     lunchHours: payload.lunchHours,
     shifts: payload.shifts,
     operationOverrides,
-    operationSplits: payload.operationSplits
+    operationSplits: expanded.operationSplits
   });
   const firstMaterial = productions[0].material;
   const days = buildDays(operations, firstMaterial.primary_unit);
@@ -1356,7 +1427,7 @@ export function buildPlan(payload, context) {
       productions: productions.map(production => ({
         productionIndex: production.productionIndex,
         productionKey: `production-${production.productionIndex}`,
-        title: `Produção ${production.productionIndex + 1}`,
+        title: production.productionTitle || `Produção ${production.productionIndex + 1}`,
         materialId: production.material.id,
         materialName: production.material.name,
         materialCode: materialCode(production.material),

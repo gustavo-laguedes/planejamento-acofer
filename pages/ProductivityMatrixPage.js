@@ -1,5 +1,6 @@
 import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
+import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
 
 function chips(values = [], emptyText = 'Sem informação') {
@@ -162,9 +163,15 @@ export function ProductivityMatrixPage() {
   }
 
   async function load() {
-    rows = await api(`/productivity?search=${encodeURIComponent(search.value)}`);
-    tableTarget.innerHTML = '';
-    tableTarget.appendChild(DataTable({ columns, rows }));
+    setInternalLoading(tableTarget, 'Carregando matriz...');
+    try {
+      rows = await api(`/productivity?search=${encodeURIComponent(search.value)}`);
+      tableTarget.innerHTML = '';
+      tableTarget.appendChild(DataTable({ columns, rows }));
+    } catch (error) {
+      setInternalError(tableTarget, error.message || 'Nao foi possivel carregar a matriz.');
+      throw error;
+    }
   }
 
   form.elements.materialId.addEventListener('change', updateMaterialPreview);
