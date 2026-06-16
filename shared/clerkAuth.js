@@ -22,6 +22,18 @@ function authLog(message, details) {
   console.info(`${AUTH_DEBUG_PREFIX} ${message}`, details);
 }
 
+function inviteLog(message, details) {
+  if (details === undefined) {
+    console.info(`[invite] ${message}`);
+    return;
+  }
+  console.info(`[invite] ${message}`, details);
+}
+
+function inviteError(message, details) {
+  console.error(`[invite] ${message}`, details);
+}
+
 function friendlyAuthError(error, fallback) {
   return error?.errors?.[0]?.longMessage
     || error?.errors?.[0]?.message
@@ -172,7 +184,29 @@ export async function signInWithPassword(identifier, password) {
 }
 
 function normalizeSignUpResult(result, fallback) {
-  return result?.signUp || result?.createdSignUp || result || fallback || null;
+  return result?.signUp || result?.createdSignUp || result?.resource || result || fallback || null;
+}
+
+function signUpSnapshot(signUp) {
+  return {
+    status: signUp?.status || null,
+    createdSessionId: Boolean(signUp?.createdSessionId || signUp?.created_session_id),
+    missingFields: signUp?.missingFields || signUp?.missing_fields || [],
+    requiredFields: signUp?.requiredFields || signUp?.required_fields || [],
+    unverifiedFields: signUp?.unverifiedFields || signUp?.unverified_fields || []
+  };
+}
+
+async function runSignUpStep(label, action, fallback) {
+  const result = await withTimeout(
+    action(),
+    SIGN_IN_TIMEOUT_MS,
+    `Tempo esgotado ao ${label}.`
+  );
+  if (result?.error) throw result.error;
+  const signUp = normalizeSignUpResult(result, fallback);
+  inviteLog(label, signUpSnapshot(signUp));
+  return signUp;
 }
 
 export async function acceptInvitationWithPassword(ticket, password) {
@@ -182,49 +216,53 @@ export async function acceptInvitationWithPassword(ticket, password) {
     throw new Error('Fluxo de cadastro do Clerk indisponivel.');
   }
 
-  authLog('aceitando convite Clerk');
+  inviteLog('ticket presente', { present: Boolean(ticket) });
   let signUp;
   try {
     if (typeof signUpApi.ticket === 'function') {
-      const result = await withTimeout(
-        signUpApi.ticket({ ticket, password }),
-        SIGN_IN_TIMEOUT_MS,
-        'Tempo esgotado ao aceitar convite.'
+      signUp = await runSignUpStep(
+        'ticket aceito via signUp.ticket',
+        () => signUpApi.ticket({ ticket }),
+        signUpApi
       );
-      if (result?.error) throw result.error;
-      signUp = normalizeSignUpResult(result, signUpApi);
     } else if (typeof signUpApi.create === 'function') {
-      const result = await withTimeout(
-        signUpApi.create({ strategy: 'ticket', ticket, password }),
-        SIGN_IN_TIMEOUT_MS,
-        'Tempo esgotado ao aceitar convite.'
+      signUp = await runSignUpStep(
+        'ticket aceito via signUp.create',
+        () => signUpApi.create({ strategy: 'ticket', ticket }),
+        signUpApi
       );
-      if (result?.error) throw result.error;
-      signUp = normalizeSignUpResult(result, signUpApi);
     } else {
       throw new Error('Fluxo de convite do Clerk indisponivel.');
     }
 
-    if (signUp?.status !== 'complete' && typeof signUp?.update === 'function') {
-      const result = await withTimeout(
-        signUp.update({ password }),
-        SIGN_IN_TIMEOUT_MS,
-        'Tempo esgotado ao definir senha.'
+    const update = typeof signUp?.update === 'function'
+      ? params => signUp.update(params)
+      : typeof signUpApi.update === 'function'
+        ? params => signUpApi.update(params)
+        : null;
+
+    if (signUp?.status !== 'complete' && update) {
+      signUp = await runSignUpStep(
+        'senha definida',
+        () => update({ password }),
+        signUp
       );
-      if (result?.error) throw result.error;
-      signUp = normalizeSignUpResult(result, signUp);
     }
   } catch (error) {
+    inviteError('erro bruto do Clerk ao aceitar convite', error);
     throw new Error(friendlyAuthError(error, 'Nao foi possivel aceitar o convite. Verifique o link recebido.'));
   }
 
-  if (signUp?.status !== 'complete' || !signUp.createdSessionId) {
-    throw new Error('Convite aceito, mas o cadastro ainda nao foi concluido no Clerk.');
+  const sessionId = signUp?.createdSessionId || signUp?.created_session_id;
+  inviteLog('status final antes de ativar sessao', signUpSnapshot(signUp));
+  if (signUp?.status !== 'complete' || !sessionId) {
+    inviteError('cadastro nao concluido pelo Clerk', signUpSnapshot(signUp));
+    throw new Error('Nao foi possivel concluir o convite no Clerk. Verifique se a senha atende aos requisitos e tente novamente.');
   }
 
-  authLog('ativando sessao do convite Clerk');
+  inviteLog('ativando sessao', { createdSessionId: Boolean(sessionId) });
   await withTimeout(
-    clerk.setActive({ session: signUp.createdSessionId }),
+    clerk.setActive({ session: sessionId }),
     SET_ACTIVE_TIMEOUT_MS,
     'Tempo esgotado ao ativar a sessao.'
   );
