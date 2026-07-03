@@ -1,5 +1,6 @@
 import { acceptInvitationWithPassword, requestPasswordReset, signInWithPassword } from '../shared/clerkAuth.js';
 import { api, me } from '../shared/api.js';
+import { InstitutionalFooter } from '../shared/InstitutionalFooter.js';
 
 export function LoginPage(initialError = '') {
   const invitationTicket = new URLSearchParams(window.location.search).get('__clerk_ticket') || '';
@@ -44,6 +45,7 @@ export function LoginPage(initialError = '') {
       </form>
     </div>
   `;
+  page.querySelector('.login-shell').appendChild(InstitutionalFooter());
 
   page.querySelector('form').addEventListener('submit', async event => {
     event.preventDefault();
@@ -71,6 +73,7 @@ export function LoginPage(initialError = '') {
           String(form.get('password') || '')
         );
       }
+      await api('/auth/session/activate', { method: 'POST', redirectOnAuthError: false });
       await me();
       await api('/auth/events/login', { method: 'POST' }).catch(() => {});
       window.dispatchEvent(new CustomEvent('planejamento:navigate'));

@@ -14,7 +14,7 @@ import locationsRoutes from './routes/locations.routes.js';
 import machinesRoutes from './routes/machines.routes.js';
 import materialsRoutes from './routes/materials.routes.js';
 import auditRoutes from './routes/audit.routes.js';
-import { requireAuth, requirePermission } from './routes/middleware.js';
+import { requireAnyPermission, requireAuth, requirePermission } from './routes/middleware.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,11 +35,25 @@ function applyCors(req, res, next) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-App-Session-Id');
   }
 
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   return next();
+}
+
+function requireStockRead(req, res, next) {
+  if (req.method === 'GET' && req.path === '/materials-overview') {
+    return requireAnyPermission(['stock:read', 'commercial:calendar'])(req, res, next);
+  }
+  return requirePermission('stock:read')(req, res, next);
+}
+
+function requireProductivityRead(req, res, next) {
+  if (req.method === 'GET' && req.path === '/') {
+    return requireAnyPermission(['matrix:read', 'commercial:calendar'])(req, res, next);
+  }
+  return requirePermission('matrix:read')(req, res, next);
 }
 
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -53,8 +67,8 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/imports', requireAuth, importRoutes);
-app.use('/api/stock', requireAuth, requirePermission('stock:read'), stockRoutes);
-app.use('/api/productivity', requireAuth, requirePermission('matrix:read'), productivityRoutes);
+app.use('/api/stock', requireAuth, requireStockRead, stockRoutes);
+app.use('/api/productivity', requireAuth, requireProductivityRead, productivityRoutes);
 app.use('/api/planning', requireAuth, requirePermission('planning:read'), planningRoutes);
 app.use('/api/actuals', requireAuth, actualsRoutes);
 app.use('/api/locations', requireAuth, requirePermission('registrations:read'), locationsRoutes);

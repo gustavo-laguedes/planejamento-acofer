@@ -1,15 +1,8 @@
 import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
-import { InternalTabs } from '../shared/InternalTabs.js';
 import { UploadCsvButton } from '../shared/UploadCsvButton.js';
 import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
-
-const tabs = [
-  { id: 'nasajon', label: 'Importação Nasajon' },
-  { id: 'inventory', label: 'Contagem de Inventário' },
-  { id: 'production', label: 'Lançamento de Produção' }
-];
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -92,28 +85,19 @@ export function ImportHistoryPage() {
   const canReadInventory = canAccess(user, 'inventory:read');
   const canWriteInventory = canAccess(user, 'inventory:write');
   const canWriteProduction = canAccess(user, 'launches:write');
-  const visibleLaunchTabs = tabs.filter(tab => (
-    (tab.id === 'nasajon' && (canReadLog || canImportCsv))
-    || (tab.id === 'inventory' && canReadInventory)
-    || tab.id === 'production'
-  ));
   const page = document.createElement('section');
   page.className = 'stack launches-page';
   page.innerHTML = `
     <div class="page-header">
       <div>
-        <h1>Lançamentos</h1>
-        <p>Importe saldos Nasajon, registre inventário físico e lance produção realizada.</p>
+        <h1>CSV / Inventário</h1>
+        <p>Importações, inventário e conferências de estoque.</p>
       </div>
     </div>
-    <div class="internal-tabs-target"></div>
     <div class="launches-target"></div>
   `;
 
-  const tabsTarget = page.querySelector('.internal-tabs-target');
   const target = page.querySelector('.launches-target');
-  let activeTab = sessionStorage.getItem('planejamento_launch_tab') || visibleLaunchTabs[0]?.id || 'production';
-  if (!visibleLaunchTabs.some(tab => tab.id === activeTab)) activeTab = visibleLaunchTabs[0]?.id || 'production';
   let materials = [];
   let machines = [];
   let matrix = [];
@@ -128,15 +112,6 @@ export function ImportHistoryPage() {
     window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message || error }));
   }
 
-  function renderTabs() {
-    tabsTarget.innerHTML = '';
-    tabsTarget.appendChild(InternalTabs(visibleLaunchTabs, activeTab, tab => {
-      activeTab = tab;
-      sessionStorage.setItem('planejamento_launch_tab', activeTab);
-      render().catch(toast);
-    }));
-  }
-
   async function loadLookups() {
     const lookups = await api('/actuals/lookups');
     materials = lookups.materials || [];
@@ -144,25 +119,21 @@ export function ImportHistoryPage() {
     matrix = lookups.matrix || [];
   }
 
-  async function renderNasajon() {
-    target.innerHTML = `
-      <div class="panel launches-wide-panel">
-        <div class="section-heading">
-          <h2>Importação Nasajon</h2>
-          <div class="csv-target"></div>
-        </div>
-        <div class="table-target"></div>
+  async function renderImportHistory(container) {
+    container.innerHTML = `
+      <div class="section-heading">
+        <h2>IMPORTAÇÕES</h2>
+        ${canImportCsv ? '<div class="csv-target"></div>' : ''}
       </div>
+      <div class="table-target"></div>
     `;
-    if (canImportCsv) {
-      target.querySelector('.csv-target').appendChild(UploadCsvButton({ onImported: () => renderNasajon().catch(toast) }));
-    }
+    container.querySelector('.csv-target')?.appendChild(UploadCsvButton({ onImported: () => render().catch(toast) }));
     if (!canReadLog) {
-      target.querySelector('.table-target').innerHTML = '<div class="empty-state">Log de importacoes restrito ao Diretor e Super Admin.</div>';
+      container.querySelector('.table-target').innerHTML = '<div class="empty-state">Log de importacoes restrito ao Diretor e Super Admin.</div>';
       return;
     }
     const rows = await api('/imports');
-    target.querySelector('.table-target').appendChild(DataTable({
+    container.querySelector('.table-target').appendChild(DataTable({
       columns: [
         { label: 'Data', render: row => row.created_at ? new Date(row.created_at).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '', sortValue: row => row.created_at },
         { label: 'Hora', render: row => row.created_at ? new Date(row.created_at).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '', sortValue: row => row.created_at },
@@ -175,19 +146,17 @@ export function ImportHistoryPage() {
     }));
   }
 
-  async function renderInventory() {
-    target.innerHTML = `
-      <div class="panel launches-wide-panel">
-        <div class="section-heading">
-          <h2>Contagem de Inventário</h2>
-          ${canWriteInventory ? '<button class="primary-button start-inventory" type="button">Realizar inventário</button>' : ''}
-        </div>
-        <div class="table-target"></div>
+  async function renderInventory(container) {
+    container.innerHTML = `
+      <div class="section-heading">
+        <h2>Inventário</h2>
+        ${canWriteInventory ? '<button class="primary-button start-inventory" type="button">Realizar inventário</button>' : ''}
       </div>
+      <div class="table-target"></div>
     `;
-    target.querySelector('.start-inventory')?.addEventListener('click', () => openInventoryModal().catch(toast));
+    container.querySelector('.start-inventory')?.addEventListener('click', () => openInventoryModal().catch(toast));
     const rows = await api('/stock/inventory/counts');
-    const tableTarget = target.querySelector('.table-target');
+    const tableTarget = container.querySelector('.table-target');
     tableTarget.appendChild(DataTable({
       columns: [
         { label: 'Data/Hora', render: row => formatDate(row.created_at), sortValue: row => row.created_at },
@@ -403,7 +372,7 @@ export function ImportHistoryPage() {
           : 'Inventário salvo com sucesso.';
         window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: message }));
         backdrop.remove();
-        await renderInventory();
+        await render();
       } catch (error) {
         savingInventory = false;
         button.disabled = false;
@@ -421,6 +390,19 @@ export function ImportHistoryPage() {
       .map(material => `<option value="${material.id}" ${String(material.id) === String(selectedId) ? 'selected' : ''}>${escapeHtml(material.name)}</option>`)
       .join('');
     return `${includeBlank ? '<option value="">Selecione</option>' : ''}${options}`;
+  }
+
+  function materialSearchLabel(material) {
+    if (!material) return '';
+    const code = firstCode(material);
+    return code ? `${material.name} — ${code}` : material.name;
+  }
+
+  function materialMatchesSearch(material, searchValue) {
+    const normalized = String(searchValue || '').trim().toLowerCase();
+    if (!normalized) return true;
+    return [material.name, ...(material.codes || [])]
+      .some(value => String(value || '').toLowerCase().includes(normalized));
   }
 
   function machineOptions(selectedName = '') {
@@ -663,7 +645,13 @@ export function ImportHistoryPage() {
         <form class="production-realization-form">
           <div class="grid-form">
             <label>Data<input name="productionDate" type="date" required /></label>
-            <label>Material produzido<select name="materialId" required>${materialOptions(row?.material_id, !row)}</select></label>
+            <label>Material produzido
+              <div class="material-autocomplete production-material-autocomplete">
+                <input name="materialSearch" type="search" autocomplete="off" placeholder="Digite nome ou código" required />
+                <div class="material-suggestions" hidden></div>
+              </div>
+              <input name="materialId" type="hidden" />
+            </label>
             <label>Modelo de produção<select name="productionModelName" required></select></label>
             <label>Máquina<select name="machineName" required><option value="">Selecione um material</option></select></label>
             <label>Quantidade de pessoas<input name="peopleCount" type="number" min="1" /></label>
@@ -691,11 +679,44 @@ export function ImportHistoryPage() {
     const form = backdrop.querySelector('form');
     const linesTarget = backdrop.querySelector('.produced-lines-target');
     const inputsTarget = backdrop.querySelector('.consumed-inputs-target');
+    const materialSuggestions = backdrop.querySelector('.production-material-autocomplete .material-suggestions');
     let lines = row ? producedLots(row) : [{ quantity: '', secondaryQty: 0, primaryUnit: '', secondaryUnit: '', lot: '', benefitNumber: '' }];
     let consumedInputs = Array.isArray(row?.consumed_inputs) ? row.consumed_inputs.map(input => ({ ...input })) : [];
 
     function selectedProducedMaterial() {
       return materials.find(material => String(material.id) === String(form.elements.materialId.value));
+    }
+
+    function renderMaterialSuggestions() {
+      const searchValue = form.elements.materialSearch.value;
+      const matches = materials
+        .filter(material => material.active !== false && materialMatchesSearch(material, searchValue))
+        .slice(0, 12);
+      materialSuggestions.innerHTML = matches.length
+        ? matches.map(material => `
+          <button type="button" data-produced-material-id="${material.id}">
+            <strong>${escapeHtml(material.name)}</strong>
+            <span>${escapeHtml((material.codes || []).join(' | ') || 'Sem código')}</span>
+          </button>
+        `).join('')
+        : '<div class="material-suggestion-empty">Nenhum material encontrado.</div>';
+      materialSuggestions.hidden = false;
+    }
+
+    function refreshProducedMaterialDependencies() {
+      lines = collectLines();
+      consumedInputs = [];
+      updateModelOptions();
+      updateMachineLock();
+      renderLines();
+    }
+
+    function selectProducedMaterial(material) {
+      const previousId = form.elements.materialId.value;
+      form.elements.materialId.value = material?.id || '';
+      form.elements.materialSearch.value = materialSearchLabel(material);
+      materialSuggestions.hidden = true;
+      if (String(previousId || '') !== String(material?.id || '')) refreshProducedMaterialDependencies();
     }
 
     function collectConsumedInputs() {
@@ -805,6 +826,7 @@ export function ImportHistoryPage() {
       form.reset();
       form.elements.productionDate.value = todayBrazil();
       form.elements.materialId.value = '';
+      form.elements.materialSearch.value = '';
       lines = [{ quantity: '', secondaryQty: 0, primaryUnit: '', secondaryUnit: '', lot: '', benefitNumber: '' }];
       consumedInputs = [];
       updateModelOptions();
@@ -814,6 +836,9 @@ export function ImportHistoryPage() {
 
     form.elements.productionDate.value = row?.production_date ? String(row.production_date).slice(0, 10) : todayBrazil();
     form.elements.materialId.value = row?.material_id || '';
+    form.elements.materialSearch.value = materialSearchLabel(
+      materials.find(material => String(material.id) === String(row?.material_id || ''))
+    );
     form.elements.peopleCount.value = row?.people_count || '';
     form.elements.notes.value = row?.notes || '';
     updateModelOptions();
@@ -824,12 +849,35 @@ export function ImportHistoryPage() {
     backdrop.addEventListener('click', event => {
       if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
     });
-    form.elements.materialId.addEventListener('change', () => {
-      lines = collectLines();
-      consumedInputs = [];
-      updateModelOptions();
-      updateMachineLock();
-      renderLines();
+    form.elements.materialSearch.addEventListener('input', () => {
+      const exactValue = form.elements.materialSearch.value.trim().toLowerCase();
+      const exactMaterial = materials.find(material =>
+        material.active !== false
+        && (materialSearchLabel(material).toLowerCase() === exactValue
+          || material.name.toLowerCase() === exactValue
+          || (material.codes || []).some(code => String(code).toLowerCase() === exactValue))
+      );
+      if (exactMaterial) {
+        selectProducedMaterial(exactMaterial);
+        return;
+      }
+      form.elements.materialId.value = '';
+      renderMaterialSuggestions();
+    });
+    form.elements.materialSearch.addEventListener('focus', renderMaterialSuggestions);
+    form.elements.materialSearch.addEventListener('blur', () => {
+      setTimeout(() => {
+        materialSuggestions.hidden = true;
+        const selected = selectedProducedMaterial();
+        if (selected) form.elements.materialSearch.value = materialSearchLabel(selected);
+      }, 120);
+    });
+    materialSuggestions.addEventListener('mousedown', event => {
+      const button = event.target.closest('[data-produced-material-id]');
+      if (!button) return;
+      event.preventDefault();
+      const material = materials.find(item => String(item.id) === String(button.dataset.producedMaterialId));
+      selectProducedMaterial(material);
     });
     form.elements.productionModelName.addEventListener('change', renderConsumedInputs);
     inputsTarget.addEventListener('input', collectConsumedInputs);
@@ -886,14 +934,27 @@ export function ImportHistoryPage() {
   }
 
   async function render() {
-    renderTabs();
-    setInternalLoading(target, 'Carregando lancamentos...');
+    setInternalLoading(target, 'Carregando CSV / Inventário...');
     try {
-      if (activeTab === 'nasajon') return await renderNasajon();
-      if (activeTab === 'inventory') return await renderInventory();
-      return await renderProductionLaunch();
+      const sections = [
+        (canReadLog || canImportCsv) ? { id: 'history', render: renderImportHistory } : null,
+        canReadInventory ? { id: 'inventory', render: renderInventory } : null
+      ].filter(Boolean);
+
+      if (!sections.length) {
+        target.innerHTML = '<div class="empty-state">Nenhuma area de CSV / inventário disponivel para este perfil.</div>';
+        return;
+      }
+
+      target.innerHTML = sections.map(section => `
+        <div class="panel launches-wide-panel${section.id === 'inventory' ? ' inventory-history-panel' : ''}" data-launch-section="${section.id}"></div>
+      `).join('');
+
+      for (const section of sections) {
+        await section.render(target.querySelector(`[data-launch-section="${section.id}"]`));
+      }
     } catch (error) {
-      setInternalError(target, error.message || 'Nao foi possivel carregar os lancamentos.');
+      setInternalError(target, error.message || 'Nao foi possivel carregar CSV / inventário.');
       throw error;
     }
   }

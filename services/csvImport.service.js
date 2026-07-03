@@ -5,7 +5,8 @@ const NASAJON_COLUMNS = {
   establishment: 0,
   product_code: 1,
   fiscal_balance_unit: 9,
-  error_balance_unit: 12
+  error_balance_unit: 12,
+  sales_unit: 17
 };
 
 const INSERT_COLUMNS = [
@@ -67,7 +68,8 @@ function validateNasajonHeader(headers) {
     ['estabelecimento', NASAJON_COLUMNS.establishment],
     ['produto - codigo', NASAJON_COLUMNS.product_code],
     ['saldo fiscal (unidade padrao)', NASAJON_COLUMNS.fiscal_balance_unit],
-    ['saldo erros (unidade padrao)', NASAJON_COLUMNS.error_balance_unit]
+    ['saldo erros (unidade padrao)', NASAJON_COLUMNS.error_balance_unit],
+    ['vendas (unidade padrao)', NASAJON_COLUMNS.sales_unit]
   ];
 
   for (const [expected, index] of required) {
@@ -84,7 +86,8 @@ function normalizeRow(row, importId) {
     establishment: normalizeHeader(row[NASAJON_COLUMNS.establishment]),
     product_code: normalizeHeader(row[NASAJON_COLUMNS.product_code]),
     fiscal_balance_unit: toNumber(row[NASAJON_COLUMNS.fiscal_balance_unit]),
-    error_balance_unit: toNumber(row[NASAJON_COLUMNS.error_balance_unit])
+    error_balance_unit: toNumber(row[NASAJON_COLUMNS.error_balance_unit]),
+    sales_unit: toNumber(row[NASAJON_COLUMNS.sales_unit])
   };
 
   for (const column of INSERT_COLUMNS) {

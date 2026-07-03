@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { requireDb } from '../db.js';
 
 const SUPER_ADMIN_ROLE = 'Super Admin';
-const USER_ROLES = ['Super Admin', 'PCP', 'Gerente', 'Diretor', 'Operador', 'Visualizador'];
+const USER_ROLES = ['Super Admin', 'Diretor', 'Gerente', 'PCP', 'Operador', 'Comercial', 'Visualizador'];
 const USER_STATUSES = ['Ativo', 'Inativo'];
 
 let jwksCache = null;

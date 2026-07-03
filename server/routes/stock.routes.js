@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireDb } from '../db.js';
-import { businessDaysBetween } from '../../services/workingDays.service.js';
+import { businessDaysInclusive } from '../../services/workingDays.service.js';
 import { requirePermission } from './middleware.js';
 
 const router = Router();
@@ -33,25 +33,22 @@ function emptyCodeBreakdown(code, locations) {
   };
 }
 
-function salesProjection(material, currentBalance, balanceHistory) {
+function salesProjection(material, currentBalance, salesPeriodQty, businessDays) {
   if (material.permits_sales === false) {
-    return { salesPerDayQty: null, stockDurationDays: null, blocked: true };
+    return { salesPeriodQty, salesPerDayQty: null, stockDurationDays: null, blocked: true };
   }
-  if (!balanceHistory.current || !balanceHistory.previous) {
-    return { salesPerDayQty: 0, stockDurationDays: null, notEstimated: true };
-  }
-  const days = businessDaysBetween(balanceHistory.previous.created_at, balanceHistory.current.created_at);
-  if (days <= 0) return { salesPerDayQty: 0, stockDurationDays: null, notEstimated: true };
-  const diff = toNumber(balanceHistory.previous.total_locations_qty) - toNumber(balanceHistory.current.total_locations_qty);
-  const salesPerDayQty = Math.max(diff / days, 0);
+  const days = Number(businessDays || 0);
+  if (days <= 0) return { salesPeriodQty, salesPerDayQty: null, stockDurationDays: null, notEstimated: true };
+  const salesPerDayQty = Math.max(toNumber(salesPeriodQty) / days, 0);
   return {
+    salesPeriodQty,
     salesPerDayQty,
     stockDurationDays: salesPerDayQty > 0 ? currentBalance / salesPerDayQty : null,
     notEstimated: salesPerDayQty <= 0
   };
 }
 
-function summarizeMaterial(material, locations, stockRows, correctionRows, balanceHistory = {}) {
+function summarizeMaterial(material, locations, stockRows, correctionRows, businessDays = 0) {
   const codes = Array.isArray(material.codes) ? material.codes.map(String) : [];
   const codeSet = new Set(codes.map(normalizeText));
   const codeBreakdown = new Map(codes.map(code => [normalizeText(code), emptyCodeBreakdown(code, locations)]));
@@ -64,6 +61,7 @@ function summarizeMaterial(material, locations, stockRows, correctionRows, balan
   );
 
   let unmappedNasajonQty = 0;
+  let salesPeriodQty = 0;
 
   for (const row of stockRows) {
     const productCode = normalizeText(row.product_code);
@@ -76,6 +74,7 @@ function summarizeMaterial(material, locations, stockRows, correctionRows, balan
 
     const nasajonQty = toNumber(row.fiscal_balance_unit);
     const errorQty = toNumber(row.error_balance_unit);
+    salesPeriodQty += toNumber(row.sales_unit);
 
     const establishment = normalizeText(row.establishment);
     const location = locations.find(item => normalizeText(item.code) === establishment || normalizeText(item.name) === establishment);
@@ -93,7 +92,7 @@ function summarizeMaterial(material, locations, stockRows, correctionRows, balan
 
   const totalLocationsQty = Object.values(stockByLocation)
     .reduce((sum, location) => sum + toNumber(location.nasajonQty) + toNumber(location.errorQty), 0) + correctionQty;
-  const projection = salesProjection(material, totalLocationsQty, balanceHistory);
+  const projection = salesProjection(material, totalLocationsQty, salesPeriodQty, businessDays);
 
   return {
     material: {
@@ -109,6 +108,7 @@ function summarizeMaterial(material, locations, stockRows, correctionRows, balan
     totalLocationsQty,
     correctionQty,
     unmappedNasajonQty,
+    salesPeriodQty: projection.salesPeriodQty,
     salesPerDayQty: projection.salesPerDayQty,
     stockDurationDays: projection.stockDurationDays,
     salesBlocked: projection.blocked === true,
@@ -120,7 +120,7 @@ async function buildInventoryTemplate(db) {
   const [materials, locations, stockRows, adjustmentRows] = await Promise.all([
     db`SELECT id, name, codes, permits_sales, active FROM materials WHERE active = true ORDER BY name`,
     db`SELECT id, code, name, active FROM locations WHERE active = true ORDER BY code NULLS LAST, name`,
-    db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit FROM stock_snapshot`,
+    db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit, sales_unit FROM stock_snapshot`,
     db`
       SELECT DISTINCT ON (material_id, location_id)
              material_id, location_id, adjustment_qty, notes, updated_at
@@ -214,7 +214,7 @@ router.get('/summary', async (req, res, next) => {
 router.get('/materials-overview', async (req, res, next) => {
   try {
     const db = requireDb();
-    const [materials, locations, stockRows, correctionRows, lastImportRows, balanceRows] = await Promise.all([
+    const [materials, locations, stockRows, correctionRows, lastImportRows] = await Promise.all([
       db`
         SELECT id, name, codes, permits_sales, active
         FROM materials
@@ -228,7 +228,7 @@ router.get('/materials-overview', async (req, res, next) => {
         ORDER BY code NULLS LAST, name
       `,
       db`
-        SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit
+        SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit, sales_unit
         FROM stock_snapshot
       `,
       db`
@@ -238,22 +238,12 @@ router.get('/materials-overview', async (req, res, next) => {
         ORDER BY material_id, updated_at DESC, id DESC
       `,
       db`
-        SELECT id, filename, status, total_rows, finished_at, created_at
+        SELECT id, filename, status, total_rows, finished_at, created_at,
+               period_start, period_end, business_days
         FROM import_history
+        WHERE status = 'success'
         ORDER BY created_at DESC
         LIMIT 1
-      `,
-      db`
-        SELECT b.material_id, b.import_id, b.total_locations_qty, h.created_at
-        FROM stock_import_material_balances b
-        JOIN (
-          SELECT id, created_at
-          FROM import_history
-          WHERE status = 'success'
-          ORDER BY created_at DESC
-          LIMIT 2
-        ) h ON h.id = b.import_id
-        ORDER BY h.created_at DESC
       `
     ]);
 
@@ -263,29 +253,54 @@ router.get('/materials-overview', async (req, res, next) => {
       if (!correctionsByMaterial.has(key)) correctionsByMaterial.set(key, []);
       correctionsByMaterial.get(key).push(correction);
     }
-    const balancesByMaterial = new Map();
-    for (const balance of balanceRows) {
-      const key = String(balance.material_id);
-      if (!balancesByMaterial.has(key)) balancesByMaterial.set(key, []);
-      balancesByMaterial.get(key).push(balance);
-    }
+    const lastImport = lastImportRows[0] || null;
+    const businessDays = Number(lastImport?.business_days || 0);
 
     const rows = materials.map(material => summarizeMaterial(
       material,
       locations,
       stockRows,
       correctionsByMaterial.get(String(material.id)) || [],
-      {
-        current: balancesByMaterial.get(String(material.id))?.[0] || null,
-        previous: balancesByMaterial.get(String(material.id))?.[1] || null
-      }
+      businessDays
     ));
 
     res.json({
       locations,
       rows,
-      lastImport: lastImportRows[0] || null
+      lastImport
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/import-period', requirePermission('stock:write'), async (req, res, next) => {
+  try {
+    const periodStart = String(req.body.periodStart || '').slice(0, 10);
+    const periodEnd = String(req.body.periodEnd || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(periodStart) || !/^\d{4}-\d{2}-\d{2}$/.test(periodEnd)) {
+      return res.status(400).json({ error: 'Informe o período inicial e final.' });
+    }
+    if (periodStart > periodEnd) {
+      return res.status(400).json({ error: 'O período inicial não pode ser posterior ao período final.' });
+    }
+    const businessDays = businessDaysInclusive(periodStart, periodEnd);
+    const db = requireDb();
+    const [lastImport] = await db`
+      SELECT id
+      FROM import_history
+      WHERE status = 'success'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    if (!lastImport) return res.status(404).json({ error: 'Nenhuma importação concluída encontrada.' });
+    const [updated] = await db`
+      UPDATE import_history
+      SET period_start = ${periodStart}, period_end = ${periodEnd}, business_days = ${businessDays}
+      WHERE id = ${lastImport.id}
+      RETURNING id, period_start, period_end, business_days
+    `;
+    res.json(updated);
   } catch (error) {
     next(error);
   }

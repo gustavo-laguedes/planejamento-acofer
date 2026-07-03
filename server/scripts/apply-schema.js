@@ -18,6 +18,9 @@ const files = [
   '010_import_history_user_name.sql',
   '011_app_users.sql',
   '012_audit_logs.sql',
+  '013_stock_period_and_active_sessions.sql',
+  '014_app_users_comercial_role.sql',
+  '015_app_users_role_check_final.sql',
   '002_indexes.sql',
   '003_seed_optional.sql'
 ];

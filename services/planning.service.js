@@ -20,6 +20,11 @@ function toNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function normalizeColor(value) {
+  const color = String(value || '').trim();
+  return /^#[0-9a-f]{6}$/i.test(color) ? color.toUpperCase() : null;
+}
+
 const LOCAL_HOLIDAYS = [
   { date: '2026-01-01', name: 'Confraternizacao Universal', type: 'nacional' },
   { date: '2026-02-17', name: 'Carnaval', type: 'nacional' },
@@ -35,6 +40,19 @@ const LOCAL_HOLIDAYS = [
   { date: '2026-12-25', name: 'Natal', type: 'nacional' },
   { date: '2026-07-10', name: 'Aniversario de Pindamonhangaba', type: 'municipal' }
 ];
+
+const MIN_DEPENDENCY_FINISH_BUFFER_MINUTES = 60;
+const DEFAULT_TEAM_AVAILABLE = 6;
+
+function isDefaultShiftLabel(label = '') {
+  return /^Turno\s*1$/i.test(String(label || '').trim()) || /^T1$/i.test(String(label || '').trim());
+}
+
+function defaultTeamAvailableForShift(shift = {}, index = 0) {
+  const label = shift.label || `Turno ${index + 1}`;
+  const available = Math.max(toNumber(shift.teamAvailable || DEFAULT_TEAM_AVAILABLE), 0);
+  return isDefaultShiftLabel(label) ? Math.max(available, DEFAULT_TEAM_AVAILABLE) : available;
+}
 
 function holidayForDate(date) {
   return LOCAL_HOLIDAYS.find(holiday => holiday.date === date) || null;
@@ -147,11 +165,17 @@ function matrixSecondsPerUnit(row) {
 function resolveMatrix(material, matrixRows, requestedMachine, requestedPeople) {
   const options = machineOptions(material, matrixRows);
   if (requestedMachine || requestedPeople) {
+    const hasRequestedMachine = !requestedMachine || options.some(row => row.machine_name === requestedMachine);
+    const hasRequestedPeople = !requestedPeople || options.some(row => Number(row.people_count) === Number(requestedPeople));
+    if (!hasRequestedMachine || !hasRequestedPeople) {
+      return options.sort((left, right) => matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right))[0] || null;
+    }
     const requested = options.find(row =>
       (!requestedMachine || row.machine_name === requestedMachine)
       && (!requestedPeople || Number(row.people_count) === Number(requestedPeople))
     );
     if (requested) return requested;
+    return null;
   }
   return options.sort((left, right) => matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right))[0] || null;
 }
@@ -200,20 +224,19 @@ function overrideStartCursor(override, fallbackDate, fallbackMinutes) {
   };
 }
 
-function stockForMaterial(material, stockRows, inventoryRows, productionRows) {
+function stockForMaterial(material, stockRows, correctionRows = []) {
   const codes = new Set((material.codes || []).map(code => String(code).trim().toLowerCase()));
-  const nasajon = stockRows.reduce((sum, row) => {
-    const productCode = String(row.product_code || '').toLowerCase();
-    const oldProductCode = String(row.old_product_code || '').toLowerCase();
-    return codes.has(productCode) || codes.has(oldProductCode) ? sum + toNumber(row.fiscal_balance_unit) : sum;
+  const locationsTotal = stockRows.reduce((sum, row) => {
+    const productCode = String(row.product_code || '').trim().toLowerCase();
+    const oldProductCode = String(row.old_product_code || '').trim().toLowerCase();
+    return codes.has(productCode) || codes.has(oldProductCode)
+      ? sum + toNumber(row.fiscal_balance_unit) + toNumber(row.error_balance_unit)
+      : sum;
   }, 0);
-  const inventory = inventoryRows
+  const correction = correctionRows
     .filter(row => String(row.material_id) === String(material.id))
-    .reduce((sum, row) => sum + toNumber(row.adjustment_qty), 0);
-  const produced = productionRows
-    .filter(row => String(row.material_id) === String(material.id))
-    .reduce((sum, row) => sum + toNumber(row.quantity), 0);
-  return (inventory > 0 ? inventory : nasajon) + produced;
+    .reduce((sum, row) => sum + toNumber(row.correction_qty), 0);
+  return locationsTotal + correction;
 }
 
 function makeStockLedger(context) {
@@ -222,7 +245,7 @@ function makeStockLedger(context) {
     available(material) {
       const key = String(material.id);
       if (!balances.has(key)) {
-        balances.set(key, stockForMaterial(material, context.stockRows, context.inventoryRows, context.productionRows));
+        balances.set(key, stockForMaterial(material, context.stockRows, context.correctionRows));
       }
       return toNumber(balances.get(key));
     },
@@ -310,7 +333,7 @@ function operationForMaterial(material, state, productionOrder, context, request
   };
 }
 
-function buildRequirementTree({ material, quantity, materialsById, inputsByMaterialId, matrixRows, requestedMachine, requestedPeople, operationOverrides = {}, states, productionIndex = 0, productionTitle = '' }, stack = []) {
+function buildRequirementTree({ material, quantity, materialsById, inputsByMaterialId, matrixRows, requestedMachine, requestedPeople, operationOverrides = {}, states, productionIndex = 0, productionTitle = '', productionColor = null }, stack = []) {
   const state = states?.get(String(material.id)) || {};
   const stockQty = toNumber(state.stockAvailable);
   const produceQty = toNumber(state.produceQty);
@@ -321,6 +344,7 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
     productionIndex,
     productionKey: `production-${productionIndex}`,
     productionTitle,
+    productionColor,
     materialId: material.id,
     materialName: material.name,
     materialCode: materialCode(material),
@@ -357,7 +381,8 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
       operationOverrides,
       states,
       productionIndex,
-      productionTitle
+      productionTitle,
+      productionColor
     }, [...stack, String(material.id)]);
   }).filter(Boolean);
   return node;
@@ -383,7 +408,7 @@ function operationRank(material, context, operationOverrides = {}, stack = [], p
   ));
 }
 
-function buildAggregatedOperations({ material, quantity, context, requestedMachine, requestedPeople, operationOverrides = {}, stockLedger = makeStockLedger(context), productionIndex = 0, productionTitle = '', forcedStockOnly = new Set() }) {
+function buildAggregatedOperations({ material, quantity, context, requestedMachine, requestedPeople, operationOverrides = {}, stockLedger = makeStockLedger(context), productionIndex = 0, productionTitle = '', productionColor = null, forcedStockOnly = new Set() }) {
   const states = new Map();
   const MAX_REQUIREMENT_EXPANSIONS = 10000;
 
@@ -415,7 +440,8 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
     const currentMaterial = item.material;
     const state = stateFor(currentMaterial);
     state.requiredQty = Number((toNumber(state.requiredQty) + toNumber(item.quantity)).toFixed(6));
-    const useStockBalance = forcedStockOnly.has(stockOnlyKey(productionIndex, currentMaterial.id));
+    const isFinalProduct = String(currentMaterial.id) === String(material.id);
+    const useStockBalance = !isFinalProduct && forcedStockOnly.has(stockOnlyKey(productionIndex, currentMaterial.id));
     const stockQty = stockLedger.available(currentMaterial);
     const stockUsedQty = useStockBalance ? Math.min(stockQty, toNumber(state.requiredQty)) : 0;
     const produceQty = Math.max(toNumber(state.requiredQty) - stockUsedQty, 0);
@@ -477,17 +503,24 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
   const withDependencies = operations.map(operation => {
     const material = context.materialsById.get(String(operation.materialId));
     const scopedMaterial = { ...material, operationId: `${productionIndex}:${material.id}`, productionIndex };
-    const dependencyMaterialIds = selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex)
-      .map(input => String(input.input_material_id))
-      .filter(inputMaterialId => operationMaterialIds.has(inputMaterialId));
+    const dependencyRequirements = selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex)
+      .map(input => ({
+        materialId: String(input.input_material_id),
+        operationId: `${productionIndex}:${input.input_material_id}`,
+        requiredQty: Number((toNumber(operation.produceQty || operation.requiredQty) * toNumber(input.qty_per_output || 1)).toFixed(6))
+      }))
+      .filter(input => operationMaterialIds.has(input.materialId) && input.requiredQty > 0);
+    const dependencyMaterialIds = dependencyRequirements.map(input => String(input.materialId));
     return {
       ...operation,
       operationId: `${productionIndex}:${operation.materialId}`,
       productionIndex,
       productionKey: `production-${productionIndex}`,
       productionTitle,
+      productionColor,
       dependencyMaterialIds: [...new Set(dependencyMaterialIds)],
       dependencyOperationIds: [...new Set(dependencyMaterialIds.map(materialId => `${productionIndex}:${materialId}`))],
+      dependencyRequirements,
       successorMaterialIds: []
     };
   });
@@ -532,7 +565,8 @@ function groupOperations(operations) {
         dependencyMaterialIds: [],
         successorMaterialIds: [],
         dependencyOperationIds: [],
-        successorOperationIds: []
+        successorOperationIds: [],
+        dependencyRequirements: []
       });
     }
     const current = grouped.get(key);
@@ -543,6 +577,7 @@ function groupOperations(operations) {
       productionIndex: Number(operation.productionIndex || 0),
       productionKey: operation.productionKey || `production-${Number(operation.productionIndex || 0)}`,
       productionTitle: operation.productionTitle || `Produção ${Number(operation.productionIndex || 0) + 1}`,
+      productionColor: operation.productionColor || null,
       materialId: operation.materialId,
       materialName: operation.materialName,
       machineName: operation.machineName,
@@ -565,6 +600,7 @@ function groupOperations(operations) {
     current.successorMaterialIds = [...new Set([...(current.successorMaterialIds || []), ...(operation.successorMaterialIds || []).map(String)])];
     current.dependencyOperationIds = [...new Set([...(current.dependencyOperationIds || []), ...(operation.dependencyOperationIds || []).map(String)])];
     current.successorOperationIds = [...new Set([...(current.successorOperationIds || []), ...(operation.successorOperationIds || []).map(String)])];
+    current.dependencyRequirements = [...(current.dependencyRequirements || []), ...(operation.dependencyRequirements || [])];
   }
   const result = [...grouped.values()]
     .filter(operation => operation.operationType === 'transport' || operation.produceQty > 0)
@@ -573,12 +609,29 @@ function groupOperations(operations) {
   const remapIds = ids => [...new Set((ids || [])
     .map(id => operationIdToGroupId.get(String(id)) || String(id))
     .filter(Boolean))];
+  const remapRequirements = requirements => {
+    const groupedRequirements = new Map();
+    for (const requirement of requirements || []) {
+      const operationId = operationIdToGroupId.get(String(requirement.operationId || requirement.materialId)) || String(requirement.operationId || requirement.materialId || '');
+      if (!operationId) continue;
+      const current = groupedRequirements.get(operationId) || {
+        ...requirement,
+        operationId,
+        requiredQty: 0
+      };
+      current.requiredQty = Number((toNumber(current.requiredQty) + toNumber(requirement.requiredQty)).toFixed(6));
+      groupedRequirements.set(operationId, current);
+    }
+    return [...groupedRequirements.values()];
+  };
   return result.map(operation => ({
     ...operation,
     dependencyOperationIds: remapIds(operation.dependencyOperationIds)
       .filter(operationId => operationIds.has(String(operationId)) && String(operationId) !== String(operation.operationId)),
     successorOperationIds: remapIds(operation.successorOperationIds)
       .filter(operationId => operationIds.has(String(operationId)) && String(operationId) !== String(operation.operationId)),
+    dependencyRequirements: remapRequirements(operation.dependencyRequirements)
+      .filter(requirement => operationIds.has(String(requirement.operationId)) && String(requirement.operationId) !== String(operation.operationId)),
     dependencyMaterialIds: [],
     successorMaterialIds: []
   }));
@@ -631,6 +684,7 @@ function applyProductionTransports(operations, production, context) {
           productionIndex: production.productionIndex,
           productionKey: `production-${production.productionIndex}`,
       productionTitle: `Produção ${production.productionIndex + 1}`,
+          productionColor: production.color || null,
           productionOrder: toNumber(sourceOperation.productionOrder) + 0.5 + (transportIndex / 100),
           materialId: transport.material.id,
           materialName: transport.material.name,
@@ -671,6 +725,10 @@ function applyProductionTransports(operations, production, context) {
       if (!successor) continue;
       successor.dependencyOperationIds = (successor.dependencyOperationIds || [])
         .map(operationId => String(operationId) === String(sourceOperation.operationId) ? lastTransportId : operationId);
+      successor.dependencyRequirements = (successor.dependencyRequirements || [])
+        .map(requirement => String(requirement.operationId) === String(sourceOperation.operationId)
+          ? { ...requirement, operationId: lastTransportId }
+          : requirement);
     }
   });
 
@@ -833,14 +891,15 @@ function normalizeShift(shift = {}, index = 0) {
   const pauseEnd = pauseStart + pauseMinutes;
   const pauseOverlap = Math.max(Math.min(shiftEnd, pauseEnd) - Math.max(shiftStart, pauseStart), 0);
   const availableMinutes = Math.max(shiftEnd - shiftStart - pauseOverlap, 1);
+  const label = shift.label || `Turno ${index + 1}`;
   return {
     shiftStart,
     shiftEnd,
     lunchStart: pauseStart,
     lunchEnd: pauseEnd,
     dailyMinutes: Math.min(dailyMinutes, availableMinutes),
-    label: shift.label || `Turno ${index + 1}`,
-    teamAvailable: Math.max(toNumber(shift.teamAvailable || 0), 0)
+    label,
+    teamAvailable: defaultTeamAvailableForShift({ ...shift, label }, index)
   };
 }
 
@@ -857,6 +916,22 @@ function calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime
   const shiftEnd = Math.max(...normalizedShifts.map(shift => shift.shiftEnd));
   const dailyMinutes = normalizedShifts.reduce((sum, shift) => sum + shift.dailyMinutes, 0);
   return { shifts: normalizedShifts, shiftStart, shiftEnd, dailyMinutes };
+}
+
+function normalizeDailyTeamOverrides(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).map(([date, shifts]) => {
+    if (!shifts || typeof shifts !== 'object' || Array.isArray(shifts)) return [date, {}];
+    return [date, Object.fromEntries(Object.entries(shifts)
+      .map(([label, amount]) => [label, Math.max(toNumber(amount), 0)])
+      .filter(([, amount]) => Number.isFinite(amount)))];
+  }));
+}
+
+function teamAvailableForShift(shift, date, dailyTeamOverrides = {}) {
+  const overrides = dailyTeamOverrides?.[date] || {};
+  const override = overrides[shift.label] ?? overrides[String(shift.label || '').replace(/^Turno\s*/i, 'T')];
+  return override == null ? shift.teamAvailable : Math.max(toNumber(override), 0);
 }
 
 function workWindowsForDate(date, calendar) {
@@ -973,10 +1048,38 @@ function segmentsForOperation(operation, calendar) {
   return segments;
 }
 
-function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, shifts, operationOverrides = {}, operationSplits = [] }) {
+function normalizeExistingSchedule(existingOperations, calendar, shiftStart, shiftEnd) {
+  if (!Array.isArray(existingOperations)) return [];
+  return existingOperations
+    .filter(operation => operation && operation.operationType !== 'transport')
+    .map((operation, index) => {
+      const segments = Array.isArray(operation.segments) && operation.segments.length
+        ? operation.segments
+        : segmentsForOperation(operation, calendar);
+      const machineName = String(operation.machineName || '').trim();
+      const peopleCount = Number(operation.peopleCount || 0);
+      if (!machineName || !(peopleCount > 0) || !segments.length) return null;
+      return {
+        ...operation,
+        operationId: operation.operationId || `existing:${index}`,
+        machineName,
+        peopleCount,
+        startDate: operation.startDate || segments[0]?.date,
+        startTime: operation.startTime || segments[0]?.startTime || minutesToTime(shiftStart),
+        endDate: operation.endDate || segments.at(-1)?.date,
+        endTime: operation.endTime || segments.at(-1)?.endTime || minutesToTime(shiftEnd),
+        segments,
+        _existingScheduleBlocker: true
+      };
+    })
+    .filter(Boolean);
+}
+
+function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, shifts, dailyTeamOverrides = {}, operationOverrides = {}, operationSplits = [], existingOperations = [] }) {
   const calendar = calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours });
   const { shiftStart, shiftEnd } = calendar;
-  const scheduled = [];
+  const teamOverrides = normalizeDailyTeamOverrides(dailyTeamOverrides);
+  const scheduled = normalizeExistingSchedule(existingOperations, calendar, shiftStart, shiftEnd);
   const source = applyOperationSplits(groupOperations(operations), { operationSplits });
 
   const enrich = operation => {
@@ -997,7 +1100,9 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       operation.peopleCount
     );
     if (!matrix) {
-      const error = new Error(`Nenhuma produtividade ativa encontrada para ${operation.materialName}.`);
+      const requested = [operation.machineName, operation.peopleCount ? `${operation.peopleCount} pessoa(s)` : null].filter(Boolean).join(' / ');
+      const suffix = requested ? ` para ${requested}` : '';
+      const error = new Error(`Nenhuma produtividade ativa encontrada para ${operation.materialName}${suffix}. Cadastre a matriz de produtividade ou selecione uma maquina/equipe valida.`);
       error.status = 404;
       throw error;
     }
@@ -1005,6 +1110,11 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     const timeMinutes = timeSeconds / 60;
     const minutesPerUnit = timeMinutes / Math.max(toNumber(matrix.output_qty), 1);
     const totalMinutes = Math.ceil(operation.produceQty * minutesPerUnit);
+    if (!matrix.machine_name || !(Number(matrix.people_count) > 0) || !(timeSeconds > 0) || !(toNumber(matrix.output_qty) > 0)) {
+      const error = new Error(`Matriz de produtividade invalida para ${operation.materialName}. Informe maquina, pessoas, quantidade produzida e tempo maiores que zero.`);
+      error.status = 400;
+      throw error;
+    }
     return {
       ...operation,
       machineName: matrix.machine_name,
@@ -1031,8 +1141,213 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
   const enriched = source.map(enrich);
   const byOperationId = new Map(enriched.map(operation => [String(operation.operationId || operation.materialId), operation]));
   const hasManualStart = enriched.some(operation => operation.startDate || overrideForMaterial(operationOverrides, operation)?.startDate);
-  const byMachine = new Map();
   const scheduledByMaterialId = new Map();
+
+  function cursorAfterProgress(operation, ratio) {
+    if (!operation || operation.operationType === 'transport') {
+      return operation ? { date: operation.endDate, minutes: parseTime(operation.endTime, minutesToTime(shiftStart)) } : null;
+    }
+    const start = { date: operation.startDate, minutes: parseTime(operation.startTime, minutesToTime(shiftStart)) };
+    const progressMinutes = Math.max(Math.ceil(toNumber(operation.totalMinutes) * ratio), 1);
+    const operationCalendar = {
+      ...calendar,
+      forceWorkDates: new Set(operation.forcedNonWorkingDates || [])
+    };
+    return scheduleForward(start, progressMinutes, operationCalendar).end;
+  }
+
+  function cursorAfterAvailableQty(operation, quantity) {
+    if (!operation) return null;
+    if (operation.operationType === 'transport') {
+      return { date: operation.endDate, minutes: parseTime(operation.endTime, minutesToTime(shiftStart)) };
+    }
+    const stockAvailable = Math.max(toNumber(operation.stockUsedQty), 0);
+    const requiredQty = Math.max(toNumber(quantity), 0);
+    if (requiredQty <= stockAvailable) {
+      return { date: operation.startDate, minutes: parseTime(operation.startTime, minutesToTime(shiftStart)) };
+    }
+    const produceQty = Math.max(toNumber(operation.produceQty), 0);
+    if (!(produceQty > 0)) {
+      return { date: operation.endDate, minutes: parseTime(operation.endTime, minutesToTime(shiftStart)) };
+    }
+    return cursorAfterProgress(operation, Math.min((requiredQty - stockAvailable) / produceQty, 1));
+  }
+
+  function dependencyRequirementsFor(operation) {
+    const explicitRequirements = Array.isArray(operation.dependencyRequirements) ? operation.dependencyRequirements : [];
+    if (explicitRequirements.length) return explicitRequirements;
+    return ((operation.dependencyOperationIds?.length ? operation.dependencyOperationIds : operation.dependencyMaterialIds) || [])
+      .map(operationId => ({
+        operationId,
+        requiredQty: toNumber(scheduledByMaterialId.get(String(operationId))?.produceQty)
+      }));
+  }
+
+  function dependencyReadyCursor(operation) {
+    return maxCursor(...dependencyRequirementsFor(operation)
+      .map(requirement => {
+        const item = scheduledByMaterialId.get(String(requirement.operationId || requirement.materialId));
+        if (!item) return null;
+        const minimumQty = operation.operationType === 'transport' || item.operationType === 'transport'
+          ? toNumber(requirement.requiredQty || item.produceQty || item.requiredQty)
+          : toNumber(requirement.requiredQty || item.produceQty || item.requiredQty) * 0.3;
+        return cursorAfterAvailableQty(item, minimumQty);
+      })
+      .filter(Boolean));
+  }
+
+  function dependencyCompleteCursor(requirement) {
+    const item = scheduledByMaterialId.get(String(requirement.operationId || requirement.materialId));
+    if (!item) return null;
+    return cursorAfterAvailableQty(item, toNumber(requirement.requiredQty || item.produceQty || item.requiredQty));
+  }
+
+  function dependencySafeFinishCursor(operation, scheduleCalendar) {
+    const requirements = dependencyRequirementsFor(operation);
+    if (!requirements.length) return null;
+    const dependencyDone = maxCursor(...requirements.map(dependencyCompleteCursor).filter(Boolean));
+    if (!dependencyDone) return null;
+    return scheduleForward(dependencyDone, MIN_DEPENDENCY_FINISH_BUFFER_MINUTES, scheduleCalendar).end;
+  }
+
+  function segmentsForSlot(slot, operation, scheduleCalendar) {
+    return segmentsForOperation({
+      startDate: slot.start.date,
+      startTime: minutesToTime(slot.start.minutes),
+      endDate: slot.end.date,
+      endTime: minutesToTime(slot.end.minutes)
+    }, scheduleCalendar).map(segment => ({
+      operation,
+      date: segment.date,
+      start: parseTime(segment.startTime, minutesToTime(shiftStart)),
+      end: parseTime(segment.endTime, minutesToTime(shiftEnd))
+    }));
+  }
+
+  function operationSegments(operation) {
+    return (operation.segments || []).map(segment => ({
+      operation,
+      date: segment.date,
+      start: parseTime(segment.startTime, minutesToTime(shiftStart)),
+      end: parseTime(segment.endTime, minutesToTime(shiftEnd))
+    }));
+  }
+
+  function overlappingSegments(candidateSegment) {
+    return scheduled
+      .filter(operation => operation.operationType !== 'transport')
+      .flatMap(operationSegments)
+      .filter(segment =>
+        segment.date === candidateSegment.date
+        && segment.start < candidateSegment.end
+        && candidateSegment.start < segment.end
+      );
+  }
+
+  function shiftForSegment(segment) {
+    return calendar.shifts.find(shift =>
+      segment.start < shift.shiftEnd
+      && segment.end > shift.shiftStart
+    ) || calendar.shifts[0];
+  }
+
+  function machineConflict(operation, slot, scheduleCalendar) {
+    if (operation.operationType === 'transport') return null;
+    const machineName = String(operation.machineName || '').trim().toLowerCase();
+    if (!machineName) {
+      const error = new Error(`Maquina nao informada para ${operation.materialName}. Selecione uma maquina valida antes de simular.`);
+      error.status = 400;
+      throw error;
+    }
+    for (const segment of segmentsForSlot(slot, operation, scheduleCalendar)) {
+      const blocking = overlappingSegments(segment)
+        .filter(item => String(item.operation.machineName || '').trim().toLowerCase() === machineName)
+        .sort((left, right) => left.end - right.end)
+        .at(-1);
+      if (blocking) {
+        return {
+          date: segment.date,
+          minutes: Math.max(blocking.end, segment.start + 1)
+        };
+      }
+    }
+    return null;
+  }
+
+  function capacityConflict(operation, slot, scheduleCalendar) {
+    if (operation.operationType === 'transport') return null;
+    const people = Number(operation.peopleCount || 0);
+    if (!(people > 0)) {
+      const error = new Error(`Quantidade de pessoas invalida para ${operation.materialName}. Selecione uma equipe maior que zero.`);
+      error.status = 400;
+      throw error;
+    }
+    for (const segment of segmentsForSlot(slot, operation, scheduleCalendar)) {
+      const shift = shiftForSegment(segment);
+      const available = teamAvailableForShift(shift, segment.date, teamOverrides);
+      if (!(available > 0) || people > available) {
+        return {
+          date: segment.date,
+          minutes: segment.end,
+          used: people,
+          available
+        };
+      }
+      const overlapping = overlappingSegments(segment);
+      const points = [
+        { minute: segment.start, delta: people },
+        { minute: segment.end, delta: -people },
+        ...overlapping.flatMap(item => ([
+          { minute: Math.max(item.start, segment.start), delta: Number(item.operation.peopleCount || 0) },
+          { minute: Math.min(item.end, segment.end), delta: -Number(item.operation.peopleCount || 0) }
+        ]))
+      ].sort((left, right) => left.minute - right.minute || left.delta - right.delta);
+      let used = 0;
+      for (const point of points) {
+        used += point.delta;
+        if (used > available) {
+          const blockingEnd = overlapping.reduce((latest, item) => Math.max(latest, item.end), segment.start);
+          return {
+            date: segment.date,
+            minutes: Math.max(blockingEnd, point.minute + 1),
+            used,
+            available
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  function dependencyFlowConflict(operation, slot, scheduleCalendar) {
+    const dependencySafeFinish = dependencySafeFinishCursor(operation, scheduleCalendar);
+    if (!dependencySafeFinish || compareCursor(slot.end, dependencySafeFinish) >= 0) return null;
+    const latestSafeStart = scheduleBackward(dependencySafeFinish, operation.totalMinutes, scheduleCalendar).start;
+    return compareCursor(latestSafeStart, slot.start) > 0 ? latestSafeStart : dependencySafeFinish;
+  }
+
+  function scheduleForwardWithCapacity(cursor, operation, scheduleCalendar) {
+    let nextCursor = cursor;
+    for (let guard = 0; guard < 1000; guard += 1) {
+      const slot = scheduleForward(nextCursor, operation.totalMinutes, scheduleCalendar);
+      const machineBlock = machineConflict(operation, slot, scheduleCalendar);
+      if (machineBlock) {
+        nextCursor = nextWorkStart(machineBlock, scheduleCalendar);
+        continue;
+      }
+      const conflict = capacityConflict(operation, slot, scheduleCalendar);
+      if (conflict) {
+        nextCursor = nextWorkStart(conflict, scheduleCalendar);
+        continue;
+      }
+      const dependencyConflict = dependencyFlowConflict(operation, slot, scheduleCalendar);
+      if (!dependencyConflict) return slot;
+      nextCursor = nextWorkStart(dependencyConflict, scheduleCalendar);
+    }
+    const error = new Error(`Nao foi possivel encaixar ${operation.materialName} respeitando a capacidade de pessoas.`);
+    error.status = 400;
+    throw error;
+  }
 
   const predecessorsDone = operation => ((operation.dependencyOperationIds?.length ? operation.dependencyOperationIds : operation.dependencyMaterialIds) || [])
     .every(operationId => scheduledByMaterialId.has(String(operationId)) || !byOperationId.has(String(operationId)));
@@ -1050,20 +1365,15 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       guard += 1;
       const index = pending.findIndex(predecessorsDone);
       const operation = pending.splice(index >= 0 ? index : 0, 1)[0];
-      const dependencyEnd = maxCursor(...((operation.dependencyOperationIds?.length ? operation.dependencyOperationIds : operation.dependencyMaterialIds) || [])
-        .map(operationId => scheduledByMaterialId.get(String(operationId)))
-        .filter(Boolean)
-        .map(item => ({ date: item.endDate, minutes: parseTime(item.endTime, minutesToTime(shiftStart)) })));
-      const machineCursor = operation.operationType === 'transport' ? startCursor : byMachine.get(operation.machineName || '') || startCursor;
+      const dependencyEnd = dependencyReadyCursor(operation);
       const override = overrideForMaterial(operationOverrides, operation);
       const operationCursor = operation.startDate ? { date: operation.startDate, minutes: parseTime(operation.startTime, minutesToTime(shiftStart)) } : null;
       const overrideCursor = overrideStartCursor(override, startCursor.date, shiftStart) || operationCursor;
-      const cursor = maxCursor(overrideCursor || startCursor, dependencyEnd, machineCursor);
+      const cursor = maxCursor(overrideCursor || startCursor, dependencyEnd);
       const operationCalendar = withForcedWorkDate(calendar, overrideCursor?.date || operationCursor?.date);
-      const slot = scheduleForward(cursor, operation.totalMinutes, operationCalendar);
+      const slot = scheduleForwardWithCapacity(cursor, operation, operationCalendar);
       const item = scheduledItem(operation, slot, operationCalendar);
       scheduledByMaterialId.set(String(operation.operationId || operation.materialId), item);
-      if (operation.operationType !== 'transport') byMachine.set(operation.machineName || '', slot.end);
       scheduled.push(item);
     }
   }
@@ -1080,8 +1390,16 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
         .map(operationId => scheduledByMaterialId.get(String(operationId)))
         .filter(Boolean)
         .map(item => ({ date: item.startDate, minutes: parseTime(item.startTime, minutesToTime(shiftStart)) })));
+      const successorSafeDependencyEnd = minCursor(...((operation.successorOperationIds?.length ? operation.successorOperationIds : operation.successorMaterialIds) || [])
+        .map(operationId => scheduledByMaterialId.get(String(operationId)))
+        .filter(Boolean)
+        .map(item => scheduleBackward(
+          { date: item.endDate, minutes: parseTime(item.endTime, minutesToTime(shiftEnd)) },
+          MIN_DEPENDENCY_FINISH_BUFFER_MINUTES,
+          calendar
+        ).start));
       const machineCursor = operation.operationType === 'transport' ? endCursor : reverseMachine.get(operation.machineName || '') || endCursor;
-      const cursor = minCursor(endCursor, successorStart, machineCursor);
+      const cursor = minCursor(endCursor, successorStart, successorSafeDependencyEnd, machineCursor);
       const slot = scheduleBackward(cursor, operation.totalMinutes, calendar);
       const item = scheduledItem(operation, slot);
       scheduledByMaterialId.set(String(operation.operationId || operation.materialId), item);
@@ -1096,13 +1414,21 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     scheduleForwardGraph({ date: selectedDate, minutes: shiftStart });
   }
 
-  return scheduled.sort((left, right) =>
+  const currentOperations = scheduled.filter(operation => !operation._existingScheduleBlocker).sort((left, right) =>
     compareCursor(
       { date: left.startDate, minutes: parseTime(left.startTime, minutesToTime(shiftStart)) },
       { date: right.startDate, minutes: parseTime(right.startTime, minutesToTime(shiftStart)) }
     )
     || toNumber(left.productionOrder) - toNumber(right.productionOrder)
   );
+  currentOperations.existingScheduleBlockers = scheduled.filter(operation => operation._existingScheduleBlocker).sort((left, right) =>
+    compareCursor(
+      { date: left.startDate, minutes: parseTime(left.startTime, minutesToTime(shiftStart)) },
+      { date: right.startDate, minutes: parseTime(right.startTime, minutesToTime(shiftStart)) }
+    )
+    || toNumber(left.productionOrder) - toNumber(right.productionOrder)
+  );
+  return currentOperations;
 }
 
 function eachSegmentDayCount(startDate, endDate) {
@@ -1132,6 +1458,150 @@ function buildDays(operations, plannedUnit) {
       end_time: segment.endTime
     }));
   });
+}
+
+function operationCursorValue(operation) {
+  return {
+    date: operation.startDate || operation.endDate || '9999-12-31',
+    minutes: parseTime(operation.startTime || operation.endTime, '00:00')
+  };
+}
+
+function compareOperationsByStart(left, right) {
+  return compareCursor(operationCursorValue(left), operationCursorValue(right))
+    || toNumber(left.productionOrder) - toNumber(right.productionOrder)
+    || String(left.operationId || left.materialId || '').localeCompare(String(right.operationId || right.materialId || ''));
+}
+
+function operationMatchesChange(operation, change = {}) {
+  const operationId = String(operation.operationId || operation.materialId || '');
+  return operationId === String(change.operationId || '')
+    || (
+      String(operation.materialId || '') === String(change.materialId || '')
+      && Number(operation.productionIndex || 0) === Number(change.productionIndex || 0)
+    );
+}
+
+function fallbackShiftsForSavedPlan(plan = {}, operations = []) {
+  const meta = operations.find(operation => operation?._planningMeta)?.['_planningMeta'] || {};
+  if (Array.isArray(meta.shifts) && meta.shifts.length) return meta.shifts;
+  const firstSegment = operations.flatMap(operation => operation.segments || [])
+    .sort((left, right) => String(left.startTime || '').localeCompare(String(right.startTime || '')))[0];
+  const lastSegment = operations.flatMap(operation => operation.segments || [])
+    .sort((left, right) => String(right.endTime || '').localeCompare(String(left.endTime || '')))[0];
+  return [{
+    label: 'Turno 1',
+    hoursPerDay: plan.hours_per_day || 8,
+    shiftStartTime: firstSegment?.startTime || '07:00',
+    pauseHours: 0,
+    shiftEndTime: lastSegment?.endTime || '17:00',
+    teamAvailable: DEFAULT_TEAM_AVAILABLE
+  }];
+}
+
+export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRows = []) {
+  const operations = (Array.isArray(operationsValue) ? operationsValue : [])
+    .map(operation => ({ ...operation, segments: Array.isArray(operation.segments) ? operation.segments : [] }))
+    .sort(compareOperationsByStart);
+  const requestedIndex = operations.findIndex(operation => operationMatchesChange(operation, change));
+  if (requestedIndex < 0 && (change.operationId || change.materialId)) {
+    const error = new Error('OperaÃ§Ã£o do planejamento nÃ£o encontrada.');
+    error.status = 404;
+    throw error;
+  }
+  const capacityStartDate = change.capacityDate || change.recalculateFromDate || null;
+  const targetIndex = requestedIndex >= 0
+    ? requestedIndex
+    : capacityStartDate
+      ? operations.findIndex(operation => String(operation.startDate || '') >= capacityStartDate)
+      : 0;
+  const meta = operations.find(operation => operation?._planningMeta)?.['_planningMeta'] || {};
+  const dailyTeamOverrides = normalizeDailyTeamOverrides({
+    ...(meta.dailyTeamOverrides || {}),
+    ...(change.dailyTeamOverrides || {})
+  });
+  if (change.capacityDate && change.capacityOverrides) {
+    dailyTeamOverrides[change.capacityDate] = {
+      ...(dailyTeamOverrides[change.capacityDate] || {}),
+      ...change.capacityOverrides
+    };
+  }
+  const targetOperation = operations[targetIndex];
+  if (!targetOperation) {
+    if (change.capacityDate && change.capacityOverrides && operations.length) {
+      const shifts = fallbackShiftsForSavedPlan(plan, operations);
+      const scheduled = operations.map((operation, index) => index === 0
+        ? { ...operation, _planningMeta: { ...meta, shifts, dailyTeamOverrides } }
+        : operation);
+      return {
+        operations: scheduled,
+        days: buildDays(scheduled, plan.planned_unit),
+        summary: {
+          planningStartDate: plan.start_date,
+          planningEndDate: plan.end_date,
+          shifts,
+          dailyTeamOverrides,
+          productions: meta.productions || []
+        }
+      };
+    }
+    const error = new Error('OperaÃ§Ã£o do planejamento nÃ£o encontrada.');
+    error.status = 404;
+    throw error;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const targetDate = change.startDate || change.date || targetOperation.startDate;
+  if (targetOperation.startDate < today || targetDate < today) {
+    const error = new Error('ProduÃ§Ãµes anteriores a hoje sÃ£o somente leitura.');
+    error.status = 400;
+    throw error;
+  }
+
+  const changedOperation = {
+    ...targetOperation,
+    machineName: change.machineName || targetOperation.machineName,
+    peopleCount: change.peopleCount == null ? targetOperation.peopleCount : Number(change.peopleCount),
+    productionModelName: change.productionModelName || targetOperation.productionModelName,
+    startDate: change.startDate || targetOperation.startDate,
+    startTime: change.startTime || targetOperation.startTime
+  };
+
+  const source = operations.map((operation, index) => {
+    if (index < targetIndex) return { ...operation };
+    const base = index === targetIndex ? changedOperation : { ...operation };
+    return {
+      ...base,
+      startDate: index === targetIndex ? changedOperation.startDate : null,
+      startTime: index === targetIndex ? changedOperation.startTime : null,
+      endDate: null,
+      endTime: null,
+      segments: []
+    };
+  });
+
+  const shifts = fallbackShiftsForSavedPlan(plan, operations);
+  const scheduled = scheduleOperations(source, matrixRows, {
+    dateMode: 'start',
+    selectedDate: changedOperation.startDate,
+    hoursPerDay: plan.hours_per_day || 8,
+    shifts,
+    dailyTeamOverrides
+  }).map((operation, index) => index === 0
+    ? { ...operation, _planningMeta: { shifts, dailyTeamOverrides } }
+    : operation);
+  const days = buildDays(scheduled, plan.planned_unit);
+  return {
+    operations: scheduled,
+    days,
+    summary: {
+      planningStartDate: plan.start_date,
+      planningEndDate: plan.end_date,
+      shifts,
+      dailyTeamOverrides,
+      productions: meta.productions || []
+    }
+  };
 }
 
 function buildSinglePlan(payload, context) {
@@ -1187,8 +1657,10 @@ function buildSinglePlan(payload, context) {
     shiftStartTime: payload.shiftStartTime,
     shiftEndTime: payload.shiftEndTime,
     lunchHours: payload.lunchHours,
+    dailyTeamOverrides: payload.dailyTeamOverrides,
     operationOverrides,
-    operationSplits: payload.operationSplits
+    operationSplits: payload.operationSplits,
+    existingOperations: context.existingOperations
   });
   const days = buildDays(operations, material.primary_unit);
   const hoursPerDay = shiftAvailableHours({
@@ -1243,7 +1715,8 @@ function productionEntries(payload, context) {
       ...production,
       material,
       plannedQty: toNumber(production.plannedQty),
-      productionIndex: index
+      productionIndex: index,
+      color: normalizeColor(production.color)
     };
   }).filter(production => production.plannedQty > 0);
 }
@@ -1348,6 +1821,7 @@ export function buildPlan(payload, context) {
       stockLedger,
       productionIndex: production.productionIndex,
       productionTitle,
+      productionColor: production.color || null,
       forcedStockOnly
     });
     const tree = buildRequirementTree({
@@ -1361,7 +1835,8 @@ export function buildPlan(payload, context) {
       operationOverrides,
       states: built.states,
       productionIndex: production.productionIndex,
-      productionTitle
+      productionTitle,
+      productionColor: production.color || null
     });
     return {
       production,
@@ -1389,9 +1864,12 @@ export function buildPlan(payload, context) {
     shiftEndTime: payload.shiftEndTime,
     lunchHours: payload.lunchHours,
     shifts: payload.shifts,
+    dailyTeamOverrides: payload.dailyTeamOverrides,
     operationOverrides,
-    operationSplits: expanded.operationSplits
+    operationSplits: expanded.operationSplits,
+    existingOperations: context.existingOperations
   });
+  const existingScheduleBlockers = operations.existingScheduleBlockers || [];
   const firstMaterial = productions[0].material;
   const days = buildDays(operations, firstMaterial.primary_unit);
   const shifts = Array.isArray(payload.shifts) && payload.shifts.length
@@ -1424,10 +1902,13 @@ export function buildPlan(payload, context) {
       planningStartDate: payload.planningStartDate || selectedDate,
       planningEndDate: payload.planningEndDate || endDate,
       shifts,
+      dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides),
+      existingOperations: existingScheduleBlockers,
       productions: productions.map(production => ({
         productionIndex: production.productionIndex,
         productionKey: `production-${production.productionIndex}`,
         title: production.productionTitle || `Produção ${production.productionIndex + 1}`,
+        color: production.color || null,
         materialId: production.material.id,
         materialName: production.material.name,
         materialCode: materialCode(production.material),

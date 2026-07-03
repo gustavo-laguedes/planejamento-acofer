@@ -3,6 +3,7 @@ import { getCurrentUser } from '../shared/api.js';
 import { nextSortDirection, sortTableRows } from '../shared/DataTable.js';
 import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
+import { SummaryCard } from '../shared/SummaryCard.js';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -13,10 +14,21 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-function formatNumber(value) {
+const STOCK_MINIMUM_DAYS_KEY = 'acofer.stock.minimumDays';
+
+function formatNumber(value, maximumFractionDigits = 3, minimumFractionDigits = 0) {
   return new Intl.NumberFormat('pt-BR', {
-    maximumFractionDigits: 3
+    maximumFractionDigits,
+    minimumFractionDigits
   }).format(Number(value || 0));
+}
+
+function formatBrowserToday() {
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  }).format(new Date());
 }
 
 function formatImportDateTime(value) {
@@ -33,13 +45,57 @@ function formatImportDateTime(value) {
 
 function formatSales(row) {
   if (row.salesBlocked) return '*';
-  return formatNumber(row.salesPerDayQty || 0);
+  if (row.salesNotEstimated || row.salesPerDayQty === null || row.salesPerDayQty === undefined) return 'Não estimado';
+  return formatNumber(row.salesPerDayQty);
+}
+
+function formatSalesPeriod(row) {
+  if (row.salesBlocked) return '*';
+  return formatNumber(row.salesPeriodQty || 0);
+}
+
+function currentStockDurationDays(row) {
+  const baseBalance = Number(row.totalLocationsQty);
+  const salesPerDay = Number(row.salesPerDayQty);
+  if (!Number.isFinite(baseBalance)) return null;
+  if (!Number.isFinite(salesPerDay) || salesPerDay <= 0) return null;
+  return Math.max(baseBalance, 0) / salesPerDay;
 }
 
 function formatDuration(row) {
   if (row.salesBlocked) return '*';
-  if (row.salesNotEstimated || row.stockDurationDays === null || row.stockDurationDays === undefined) return 'Não estimado';
-  return `${formatNumber(row.stockDurationDays)} dias`;
+  const durationDays = currentStockDurationDays(row);
+  if (durationDays === null) return '*';
+  return `${formatNumber(durationDays, 1, 1)} dias`;
+}
+
+function readStockMinimumDays() {
+  const value = String(localStorage.getItem(STOCK_MINIMUM_DAYS_KEY) || '').trim();
+  if (!/^\d+$/.test(value)) return null;
+  const days = Number(value);
+  return Number.isInteger(days) && days > 0 ? days : null;
+}
+
+function saveStockMinimumDays(value) {
+  const days = String(value || '').trim();
+  if (!days) {
+    localStorage.removeItem(STOCK_MINIMUM_DAYS_KEY);
+    return null;
+  }
+  if (!/^\d+$/.test(days)) return readStockMinimumDays();
+  const number = Number(days);
+  if (!Number.isInteger(number) || number <= 0) {
+    localStorage.removeItem(STOCK_MINIMUM_DAYS_KEY);
+    return null;
+  }
+  localStorage.setItem(STOCK_MINIMUM_DAYS_KEY, String(number));
+  return number;
+}
+
+function isStockDurationBelowMinimum(row, stockMinimumDays) {
+  if (!stockMinimumDays) return false;
+  const durationDays = currentStockDurationDays(row);
+  return durationDays !== null && durationDays <= stockMinimumDays;
 }
 
 function codeRows(row) {
@@ -108,6 +164,7 @@ export function StockPage() {
   const filters = page.querySelector('.stock-filters');
   let overview = { locations: [], rows: [], lastImport: null };
   let sortState = { index: null, direction: null };
+  let stockMinimumDays = readStockMinimumDays();
 
   function filteredRows() {
     const search = String(filters.elements.search.value || '').trim().toLowerCase();
@@ -121,9 +178,53 @@ export function StockPage() {
 
   function renderSummary() {
     const last = formatImportDateTime(overview.lastImport?.finished_at || overview.lastImport?.created_at);
+    const periodStart = String(overview.lastImport?.period_start || '').slice(0, 10);
+    const periodEnd = String(overview.lastImport?.period_end || '').slice(0, 10);
     summaryGrid.innerHTML = `
-      <article class="metric-card"><span>Última importação</span><strong>${escapeHtml(last)}</strong><small>${escapeHtml(overview.lastImport?.filename || '')}</small></article>
+      ${SummaryCard({ label: 'Última importação', value: last, detail: overview.lastImport?.filename || '' })}
+      <article class="metric-card stock-period-card">
+        <span>Período das vendas - ${escapeHtml(formatBrowserToday())}</span>
+        <form class="stock-period-form">
+          <label>Período inicial<input name="periodStart" type="date" value="${escapeHtml(periodStart)}" ${canWriteStock ? '' : 'disabled'} /></label>
+          <label>Período final<input name="periodEnd" type="date" value="${escapeHtml(periodEnd)}" ${canWriteStock ? '' : 'disabled'} /></label>
+          <span class="stock-period-business-days">Dias úteis contabilizados<strong>${Number(overview.lastImport?.business_days || 0)}</strong></span>
+          ${canWriteStock ? '<button class="secondary-button" type="submit">Aplicar período</button>' : ''}
+        </form>
+      </article>
+      <article class="metric-card stock-minimum-card">
+        <span>ESTOQUE MÍNIMO</span>
+        <label>Dias mínimos<input name="stockMinimumDays" type="number" inputmode="numeric" min="1" step="1" placeholder="30" value="${stockMinimumDays || ''}" /></label>
+      </article>
     `;
+    summaryGrid.querySelector('.stock-period-form')?.addEventListener('submit', async event => {
+      event.preventDefault();
+      const submit = event.currentTarget.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      try {
+        await api('/stock/import-period', {
+          method: 'PUT',
+          body: {
+            periodStart: event.currentTarget.elements.periodStart.value,
+            periodEnd: event.currentTarget.elements.periodEnd.value
+          }
+        });
+        await load();
+      } catch (error) {
+        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message }));
+        submit.disabled = false;
+      }
+    });
+    const minimumInput = summaryGrid.querySelector('[name="stockMinimumDays"]');
+    minimumInput?.addEventListener('input', event => {
+      const input = event.currentTarget;
+      if (input.value && !/^\d+$/.test(input.value)) {
+        input.value = String(stockMinimumDays || '');
+        return;
+      }
+      stockMinimumDays = saveStockMinimumDays(input.value);
+      if (input.value === '0') input.value = '';
+      renderTable();
+    });
   }
 
   function renderTable() {
@@ -153,13 +254,14 @@ export function StockPage() {
             <col class="col-correction" />
             <col class="col-total" />
             <col class="col-total" />
+            <col class="col-total" />
             <col class="col-total-estimated" />
           </colgroup>
           <thead>
             <tr>
               <th class="group-material" colspan="2">Material</th>
               <th class="group-nasajon" colspan="${Math.max(locations.length * 2, 1)}">Estoque Nasajon por local</th>
-              <th class="group-totals" colspan="4">Totais e movimentação</th>
+              <th class="group-totals" colspan="5">Totais e movimentação</th>
             </tr>
             <tr>
               ${sortableStockHeader('Código', stockColumns, 'group-material', sortState)}
@@ -167,6 +269,7 @@ export function StockPage() {
               ${locations.length ? nasajonHeaders : '<th class="group-nasajon">Sem locais cadastrados</th>'}
               ${sortableStockHeader('Correção estoque', stockColumns, 'group-totals', sortState)}
               ${sortableStockHeader('Qtd. total locais', stockColumns, 'group-totals', sortState)}
+              ${sortableStockHeader('Vendas Período', stockColumns, 'group-totals', sortState)}
               ${sortableStockHeader('Vendas/dia', stockColumns, 'group-totals', sortState)}
               ${sortableStockHeader('Duração de estoque', stockColumns, 'group-totals', sortState)}
             </tr>
@@ -182,8 +285,9 @@ export function StockPage() {
                 `).join('') : '<td class="group-nasajon muted-text">0</td>'}
                 <td class="group-totals">${correctionCell(row, canWriteStock)}</td>
                 <td class="group-totals numeric-cell">${formatNumber(row.totalLocationsQty)}</td>
+                <td class="group-totals numeric-cell">${formatSalesPeriod(row)}</td>
                 <td class="group-totals numeric-cell">${formatSales(row)}</td>
-                <td class="group-totals numeric-cell total-estimated">${formatDuration(row)}</td>
+                <td class="group-totals numeric-cell total-estimated ${isStockDurationBelowMinimum(row, stockMinimumDays) ? 'stock-duration-warning' : ''}">${formatDuration(row)}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -266,8 +370,9 @@ function buildStockColumns(locations) {
     ]),
     { label: 'Correção estoque', sortValue: row => row.correctionQty },
     { label: 'Qtd. total locais', sortValue: row => row.totalLocationsQty },
+    { label: 'Vendas Período', sortValue: row => row.salesPeriodQty ?? '' },
     { label: 'Vendas/dia', sortValue: row => row.salesPerDayQty ?? '' },
-    { label: 'Duração de estoque', sortValue: row => row.stockDurationDays ?? '' }
+    { label: 'Duração de estoque', sortValue: row => currentStockDurationDays(row) ?? '' }
   ];
 }
 

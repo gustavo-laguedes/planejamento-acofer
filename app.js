@@ -6,6 +6,7 @@ import { AppShell } from './pages/AppShell.js';
 const root = document.getElementById('app');
 const INITIAL_AUTH_TIMEOUT_MS = 7000;
 let renderRun = 0;
+let sessionValidationTimer = null;
 
 function withTimeout(promise, ms, message) {
   let timeoutId;
@@ -20,6 +21,10 @@ function withTimeout(promise, ms, message) {
 
 export async function render() {
   const currentRun = ++renderRun;
+  if (sessionValidationTimer) {
+    clearInterval(sessionValidationTimer);
+    sessionValidationTimer = null;
+  }
   root.innerHTML = '';
   const loading = document.createElement('main');
   loading.className = 'initial-loading';
@@ -59,6 +64,11 @@ export async function render() {
 
     root.innerHTML = '';
     root.appendChild(signedIn ? AppShell() : LoginPage());
+    if (signedIn) {
+      sessionValidationTimer = setInterval(() => {
+        me().catch(() => {});
+      }, 30000);
+    }
   } catch (error) {
     if (currentRun !== renderRun) return;
     root.innerHTML = '';

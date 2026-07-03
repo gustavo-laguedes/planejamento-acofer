@@ -27,6 +27,21 @@ function formatDateTime(date, time) {
   return [formatDate(date), time].filter(Boolean).join(' ');
 }
 
+function operationPeriod(operations = [], fallbackStartDate = null, fallbackEndDate = null) {
+  const starts = normalizeArray(operations)
+    .map(operation => String(operation?.startDate || '').slice(0, 10))
+    .filter(value => /^\d{4}-\d{2}-\d{2}$/.test(value))
+    .sort();
+  const ends = normalizeArray(operations)
+    .map(operation => String(operation?.endDate || '').slice(0, 10))
+    .filter(value => /^\d{4}-\d{2}-\d{2}$/.test(value))
+    .sort();
+  return {
+    startDate: starts[0] || fallbackStartDate,
+    endDate: ends.at(-1) || fallbackEndDate || fallbackStartDate
+  };
+}
+
 function formatNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '';
@@ -54,6 +69,10 @@ function formatHourDuration(value) {
 function statusLabel(value) {
   const labels = { planned: 'Planejado', launched: 'Lançado', canceled: 'Cancelado' };
   return labels[String(value || '').toLowerCase()] || value || 'Sem status';
+}
+
+function isCanceledPlan(plan = {}) {
+  return String(plan.status || '').toLowerCase() === 'canceled';
 }
 
 function isPlanningRootName(value) {
@@ -135,6 +154,33 @@ function collectAlerts(tree, operations) {
   return [...new Set(alerts)];
 }
 
+function stockAuthorizationFromPlan(plan = {}, tree = null, operations = []) {
+  const fromTree = normalizeObject(tree || plan.schedule_tree)._stockAuthorization;
+  if (fromTree && typeof fromTree === 'object') return fromTree;
+  return normalizeArray(operations || plan.operations).find(operation => operation?._planningMeta)?._planningMeta?.stockAuthorization || null;
+}
+
+function drawAlertsPage(doc, plan, tree, operations, pageNumberRef) {
+  addPage(doc, 'ALERTAS E OBSERVAÇÕES', plan, pageNumberRef);
+  sectionTitle(doc, 'ALERTAS E OBSERVAÇÕES', 42, 116);
+  const authorization = stockAuthorizationFromPlan(plan, tree, operations);
+  const materials = Array.isArray(authorization?.materials) ? authorization.materials : [];
+  if (!materials.length) {
+    doc.fillColor('#4B5563').font('Helvetica').fontSize(10).text('Sem alertas registrados.', 42, 150, { width: 511 });
+    return;
+  }
+  doc.fillColor('#111827')
+    .font('Helvetica-Bold')
+    .fontSize(9)
+    .text('Planejamento salvo mediante autorização por estoque insuficiente.', 42, 150, { width: 511 });
+  drawTable(doc, [
+    { label: 'Material', render: row => row.materialName || row.material || '' },
+    { label: 'Necessário', render: row => `${formatNumber(row.requiredQty)} ${row.unit || ''}`.trim() },
+    { label: 'Saldo', render: row => `${formatNumber(row.stockQty)} ${row.unit || ''}`.trim() },
+    { label: 'Falta', render: row => `${formatNumber(row.shortageQty)} ${row.unit || ''}`.trim() }
+  ], materials, 42, 184, 511, { rowHeight: 28, fontSize: 7 });
+}
+
 function linkedProductions(operation) {
   if (!Array.isArray(operation.productionItems) || !operation.productionItems.length) {
     return operation.productionTitle || '-';
@@ -156,10 +202,24 @@ function drawHeader(doc, title, plan, pageNumber) {
   doc.y = 100;
 }
 
+function drawCanceledWatermark(doc, plan) {
+  if (!isCanceledPlan(plan)) return;
+  doc.save();
+  doc.fillColor('#DC2626').fillOpacity(0.12).font('Helvetica-Bold').fontSize(74);
+  doc.rotate(-32, { origin: [doc.page.width / 2, doc.page.height / 2] });
+  doc.text('CANCELADO', 0, doc.page.height / 2 - 42, {
+    width: doc.page.width,
+    align: 'center'
+  });
+  doc.restore();
+  doc.fillOpacity(1);
+}
+
 function addPage(doc, title, plan, pageNumberRef) {
   if (pageNumberRef.value > 0) doc.addPage();
   pageNumberRef.value += 1;
   drawHeader(doc, title, plan, pageNumberRef.value);
+  drawCanceledWatermark(doc, plan);
 }
 
 function pill(doc, text, x, y, width, color = '#1F2937') {
@@ -307,11 +367,20 @@ function buildFlowGraph(roots) {
   return { columns, edges };
 }
 
+function nodeUsesStockBalance(node) {
+  if (!node || node.isInitialRawMaterial || node.isFinalProduct === true) return false;
+  const requiredQty = Number(node.requiredQty || 0);
+  const produceQty = Number(node.produceQty || 0);
+  const stockUsedQty = Number(node.stockUsedQty || 0);
+  return stockUsedQty > 0 || (requiredQty > 0 && produceQty <= 0);
+}
+
 function nodeStatus(node) {
   const stockQty = Number(node.stockQty || 0);
   const requiredQty = Number(node.requiredQty || 0);
   const produceQty = Number(node.produceQty || 0);
   if (node.isInitialRawMaterial) return stockQty >= requiredQty ? 'Estoque suficiente' : 'Comprar / matéria-prima inicial';
+  if (nodeUsesStockBalance(node)) return '✓ Utilizando saldo';
   if (produceQty > 0) return 'Produção cheia';
   return 'Estoque atende';
 }
@@ -388,15 +457,16 @@ function drawPage1(doc, plan, rows, operations, transports, pageNumberRef) {
   addPage(doc, 'PLANEJAMENTO DE PRODUÇÃO', plan, pageNumberRef);
   const firstOperation = operations[0];
   const lastOperation = operations[operations.length - 1];
+  const period = operationPeriod(operations, plan.start_date, plan.end_date);
   doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(18).text('PLANEJAMENTO DE PRODUÇÃO', 42, 106, { width: 510 });
   doc.fillColor('#6B7280').font('Helvetica').fontSize(8).text(`Emitido em ${new Date().toLocaleString('pt-BR')}`, 42, 130);
-  pill(doc, statusLabel(plan.status), 424, 108, 126);
+  pill(doc, statusLabel(plan.status), 424, 108, 126, isCanceledPlan(plan) ? '#DC2626' : '#1F2937');
 
   const infoY = 154;
   const info = [
     ['Código', plan.code || plan.id],
     ['Emissão', new Date().toLocaleDateString('pt-BR')],
-    ['Período', `${formatDate(plan.start_date)} até ${formatDate(plan.end_date)}`],
+    ['Período', `${formatDate(period.startDate)} até ${formatDate(period.endDate)}`],
     ['Responsável', 'PCP'],
     ['Turno', formatHourDuration(plan.hours_per_day)],
     ['Status', statusLabel(plan.status)]
@@ -482,6 +552,8 @@ export function createPlanningPdf(plan, days, tree = null, operations = []) {
 
   addPage(doc, 'FLUXO PRODUTIVO', plan, pageNumberRef);
   drawFlowGraph(doc, tree);
+
+  drawAlertsPage(doc, plan, tree, operations, pageNumberRef);
 
   drawSignatures(doc, plan, pageNumberRef);
   doc.end();

@@ -6,7 +6,11 @@ export function InternalTabs(tabs, activeTab, onChange) {
     button.className = tab.id === activeTab ? 'internal-tab active' : 'internal-tab';
     button.type = 'button';
     button.textContent = tab.label;
-    button.addEventListener('click', () => onChange(tab.id));
+    button.addEventListener('click', () => {
+      nav.querySelectorAll('.internal-tab').forEach(item => item.classList.remove('active'));
+      button.classList.add('active');
+      onChange(tab.id);
+    });
     nav.appendChild(button);
   });
   return nav;

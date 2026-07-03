@@ -5,6 +5,8 @@ import { DataTable } from '../shared/DataTable.js';
 import { InternalTabs } from '../shared/InternalTabs.js';
 import { createOperationOverlay, setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
+import { SummaryCards } from '../shared/SummaryCard.js';
+import { PlanningStatusPill } from '../shared/StatusPill.js';
 
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
 const PRODUCTION_THEMES = [
@@ -23,6 +25,13 @@ const PRODUCTION_THEMES = [
   { start: '#A65F6F', end: '#DCABB5', soft: '#FBF0F2', border: '#C88392', text: '#4F2730', card: '#FBF0F2' }
 ];
 const PRODUCTION_THEME_SEQUENCE = [1, 3, 2, 4, 7, 6, 5, 8, 10, 9, 11, 12, 0];
+const PRODUCTION_COLOR_PALETTE = [
+  '#4D86A6', '#DE9642', '#63B485', '#A485B7', '#C29635', '#5AA9A4',
+  '#B87182', '#64717D', '#8C9B54', '#4C8993', '#AA7452', '#C88392',
+  '#2F343B', '#2563EB', '#DC2626', '#16A34A', '#9333EA', '#D97706',
+  '#0F766E', '#BE123C', '#475569', '#7C3AED', '#15803D', '#B45309'
+];
+const DEFAULT_TEAM_AVAILABLE = 6;
 
 const planningTabs = [
   { id: 'simulation', label: 'Simulação' },
@@ -61,6 +70,19 @@ function formatPeriod(startDate, endDate) {
   return start && end ? `${start} at\u00e9 ${end}` : 'Per\u00edodo n\u00e3o informado';
 }
 
+function operationPeriod(operations = [], fallbackStartDate = null, fallbackEndDate = null) {
+  const dates = normalizeJsonArray(operations).reduce((result, operation) => {
+    const startDate = isValidDateOnly(operation?.startDate) ? operation.startDate : null;
+    const endDate = isValidDateOnly(operation?.endDate) ? operation.endDate : null;
+    if (startDate) result.starts.push(startDate);
+    if (endDate) result.ends.push(endDate);
+    return result;
+  }, { starts: [], ends: [] });
+  const startDate = dates.starts.sort()[0] || fallbackStartDate;
+  const endDate = dates.ends.sort().at(-1) || fallbackEndDate || fallbackStartDate;
+  return { startDate, endDate, label: formatPeriod(startDate, endDate) };
+}
+
 function parsePtBrDecimal(value, fallback = NaN) {
   const rawValue = String(value ?? '').trim();
   if (!rawValue) return fallback;
@@ -82,6 +104,33 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function isHexColor(value) {
+  return /^#[0-9a-f]{6}$/i.test(String(value || '').trim());
+}
+
+function hexToRgb(value) {
+  const normalized = String(value || '').replace('#', '');
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16)
+  };
+}
+
+function rgbToHex({ r, g, b }) {
+  return `#${[r, g, b].map(value => Math.round(value).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
+}
+
+function mixHex(firstColor, secondColor, amount = 0.5) {
+  const first = hexToRgb(firstColor);
+  const second = hexToRgb(secondColor);
+  return rgbToHex({
+    r: first.r + ((second.r - first.r) * amount),
+    g: first.g + ((second.g - first.g) * amount),
+    b: first.b + ((second.b - first.b) * amount)
+  });
 }
 
 function normalizeJsonArray(value) {
@@ -116,6 +165,93 @@ function formatPtBrDecimal(value) {
   });
 }
 
+function stockShortageKey(item = {}) {
+  return [
+    item.materialId ?? '',
+    item.materialCode || '',
+    item.materialName || item.material || '',
+    item.unit || ''
+  ].join('|');
+}
+
+function collectStockShortagesFromTree(tree) {
+  const grouped = new Map();
+  const roots = tree && typeof tree === 'object'
+    ? Array.isArray(tree.children) && isPlanningRootName(tree.materialName) ? tree.children : [tree]
+    : [];
+  function visit(node) {
+    if (!node || typeof node !== 'object') return;
+    const requiredQty = Number(node.requiredQty || 0);
+    const stockQty = Number(node.stockQty || 0);
+    if (node.isInitialRawMaterial && requiredQty > stockQty) {
+      const item = {
+        materialId: node.materialId ?? null,
+        materialCode: node.materialCode || '',
+        materialName: node.materialName || '',
+        material: node.materialName || '',
+        unit: node.unit || '',
+        requiredQty,
+        stockQty,
+        shortageQty: Math.max(requiredQty - stockQty, 0)
+      };
+      const key = stockShortageKey(item);
+      const current = grouped.get(key);
+      if (current) {
+        current.requiredQty = Number((current.requiredQty + item.requiredQty).toFixed(3));
+        current.stockQty = Number(Math.max(current.stockQty, item.stockQty).toFixed(3));
+        current.shortageQty = Number(Math.max(current.requiredQty - current.stockQty, 0).toFixed(3));
+      } else {
+        grouped.set(key, {
+          ...item,
+          requiredQty: Number(item.requiredQty.toFixed(3)),
+          stockQty: Number(item.stockQty.toFixed(3)),
+          shortageQty: Number(item.shortageQty.toFixed(3))
+        });
+      }
+    }
+    (node.children || []).forEach(visit);
+  }
+  roots.forEach(visit);
+  return [...grouped.values()];
+}
+
+function stockAuthorizationFromPlan(plan = {}, tree = null, operations = []) {
+  const fromTree = normalizeJsonObject(tree || plan.schedule_tree)._stockAuthorization;
+  if (fromTree && typeof fromTree === 'object') return fromTree;
+  return normalizeJsonArray(operations || plan.operations).find(operation => operation?._planningMeta)?._planningMeta?.stockAuthorization || null;
+}
+
+function renderStockShortageTable(shortages = []) {
+  return `
+    <div class="detail-table-wrap">
+      <table class="detail-table">
+        <thead>
+          <tr>
+            <th>Material</th>
+            <th>Necess&aacute;rio</th>
+            <th>Saldo</th>
+            <th>Falta</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${shortages.map(item => `
+            <tr>
+              <td>${escapeHtml(item.materialName || item.material || '')}</td>
+              <td>${escapeHtml(`${formatPtBrDecimal(item.requiredQty)} ${item.unit || ''}`.trim())}</td>
+              <td>${escapeHtml(`${formatPtBrDecimal(item.stockQty)} ${item.unit || ''}`.trim())}</td>
+              <td>${escapeHtml(`${formatPtBrDecimal(item.shortageQty)} ${item.unit || ''}`.trim())}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function canAuthorizeStockShortage(user) {
+  return ['Super Admin', 'Diretor', 'Gerente'].includes(String(user?.role || '').trim());
+}
+
 function formatStatus(value) {
   const labels = {
     planned: 'Planejado',
@@ -123,6 +259,15 @@ function formatStatus(value) {
     canceled: 'Cancelado'
   };
   return labels[String(value || '').toLowerCase()] || value || 'Sem status';
+}
+
+function isCanceledStatus(value) {
+  return String(value || '').toLowerCase() === 'canceled';
+}
+
+function planningStatusPill(value) {
+  const canceled = isCanceledStatus(value);
+  return PlanningStatusPill(formatStatus(value), { statusClass: canceled ? 'canceled' : '' });
 }
 
 function formatDuration(minutes) {
@@ -197,14 +342,20 @@ function defaultShift(index = 0, startTime = null) {
     pauseLabel: index === 0 ? 'Horas de almo&ccedil;o' : 'Horas de janta',
     pauseHours,
     shiftEndTime: minutesToTime(shiftEndMinutes),
-    teamAvailable: ''
+    teamAvailable: DEFAULT_TEAM_AVAILABLE
   };
+}
+
+function defaultTeamAvailableForShift(value, index = 0) {
+  const available = Number(value ?? DEFAULT_TEAM_AVAILABLE) || DEFAULT_TEAM_AVAILABLE;
+  return index === 0 ? Math.max(available, DEFAULT_TEAM_AVAILABLE) : Math.max(available, 0);
 }
 
 function emptyProduction(index = 0) {
   return {
     id: `production-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     title: `Produ&ccedil;&atilde;o ${index + 1}`,
+    color: automaticProductionColor(index),
     materialId: '',
     materialSearch: '',
     productionModelName: '',
@@ -216,13 +367,41 @@ function emptyProduction(index = 0) {
   };
 }
 
-function productionTheme(index = 0) {
+function automaticProductionColor(index = 0) {
+  const theme = productionTheme(index);
+  return theme.border;
+}
+
+function nextProductionColor(previousColor = null, index = 0) {
+  const fallbackColor = automaticProductionColor(index);
+  const normalizedPrevious = isHexColor(previousColor) ? String(previousColor).toUpperCase() : null;
+  const paletteStart = PRODUCTION_COLOR_PALETTE.indexOf(fallbackColor);
+  const startIndex = paletteStart >= 0 ? paletteStart : index % PRODUCTION_COLOR_PALETTE.length;
+  for (let offset = 0; offset < PRODUCTION_COLOR_PALETTE.length; offset += 1) {
+    const color = PRODUCTION_COLOR_PALETTE[(startIndex + offset) % PRODUCTION_COLOR_PALETTE.length];
+    if (color !== normalizedPrevious) return color;
+  }
+  return fallbackColor;
+}
+
+function productionTheme(index = 0, color = null) {
+  if (isHexColor(color)) {
+    const border = String(color).toUpperCase();
+    return {
+      start: border,
+      end: mixHex(border, '#FFFFFF', 0.46),
+      soft: mixHex(border, '#FFFFFF', 0.9),
+      border,
+      text: '#1F2937',
+      card: mixHex(border, '#FFFFFF', 0.92)
+    };
+  }
   const sequenceIndex = PRODUCTION_THEME_SEQUENCE[index % PRODUCTION_THEME_SEQUENCE.length];
   return PRODUCTION_THEMES[sequenceIndex] || PRODUCTION_THEMES[0];
 }
 
-function productionThemeStyle(index = 0) {
-  const theme = productionTheme(index);
+function productionThemeStyle(index = 0, color = null) {
+  const theme = productionTheme(index, color);
   return [
     `--production-start: ${theme.start}`,
     `--production-end: ${theme.end}`,
@@ -237,7 +416,7 @@ function productionSegmentStyle(productions = []) {
   const items = productions.length ? productions : [{ index: 0 }];
   const step = 100 / items.length;
   const stops = items.map((item, index) => {
-    const theme = productionTheme(Number(item.index || 0));
+    const theme = productionTheme(Number(item.index || 0), item.color);
     const start = Number((index * step).toFixed(3));
     const end = Number(((index + 1) * step).toFixed(3));
     return `${theme.border} ${start}% ${end}%`;
@@ -259,12 +438,13 @@ function defaultDraft() {
   const start = today();
   return {
     planningStartDate: start,
-    planningEndDate: addDays(start, 7),
     shifts: [defaultShift(0)],
     productions: [emptyProduction(0)],
     stockOnlyMaterials: [],
+    stockOnlyMaterialChoices: [],
     operationOverrides: {},
     operationSplits: [],
+    dailyTeamOverrides: {},
     lastPayload: null,
     currentSimulation: null
   };
@@ -278,8 +458,10 @@ function normalizeDraft(rawDraft) {
     shifts: Array.isArray(draft.shifts) && draft.shifts.length ? draft.shifts : [defaultShift(0)],
     productions: Array.isArray(draft.productions) && draft.productions.length ? draft.productions : [emptyProduction(0)],
     stockOnlyMaterials: Array.isArray(draft.stockOnlyMaterials) ? draft.stockOnlyMaterials : [],
+    stockOnlyMaterialChoices: Array.isArray(draft.stockOnlyMaterialChoices) ? draft.stockOnlyMaterialChoices : [],
     operationOverrides: draft.operationOverrides && typeof draft.operationOverrides === 'object' ? draft.operationOverrides : {},
     operationSplits: Array.isArray(draft.operationSplits) ? draft.operationSplits : [],
+    dailyTeamOverrides: draft.dailyTeamOverrides && typeof draft.dailyTeamOverrides === 'object' ? draft.dailyTeamOverrides : {},
     lastPayload: draft.lastPayload && typeof draft.lastPayload === 'object' ? draft.lastPayload : null,
     currentSimulation: draft.currentSimulation && typeof draft.currentSimulation === 'object' ? draft.currentSimulation : null
   };
@@ -289,13 +471,14 @@ function normalizeDraft(rawDraft) {
     id: shift.id || `shift-${index}-${Date.now()}`,
     label: `Turno ${index + 1}`,
     pauseLabel: shift.pauseLabel || (index === 0 ? 'Horas de almo&ccedil;o' : 'Horas de janta'),
-    teamAvailable: shift.teamAvailable ?? ''
+    teamAvailable: defaultTeamAvailableForShift(shift.teamAvailable, index)
   }));
   normalized.productions = normalized.productions.map((production, index) => ({
     ...emptyProduction(index),
     ...production,
     id: production.id || `production-${index}-${Date.now()}`,
     title: `Produ&ccedil;&atilde;o ${index + 1}`,
+    color: isHexColor(production.color) ? String(production.color).toUpperCase() : automaticProductionColor(index),
     transports: Array.isArray(production.transports)
       ? production.transports.map((transport, transportIndex) => ({
           ...emptyTransport(),
@@ -382,7 +565,7 @@ export function PlanningPage() {
 
   function normalizePlanningPayload(sourcePayload = payload(), planningCode = draft.planningCode) {
     const planningStartDate = sourcePayload.planningStartDate || sourcePayload.startDate || sourcePayload.selectedDate || draft.planningStartDate;
-    const planningEndDate = sourcePayload.planningEndDate || sourcePayload.endDate || draft.planningEndDate || planningStartDate;
+    const planningEndDate = operationPeriod(currentSimulation?.operations, planningStartDate, sourcePayload.planningEndDate || sourcePayload.endDate).endDate;
     return {
       ...sourcePayload,
       selectedDate: planningStartDate,
@@ -472,11 +655,12 @@ export function PlanningPage() {
   }
 
   function productionPayload() {
-    return draft.productions.map(production => {
+    return draft.productions.map((production, index) => {
       hydrateProductionDefaults(production);
       const material = materialById(production.materialId);
       return {
         materialId: Number(production.materialId),
+        color: isHexColor(production.color) ? production.color : automaticProductionColor(index),
         materialCode: material?.codes?.[0] || '',
         plannedQty: Number(production.plannedQty),
         plannedUnit: material?.primary_unit || 'un',
@@ -507,7 +691,6 @@ export function PlanningPage() {
       selectedDate: draft.planningStartDate,
       startDate: draft.planningStartDate,
       planningStartDate: draft.planningStartDate,
-      planningEndDate: draft.planningEndDate,
       materialId: Number(firstProduction.materialId),
       materialCode: firstMaterial?.codes?.[0] || '',
       plannedQty: Number(firstProduction.plannedQty),
@@ -515,20 +698,62 @@ export function PlanningPage() {
       machineName: firstProduction.machineName,
       peopleCount: Number(firstProduction.peopleCount),
       productionModelName: firstProduction.productionModelName,
-      shifts: draft.shifts.map(shift => ({
+      shifts: draft.shifts.map((shift, index) => ({
         label: shift.label,
         hoursPerDay: String(shift.hoursPerDay || '').trim() || '8,48',
         shiftStartTime: shift.shiftStartTime,
         pauseLabel: shift.pauseLabel,
         pauseHours: String(shift.pauseHours || '').trim() || '0',
         shiftEndTime: shift.shiftEndTime,
-        teamAvailable: Number(shift.teamAvailable || 0)
+        teamAvailable: defaultTeamAvailableForShift(shift.teamAvailable, index)
       })),
       productions: productionPayload(),
-      stockOnlyMaterials: draft.stockOnlyMaterials || [],
+      stockOnlyMaterials: stockOnlyMaterialsForPayload(),
       operationOverrides: draft.operationOverrides || {},
       operationSplits: draft.operationSplits || [],
+      dailyTeamOverrides: draft.dailyTeamOverrides || {},
       planningCode: draft.planningCode || null
+    };
+  }
+
+  function productionColorByIndex(index = 0) {
+    const production = draft.productions[Number(index) || 0];
+    return isHexColor(production?.color) ? String(production.color).toUpperCase() : automaticProductionColor(index);
+  }
+
+  function withProductionColors(result) {
+    if (!result || typeof result !== 'object') return result;
+    const colorForIndex = index => productionColorByIndex(Math.floor(Number(index) || 0));
+    const colorNode = node => {
+      if (!node || typeof node !== 'object') return node;
+      const productionIndex = Number(node.productionIndex || 0);
+      return {
+        ...node,
+        productionColor: isHexColor(node.productionColor) ? node.productionColor : colorForIndex(productionIndex),
+        children: Array.isArray(node.children) ? node.children.map(colorNode) : []
+      };
+    };
+    return {
+      ...result,
+      summary: {
+        ...(result.summary || {}),
+        dailyTeamOverrides: draft.dailyTeamOverrides || {},
+        productions: (result.summary?.productions || []).map(production => ({
+          ...production,
+          color: isHexColor(production.color) ? production.color : colorForIndex(production.productionIndex)
+        }))
+      },
+      tree: colorNode(result.tree),
+      operations: (result.operations || []).map(operation => ({
+        ...operation,
+        productionColor: isHexColor(operation.productionColor) ? operation.productionColor : colorForIndex(operation.productionIndex),
+        productionBreakdown: Array.isArray(operation.productionBreakdown)
+          ? operation.productionBreakdown.map(item => ({
+              ...item,
+              productionColor: isHexColor(item.productionColor) ? item.productionColor : colorForIndex(item.productionIndex)
+            }))
+          : operation.productionBreakdown
+      }))
     };
   }
 
@@ -545,16 +770,10 @@ export function PlanningPage() {
   }
 
   function validateDraft(form) {
-    if (!draft.planningStartDate || !draft.planningEndDate) {
+    if (!draft.planningStartDate) {
       form.reportValidity();
       return false;
     }
-    if (draft.planningEndDate < draft.planningStartDate) {
-      form.elements.planningEndDate.setCustomValidity('A data final deve ser maior ou igual à data inicial.');
-      form.reportValidity();
-      return false;
-    }
-    form.elements.planningEndDate.setCustomValidity('');
     const invalidProduction = draft.productions.find(production => !materialById(production.materialId) || !(Number(production.plannedQty) > 0));
     if (invalidProduction) {
       toast('Selecione material e quantidade maior que zero em todas as produções.');
@@ -562,21 +781,23 @@ export function PlanningPage() {
     }
     const invalidDesiredDate = draft.productions.find(production =>
       production.desiredDate
-      && (production.desiredDate < draft.planningStartDate || production.desiredDate > draft.planningEndDate)
+      && production.desiredDate < draft.planningStartDate
     );
     if (invalidDesiredDate) {
-      toast('A data desejada deve ficar dentro do range do planejamento.');
+      toast('A data desejada deve ser maior ou igual à data inicial do planejamento.');
       return false;
     }
     const invalidShift = draft.shifts.find(shift =>
       !(parsePtBrDecimal(shift.hoursPerDay, 0) > 0)
       || !(parsePtBrDecimal(shift.pauseHours, -1) >= 0)
-      || !(Number(shift.teamAvailable || 0) >= 0)
+      || !(Number(shift.teamAvailable) > 0)
       || !shift.shiftStartTime
       || !shift.shiftEndTime
     );
     if (invalidShift) {
-      toast('Revise os horários e pausas dos turnos.');
+      toast(!(Number(invalidShift.teamAvailable) > 0)
+        ? 'Informe a equipe disponível do turno.'
+        : 'Revise os horários e pausas dos turnos.');
       return false;
     }
     const invalidTransport = draft.productions.some(production => {
@@ -620,10 +841,21 @@ export function PlanningPage() {
           <label>Come&ccedil;o do turno<input name="shiftStartTime" type="time" value="${escapeHtml(shift.shiftStartTime)}" required /></label>
           <label>${shift.pauseLabel || 'Horas de pausa'}<input name="pauseHours" type="text" inputmode="decimal" value="${escapeHtml(shift.pauseHours)}" /></label>
           <label>Final do turno<input name="shiftEndTime" type="time" value="${escapeHtml(shift.shiftEndTime)}" required /></label>
-          <label>Equipe dispon&iacute;vel<input name="teamAvailable" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(shift.teamAvailable)}" /></label>
+          <label>Equipe dispon&iacute;vel<input name="teamAvailable" type="number" min="1" step="1" inputmode="numeric" value="${escapeHtml(shift.teamAvailable)}" required /></label>
         </div>
       </article>
     `;
+  }
+
+  function importedProductionWarning(production, material, rows) {
+    if (production.source !== 'Assistente PCP') return '';
+    if (!material) return 'Material importado não encontrado nos cadastros.';
+    if (!(Number(production.plannedQty) > 0)) return 'Quantidade sugerida não estimada.';
+    if (!rows.length) return 'Sem matriz de produtividade.';
+    if (production.machineName && !rows.some(row => String(row.machine_name) === String(production.machineName))) return 'Máquina sugerida indisponível para este material.';
+    if (production.peopleCount && !rows.some(row => String(row.people_count) === String(production.peopleCount))) return 'Pessoas sugeridas indisponíveis para este material.';
+    if (production.sourceObservation && !/pronto para/i.test(String(production.sourceObservation))) return production.sourceObservation;
+    return '';
   }
 
   function renderProduction(production, index) {
@@ -637,7 +869,12 @@ export function PlanningPage() {
       .filter(Boolean))];
     const models = productionModelsFor(material);
     const transportMaterials = productionMaterialOptions(production);
-    const themeStyle = productionThemeStyle(index);
+    const selectedColor = isHexColor(production.color) ? production.color : automaticProductionColor(index);
+    const themeStyle = productionThemeStyle(index, selectedColor);
+    const sourceBadge = production.source === 'Assistente PCP'
+      ? '<span class="production-source-badge">Origem: Assistente PCP</span>'
+      : '';
+    const sourceWarning = importedProductionWarning(production, material, rows);
     const transportRows = (production.transports || []).map((transport, transportIndex) => `
       <article class="transport-row" data-transport-id="${transport.id}">
         <label>Material transportado
@@ -667,9 +904,15 @@ export function PlanningPage() {
     return `
       <article class="planning-subcard production-block" data-production-id="${production.id}" style="${themeStyle}">
         <div class="planning-subcard-header">
-          <h3 class="production-title"><span class="production-gradient-key" aria-hidden="true"></span>Produ&ccedil;&atilde;o ${index + 1}</h3>
+          <h3 class="production-title"><button class="production-gradient-key production-color-trigger" type="button" data-color-trigger aria-label="Alterar cor da Produ&ccedil;&atilde;o ${index + 1}" title="Alterar cor" style="${themeStyle}"></button>Produ&ccedil;&atilde;o ${index + 1}</h3>
           ${draft.productions.length > 1 ? '<button class="link-button danger remove-production" type="button">Excluir produ&ccedil;&atilde;o</button>' : ''}
         </div>
+        ${sourceBadge || sourceWarning ? `
+          <div class="production-source-row">
+            ${sourceBadge}
+            ${sourceWarning ? `<span class="production-source-warning">${escapeHtml(sourceWarning)}</span>` : ''}
+          </div>
+        ` : ''}
         <div class="grid-form planning-inner-grid">
           <label>Material
             <div class="material-autocomplete">
@@ -709,7 +952,7 @@ export function PlanningPage() {
             </select>
           </label>
           <label>Data desejada
-            <input name="desiredDate" type="date" min="${escapeHtml(draft.planningStartDate)}" max="${escapeHtml(draft.planningEndDate)}" value="${escapeHtml(production.desiredDate)}" />
+            <input name="desiredDate" type="date" min="${escapeHtml(draft.planningStartDate)}" value="${escapeHtml(production.desiredDate)}" />
           </label>
         </div>
         <section class="transport-section">
@@ -725,6 +968,19 @@ export function PlanningPage() {
     `;
   }
 
+  function stockOnlyKey(productionIndex, materialId) {
+    return `${Number(productionIndex || 0)}:${Number(materialId)}`;
+  }
+
+  function stockOnlyMaterialsForPayload() {
+    const finalProducts = new Set(draft.productions.map((production, index) =>
+      stockOnlyKey(index, production.materialId)
+    ));
+    return (draft.stockOnlyMaterials || []).filter(item =>
+      !finalProducts.has(stockOnlyKey(item.productionIndex, item.materialId))
+    );
+  }
+
   function stockOnlyChecked(productionIndex, materialId) {
     return (draft.stockOnlyMaterials || []).some(item =>
       Number(item.productionIndex) === Number(productionIndex)
@@ -732,8 +988,77 @@ export function PlanningPage() {
     );
   }
 
+  function stockOnlyChoice(productionIndex, materialId) {
+    return (draft.stockOnlyMaterialChoices || []).find(item =>
+      Number(item.productionIndex) === Number(productionIndex)
+      && String(item.materialId) === String(materialId)
+    ) || null;
+  }
+
+  function setStockOnlyChoice(productionIndexes, materialId, useStock) {
+    const indexSet = new Set(productionIndexes.map(value => Number(value)));
+    draft.stockOnlyMaterialChoices = (draft.stockOnlyMaterialChoices || []).filter(item =>
+      !(indexSet.has(Number(item.productionIndex)) && Number(item.materialId) === Number(materialId))
+    );
+    productionIndexes.forEach(productionIndex => {
+      draft.stockOnlyMaterialChoices.push({
+        productionIndex,
+        materialId,
+        useStock: useStock === true
+      });
+    });
+  }
+
+  function hasStockAvailable(node) {
+    return Number(node?.stockQty || 0) > 0;
+  }
+
   function consolidatedStockOnlyChecked(productions, materialId) {
     return productions.length > 0 && productions.every(production => stockOnlyChecked(production.index, materialId));
+  }
+
+  function productionFlowTrees(result) {
+    return result?.tree?.children?.length && isPlanningRootName(result.tree.materialName)
+      ? result.tree.children
+      : result?.tree ? [result.tree] : [];
+  }
+
+  function stockOnlyNodeKey(node) {
+    return stockOnlyKey(Number(node?.productionIndex || 0), node?.materialId);
+  }
+
+  function stockOnlyMaterialsFromSimulation(result) {
+    const nextByKey = new Map();
+    function visit(node, isFinalProduct = false) {
+      if (!node || typeof node !== 'object') return;
+      if (!isFinalProduct && !node.isInitialRawMaterial && hasStockAvailable(node)) {
+        const productionIndex = Number(node.productionIndex || 0);
+        const materialId = Number(node.materialId);
+        const manualChoice = stockOnlyChoice(productionIndex, materialId);
+        const shouldUseStock = manualChoice ? manualChoice.useStock === true : true;
+        if (shouldUseStock && Number.isFinite(materialId)) {
+          nextByKey.set(`${productionIndex}:${materialId}`, { productionIndex, materialId });
+        }
+      }
+      (node.children || []).forEach(child => visit(child, false));
+    }
+    productionFlowTrees(result).forEach(root => visit(root, true));
+    return [...nextByKey.values()];
+  }
+
+  function normalizeStockOnlyMaterials(items = []) {
+    return [...new Set(items.map(item => `${Number(item.productionIndex || 0)}:${Number(item.materialId)}`))]
+      .filter(key => !key.endsWith(':NaN'))
+      .sort();
+  }
+
+  function syncStockOnlyMaterialsFromSimulation(result) {
+    const next = stockOnlyMaterialsFromSimulation(result);
+    const currentKeys = normalizeStockOnlyMaterials(draft.stockOnlyMaterials || []);
+    const nextKeys = normalizeStockOnlyMaterials(next);
+    const changed = currentKeys.length !== nextKeys.length || currentKeys.some((key, index) => key !== nextKeys[index]);
+    if (changed) draft.stockOnlyMaterials = next;
+    return changed;
   }
 
   function flowNodeKey(node) {
@@ -771,7 +1096,8 @@ export function PlanningPage() {
       targetNode.productions.push({
         key: productionKey,
         index: Number(sourceNode.productionIndex || 0),
-        title: sourceNode.productionTitle || `Produ&ccedil;&atilde;o ${Number(sourceNode.productionIndex || 0) + 1}`
+        title: sourceNode.productionTitle || `Produ&ccedil;&atilde;o ${Number(sourceNode.productionIndex || 0) + 1}`,
+        color: sourceNode.productionColor
       });
       targetNode.productions.sort((left, right) => Number(left.index || 0) - Number(right.index || 0));
     }
@@ -779,6 +1105,7 @@ export function PlanningPage() {
 
   function buildFlowGraph(roots) {
     const rootNodes = Array.isArray(roots) ? roots.filter(Boolean) : [roots].filter(Boolean);
+    const finalProductKeys = new Set(rootNodes.map(stockOnlyNodeKey));
     const nodes = new Map();
     const incoming = new Map();
     const outgoing = new Map();
@@ -793,18 +1120,22 @@ export function PlanningPage() {
           ...quantities,
           flowKey: key,
           flowOrder: nodes.size,
+          isFinalProduct: finalProductKeys.has(stockOnlyNodeKey(node)),
           children: [],
           productionKeys: new Set([productionKey]),
           productions: [{
             key: productionKey,
             index: Number(node.productionIndex || 0),
-            title: node.productionTitle || `Produ&ccedil;&atilde;o ${Number(node.productionIndex || 0) + 1}`
+            title: node.productionTitle || `Produ&ccedil;&atilde;o ${Number(node.productionIndex || 0) + 1}`,
+            color: node.productionColor
           }]
         });
         incoming.set(key, new Set());
         outgoing.set(key, new Set());
       } else {
-        mergeFlowNode(nodes.get(key), node);
+        const targetNode = nodes.get(key);
+        mergeFlowNode(targetNode, node);
+        targetNode.isFinalProduct = targetNode.isFinalProduct || finalProductKeys.has(stockOnlyNodeKey(node));
       }
       return key;
     }
@@ -854,6 +1185,8 @@ export function PlanningPage() {
   function clearProductionMaterialDecisions(productionIndex) {
     draft.stockOnlyMaterials = (draft.stockOnlyMaterials || [])
       .filter(item => Number(item.productionIndex) !== Number(productionIndex));
+    draft.stockOnlyMaterialChoices = (draft.stockOnlyMaterialChoices || [])
+      .filter(item => Number(item.productionIndex) !== Number(productionIndex));
     draft.operationSplits = (draft.operationSplits || [])
       .filter(item => Number(item.productionIndex || 0) !== Number(productionIndex));
   }
@@ -869,6 +1202,9 @@ export function PlanningPage() {
       return currentIndex > removedIndex ? { ...item, productionIndex: currentIndex - 1 } : item;
     };
     draft.stockOnlyMaterials = (draft.stockOnlyMaterials || [])
+      .filter(item => Number(item.productionIndex || 0) !== removedIndex)
+      .map(reindex);
+    draft.stockOnlyMaterialChoices = (draft.stockOnlyMaterialChoices || [])
       .filter(item => Number(item.productionIndex || 0) !== removedIndex)
       .map(reindex);
     draft.operationSplits = (draft.operationSplits || [])
@@ -900,20 +1236,37 @@ export function PlanningPage() {
     return { label: 'Estoque atende', className: 'stock-ok' };
   }
 
-  function renderFlowNodeCard(node) {
-    const productions = Array.isArray(node.productions) && node.productions.length
-      ? node.productions
-      : [{ index: Number(node.productionIndex || 0), title: node.productionTitle || `Produ&ccedil;&atilde;o ${Number(node.productionIndex || 0) + 1}` }];
-    const productionIndex = Number(productions[0]?.index || node.productionIndex || 0);
-    const checked = consolidatedStockOnlyChecked(productions, node.materialId);
-    const stockQty = Number(node.stockQty || 0);
+  function nodeUsesStockBalance(node) {
+    if (!node || node.isInitialRawMaterial || node.isFinalProduct === true) return false;
     const requiredQty = Number(node.requiredQty || 0);
     const produceQty = Number(node.produceQty || 0);
     const stockUsedQty = Number(node.stockUsedQty || 0);
-    const status = flowNodeStatus(node, checked, produceQty, stockUsedQty, stockQty, requiredQty);
+    return stockUsedQty > 0 || (requiredQty > 0 && produceQty <= 0);
+  }
+
+  function renderStockBalanceInfo(node) {
+    return nodeUsesStockBalance(node)
+      ? '<span class="stock-only-info">✓ Utilizando saldo</span>'
+      : '';
+  }
+
+  function renderFlowNodeCard(node, options = {}) {
+    const productions = Array.isArray(node.productions) && node.productions.length
+      ? node.productions
+      : [{ index: Number(node.productionIndex || 0), title: node.productionTitle || `Produ&ccedil;&atilde;o ${Number(node.productionIndex || 0) + 1}`, color: node.productionColor }];
+    const productionIndex = Number(productions[0]?.index || node.productionIndex || 0);
+    const checked = consolidatedStockOnlyChecked(productions, node.materialId);
+    const stockQty = Number(node.stockQty || 0);
+    const isFinalProduct = node.isFinalProduct === true;
+    const canUseStock = !isFinalProduct && hasStockAvailable(node);
+    const effectiveChecked = !isFinalProduct && checked && canUseStock;
+    const requiredQty = Number(node.requiredQty || 0);
+    const produceQty = Number(node.produceQty || 0);
+    const stockUsedQty = Number(node.stockUsedQty || 0);
+    const status = flowNodeStatus(node, effectiveChecked, produceQty, stockUsedQty, stockQty, requiredQty);
     const rawMaterialWarning = node.isInitialRawMaterial && stockQty < requiredQty;
     return `
-        <div class="production-flow-node${produceQty > 0 ? ' needs-production' : ' stock-covered'}${rawMaterialWarning ? ' raw-material-warning' : ''}" data-flow-node-key="${escapeHtml(node.flowKey || flowNodeKey(node))}" style="${productionThemeStyle(productionIndex)}">
+        <div class="production-flow-node${produceQty > 0 ? ' needs-production' : ' stock-covered'}${rawMaterialWarning ? ' raw-material-warning' : ''}" data-flow-node-key="${escapeHtml(node.flowKey || flowNodeKey(node))}" style="${productionThemeStyle(productionIndex, productions[0]?.color || node.productionColor)}">
           <div class="production-flow-node-header">
             <div>
               <strong>${escapeHtml(node.materialName)}</strong>
@@ -929,22 +1282,22 @@ export function PlanningPage() {
               ? '<span>Origem: <strong>Compra / base</strong></span>'
               : `<span>A produzir: <strong>${formatPtBrDecimal(node.produceQty)} ${escapeHtml(node.unit || '')}</strong></span>`}
           </div>
-          ${node.isInitialRawMaterial ? '' : `<label class="stock-only-toggle">
-            <input type="checkbox" data-stock-only data-production-indexes="${escapeHtml(productions.map(production => Number(production.index || 0)).join(','))}" data-material-id="${node.materialId}" ${checked ? 'checked' : ''} />
+          ${options.readOnlyStockToggle ? renderStockBalanceInfo(node) : node.isInitialRawMaterial || isFinalProduct ? '' : `<label class="stock-only-toggle"${canUseStock ? '' : ' title="Sem saldo disponível"'}>
+            <input type="checkbox" data-stock-only data-production-indexes="${escapeHtml(productions.map(production => Number(production.index || 0)).join(','))}" data-material-id="${node.materialId}" ${effectiveChecked ? 'checked' : ''} ${canUseStock ? '' : 'disabled'} />
             <span>Utilizar saldo</span>
           </label>`}
         </div>
     `;
   }
 
-  function renderFlowGraph(trees) {
+  function renderFlowGraph(trees, options = {}) {
     const graph = buildFlowGraph(trees);
     return `
       <div class="production-flow-graph" data-flow-graph>
         <svg class="production-flow-svg" aria-hidden="true"></svg>
         ${graph.columns.map((column, index) => `
           <div class="production-flow-column" data-flow-level="${index}">
-            ${column.map(renderFlowNodeCard).join('')}
+            ${column.map(node => renderFlowNodeCard(node, options)).join('')}
           </div>
         `).join('')}
         <span hidden data-flow-edges>${escapeHtml(JSON.stringify(graph.edges))}</span>
@@ -1000,7 +1353,7 @@ export function PlanningPage() {
       ? summary.map((production, index) => `${production.title || `Produ&ccedil;&atilde;o ${index + 1}`}${production.plannedQty ? ` ${formatPtBrDecimal(production.plannedQty)} ${production.plannedUnit || ''}` : ''}`.trim()).join(' | ')
       : (summary[0]?.title || trees[0]?.productionTitle || 'Fluxo produtivo');
     return `
-      <article class="production-flow-card consolidated-flow-card" data-flow-production="consolidated" style="${productionThemeStyle(0)}">
+      <article class="production-flow-card consolidated-flow-card" data-flow-production="consolidated" style="${productionThemeStyle(0, draft.productions[0]?.color)}">
         <div class="planning-subcard-header">
           <h3 class="production-title"><span class="production-gradient-key" aria-hidden="true"></span>${escapeHtml(title)}</h3>
         </div>
@@ -1009,9 +1362,21 @@ export function PlanningPage() {
     `;
   }
 
+  function timelineOperations(result) {
+    const current = Array.isArray(result?.operations) ? result.operations : [];
+    const existing = Array.isArray(result?.summary?.existingOperations)
+      ? result.summary.existingOperations.map(operation => ({
+          ...operation,
+          _existingScheduleBlocker: true
+        }))
+      : [];
+    return [...existing, ...current];
+  }
+
   function renderSimulation(result, form) {
-    currentSimulation = result;
-    draft.currentSimulation = result;
+    const coloredResult = withProductionColors(result);
+    currentSimulation = coloredResult;
+    draft.currentSimulation = coloredResult;
     draft.lastPayload = lastPayload;
     saveDraftNow();
     hasPendingSimulationChanges = false;
@@ -1022,12 +1387,38 @@ export function PlanningPage() {
     const oldSummaryPanel = target.querySelector('.final-summary-panel');
     if (oldSummaryPanel) oldSummaryPanel.hidden = true;
     timelineTarget.innerHTML = '';
-    timelineTarget.appendChild(CalendarTimeline(result.days, result.operations, result.summary));
-    flowsTarget.innerHTML = renderProductionFlows(result);
+    timelineTarget.appendChild(CalendarTimeline(coloredResult.days, timelineOperations(coloredResult), {
+      mode: 'planning',
+      ...(coloredResult.summary || {})
+    }));
+    flowsTarget.innerHTML = renderProductionFlows(coloredResult);
     requestAnimationFrame(drawProductionFlowConnectors);
     if (notice) notice.hidden = true;
+    target.querySelector('.recalculate-planning')?.toggleAttribute('hidden', true);
     resultsTarget.hidden = false;
     if (form.elements.save) form.elements.save.disabled = !canWritePlanning;
+  }
+
+  function refreshTimelineOnly() {
+    if (!currentSimulation) return;
+    const timelineTarget = target.querySelector('.timeline-target');
+    if (!timelineTarget) return;
+    currentSimulation.summary = {
+      ...(currentSimulation.summary || {}),
+      dailyTeamOverrides: draft.dailyTeamOverrides || {}
+    };
+    timelineTarget.innerHTML = '';
+    timelineTarget.appendChild(CalendarTimeline(currentSimulation.days, timelineOperations(currentSimulation), {
+      mode: 'planning',
+      ...(currentSimulation.summary || {})
+    }));
+  }
+
+  function markPlanningInconsistent() {
+    hasPendingSimulationChanges = true;
+    const notice = target.querySelector('.unsimulated-notice');
+    if (notice) notice.hidden = false;
+    target.querySelector('.recalculate-planning')?.toggleAttribute('hidden', false);
   }
 
   function restoreSimulation(form) {
@@ -1037,21 +1428,23 @@ export function PlanningPage() {
     hasPendingSimulationChanges = wasPending;
     const notice = target.querySelector('.unsimulated-notice');
     if (notice) notice.hidden = !hasPendingSimulationChanges;
+    target.querySelector('.recalculate-planning')?.toggleAttribute('hidden', !hasPendingSimulationChanges);
   }
 
   function summaryCards(result, planningCode) {
     const firstOperation = result.operations[0];
     const lastOperation = result.operations[result.operations.length - 1];
+    const period = operationPeriod(result.operations, result.summary.planningStartDate || draft.planningStartDate, result.summary.planningEndDate || draft.planningEndDate);
     const productions = result.summary.productions || [];
     const transports = draft.productions.reduce((sum, production) => sum + (production.transports || []).length, 0);
     const alerts = [];
-    if (!isValidDateOnly(draft.planningStartDate) || !isValidDateOnly(draft.planningEndDate)) alerts.push('Período do planejamento inválido.');
+    if (!isValidDateOnly(draft.planningStartDate)) alerts.push('Período do planejamento inválido.');
     if (!result.operations.length) alerts.push('Nenhuma operacao produtiva foi gerada.');
     const rawMaterialWarnings = result.operations.filter(operation => operation.isInitialRawMaterial && Number(operation.stockQty || 0) < Number(operation.requiredQty || 0));
     if (rawMaterialWarnings.length) alerts.push('Existem materias-primas iniciais com estoque insuficiente.');
     return [
       ['C&oacute;digo previsto', planningCode],
-      ['Per&iacute;odo planejado', formatPeriod(result.summary.planningStartDate || draft.planningStartDate, result.summary.planningEndDate || draft.planningEndDate)],
+      ['Per&iacute;odo planejado', period.label],
       ['Produ&ccedil;&otilde;es inclu&iacute;das', productions.length || draft.productions.length],
       ['Materiais finais', productions.map(production => production.materialName).join(', ') || result.summary.materialName],
       ['Quantidades', productions.map(production => `${formatPtBrDecimal(production.plannedQty)} ${production.plannedUnit || ''}`.trim()).join(' | ') || `${formatPtBrDecimal(result.summary.plannedQty)} ${result.summary.plannedUnit || ''}`.trim()],
@@ -1066,6 +1459,7 @@ export function PlanningPage() {
   function openFinalSummaryModal(result, planningCode) {
     page.querySelector('.planning-summary-modal')?.remove();
     const cards = summaryCards(result, planningCode);
+    const stockShortages = collectStockShortagesFromTree(result.tree);
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop planning-summary-modal';
     backdrop.innerHTML = `
@@ -1075,7 +1469,7 @@ export function PlanningPage() {
           <button class="link-button close-modal" type="button">Fechar</button>
         </div>
         <div class="final-summary-grid summary-grid compact-summary">
-          ${cards.map(([label, value]) => `<article class="metric-card compact"><span>${label}</span><strong>${escapeHtml(value)}</strong></article>`).join('')}
+          ${SummaryCards(cards.map(([label, value]) => ({ labelHtml: label, value, className: 'compact' })))}
         </div>
         <div class="form-actions modal-actions">
           <button class="secondary-button close-modal" type="button">Voltar/Editar</button>
@@ -1083,10 +1477,77 @@ export function PlanningPage() {
         </div>
       </div>
     `;
+    function requestStockAuthorization(shortages) {
+      return new Promise(resolve => {
+        page.querySelector('.stock-authorization-modal')?.remove();
+        const authBackdrop = document.createElement('div');
+        authBackdrop.className = 'modal-backdrop stock-authorization-modal';
+        authBackdrop.innerHTML = `
+          <div class="modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="stock-authorization-title">
+            <div class="modal-header">
+              <div>
+                <h2 id="stock-authorization-title">ATEN&Ccedil;&Atilde;O: Estoque insuficiente</h2>
+                <p class="modal-subtitle">Existem materiais sem saldo suficiente para atender ao planejamento.</p>
+              </div>
+            </div>
+            <form class="stock-authorization-form">
+              ${renderStockShortageTable(shortages)}
+              <p class="warning-text">Este planejamento possui materiais sem estoque suficiente. Somente usu&aacute;rios autorizados podem confirmar este planejamento.</p>
+              <label class="checkbox-label"><input name="confirmed" type="checkbox" required /> Confirmo que desejo autorizar este planejamento com estoque insuficiente.</label>
+              <p class="form-error" hidden></p>
+              <div class="form-actions modal-actions">
+                <button class="secondary-button cancel-stock-authorization" type="button">Cancelar</button>
+                <button class="primary-button" type="submit">Autorizar e salvar</button>
+              </div>
+            </form>
+          </div>
+        `;
+        function close(value = null) {
+          authBackdrop.remove();
+          resolve(value);
+        }
+        authBackdrop.querySelector('.cancel-stock-authorization').addEventListener('click', () => close(null));
+        authBackdrop.addEventListener('click', event => {
+          if (event.target === authBackdrop) close(null);
+        });
+        authBackdrop.querySelector('.stock-authorization-form').addEventListener('submit', event => {
+          event.preventDefault();
+          const user = getCurrentUser();
+          const error = authBackdrop.querySelector('.form-error');
+          if (!canAuthorizeStockShortage(user)) {
+            error.textContent = 'Você não possui permissão para autorizar planejamentos com estoque insuficiente.';
+            error.hidden = false;
+            return;
+          }
+          if (!event.currentTarget.elements.confirmed.checked) {
+            error.textContent = 'Confirme a autorização para prosseguir.';
+            error.hidden = false;
+            return;
+          }
+          close({
+            confirmed: true,
+            method: 'clerk_authenticated_confirmation',
+            shortages
+          });
+        });
+        page.appendChild(authBackdrop);
+        authBackdrop.querySelector('input[name="confirmed"]')?.focus();
+      });
+    }
+
     async function launchPlanning(button) {
       button.disabled = true;
       try {
-        const saved = await api('/planning/plans', { method: 'POST', body: lastPayload });
+        let body = lastPayload;
+        if (stockShortages.length) {
+          const authorization = await requestStockAuthorization(stockShortages);
+          if (!authorization) {
+            button.disabled = false;
+            return;
+          }
+          body = { ...lastPayload, stockAuthorization: authorization };
+        }
+        const saved = await api('/planning/plans', { method: 'POST', body });
         localStorage.removeItem(DRAFT_KEY);
         draft = defaultDraft();
         lastPayload = null;
@@ -1145,6 +1606,15 @@ export function PlanningPage() {
 
   function planAlerts(tree, operations = []) {
     const alerts = [];
+    const authorization = stockAuthorizationFromPlan({ schedule_tree: tree, operations }, tree, operations);
+    const authorizedShortages = Array.isArray(authorization?.materials) ? authorization.materials : [];
+    if (authorizedShortages.length) {
+      alerts.push('Planejamento salvo mediante autorização por estoque insuficiente.');
+      authorizedShortages.forEach(item => {
+        alerts.push(`${item.materialName || item.material || ''}: necessário ${formatPtBrDecimal(item.requiredQty)} ${item.unit || ''}, saldo ${formatPtBrDecimal(item.stockQty)} ${item.unit || ''}, falta ${formatPtBrDecimal(item.shortageQty)} ${item.unit || ''}.`);
+      });
+      return [...new Set(alerts)];
+    }
     function visit(node) {
       if (!node) return;
       if (node.isInitialRawMaterial && Number(node.stockQty || 0) < Number(node.requiredQty || 0)) {
@@ -1198,36 +1668,39 @@ export function PlanningPage() {
   function renderPlanFlowDetail(tree) {
     const roots = planTreeRoots(tree);
     return roots.length
-      ? renderFlowGraph(roots)
+      ? renderFlowGraph(roots, { readOnlyStockToggle: true })
       : '<p class="muted-text">Fluxo produtivo não registrado.</p>';
   }
 
   function openPlanDetailModal(detail) {
     page.querySelector('.planning-detail-modal')?.remove();
     const plan = detail.plan || {};
+    const canceled = isCanceledStatus(plan.status);
     const tree = normalizeJsonObject(detail.tree || plan.schedule_tree);
     const operations = operationsForDetail(detail);
     const productions = productionRowsFromTree(tree);
     const transports = operations.filter(operation => operation.operationType === 'transport');
     const firstOperation = operations[0];
     const lastOperation = operations[operations.length - 1];
+    const period = operationPeriod(operations, plan.start_date, plan.end_date);
     const alerts = planAlerts(tree, operations);
     const backdrop = document.createElement('div');
-    backdrop.className = 'modal-backdrop planning-detail-modal';
+    backdrop.className = `modal-backdrop planning-detail-modal${canceled ? ' is-canceled-planning' : ''}`;
     backdrop.innerHTML = `
       <div class="modal wide-modal planning-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="planning-detail-title">
+        ${canceled ? '<div class="planning-canceled-watermark" aria-hidden="true">CANCELADO</div>' : ''}
         <div class="modal-header">
           <div>
             <h2 id="planning-detail-title">Planejamento ${escapeHtml(plan.code || plan.id)}</h2>
-            <p class="modal-subtitle">${escapeHtml(formatPeriod(plan.start_date, plan.end_date))} | ${escapeHtml(formatStatus(plan.status))}</p>
+            <p class="modal-subtitle">${escapeHtml(period.label)} | ${escapeHtml(formatStatus(plan.status))}</p>
           </div>
           <button class="link-button close-modal" type="button">Fechar</button>
         </div>
 
         <section class="planning-detail-section detail-summary-strip">
           <article><span>Código</span><strong>${escapeHtml(plan.code || plan.id)}</strong></article>
-          <article><span>Período planejado</span><strong>${escapeHtml(formatPeriod(plan.start_date, plan.end_date))}</strong></article>
-          <article><span>Status</span><strong>${escapeHtml(formatStatus(plan.status))}</strong></article>
+          <article><span>Período planejado</span><strong>${escapeHtml(period.label)}</strong></article>
+          <article><span>Status</span><strong>${planningStatusPill(plan.status)}</strong></article>
           <article><span>Operações</span><strong>${operations.length}</strong></article>
           <article><span>Início/fim estimado</span><strong>${escapeHtml(`${formatDateOnly(firstOperation?.startDate)} ${firstOperation?.startTime || ''} até ${formatDateOnly(lastOperation?.endDate)} ${lastOperation?.endTime || ''}`.trim())}</strong></article>
         </section>
@@ -1298,7 +1771,6 @@ export function PlanningPage() {
           </div>
           <div class="grid-form planning-inner-grid">
             <label>Data inicial do planejamento<input name="planningStartDate" type="date" value="${escapeHtml(draft.planningStartDate)}" required /></label>
-            <label>Data final do planejamento<input name="planningEndDate" type="date" value="${escapeHtml(draft.planningEndDate)}" required /></label>
           </div>
 
           <div class="section-heading planning-section-heading">
@@ -1323,8 +1795,9 @@ export function PlanningPage() {
         <div class="panel calendar-panel">
           <div class="section-heading">
             <h2>Calend&aacute;rio de produ&ccedil;&atilde;o</h2>
+            <button class="secondary-button recalculate-planning" type="button" hidden>Recalcular</button>
           </div>
-          <p class="unsimulated-notice" hidden>H&aacute; altera&ccedil;&otilde;es n&atilde;o simuladas. Clique em Simular para atualizar o calend&aacute;rio.</p>
+          <p class="unsimulated-notice" hidden>Planejamento inconsistente. Clique em Recalcular.</p>
           <div class="timeline-target"></div>
         </div>
         <div class="panel production-flows-panel">
@@ -1339,7 +1812,7 @@ export function PlanningPage() {
     const form = target.querySelector('form');
     const shiftsTarget = target.querySelector('.shifts-target');
     const productionsTarget = target.querySelector('.productions-target');
-    target.querySelector('.timeline-target').appendChild(CalendarTimeline([]));
+    target.querySelector('.timeline-target').appendChild(CalendarTimeline([], [], { mode: 'planning' }));
     restoreSimulation(form);
 
     function rerenderBuilder() {
@@ -1350,6 +1823,25 @@ export function PlanningPage() {
     function rerenderProductionsBuilder() {
       saveDraftNow();
       productionsTarget.innerHTML = draft.productions.map(renderProduction).join('');
+    }
+
+    function closeColorPalette() {
+      productionsTarget.querySelector('.production-color-popover')?.remove();
+    }
+
+    function openColorPalette(card, production) {
+      closeColorPalette();
+      const selectedColor = isHexColor(production.color) ? String(production.color).toUpperCase() : automaticProductionColor(draft.productions.indexOf(production));
+      const popover = document.createElement('div');
+      popover.className = 'production-color-popover';
+      popover.innerHTML = `
+        <div class="production-color-grid" role="listbox" aria-label="Cores da produ&ccedil;&atilde;o">
+          ${PRODUCTION_COLOR_PALETTE.map(color => `
+            <button class="production-color-option${color === selectedColor ? ' is-selected' : ''}" type="button" data-production-color="${color}" style="--swatch-color: ${color}" aria-label="Usar cor ${color}" aria-selected="${color === selectedColor}"></button>
+          `).join('')}
+        </div>
+      `;
+      card.querySelector('.planning-subcard-header').appendChild(popover);
     }
 
     function queueSimulationRefresh() {
@@ -1366,12 +1858,10 @@ export function PlanningPage() {
 
     function updateDraftFromGeneral() {
       draft.planningStartDate = form.elements.planningStartDate.value;
-      draft.planningEndDate = form.elements.planningEndDate.value;
       queueAutosave();
     }
 
     form.elements.planningStartDate.addEventListener('input', updateDraftFromGeneral);
-    form.elements.planningEndDate.addEventListener('input', updateDraftFromGeneral);
 
     shiftsTarget.addEventListener('input', event => {
       const card = event.target.closest('[data-shift-id]');
@@ -1413,6 +1903,10 @@ export function PlanningPage() {
           || (item.codes || []).some(code => String(code).toLowerCase() === searchValue)
         );
         production.materialId = material?.id || '';
+        if (material) {
+          production.materialSearch = materialLabel(material);
+          event.target.value = production.materialSearch;
+        }
         if (String(previousMaterialId || '') !== String(production.materialId || '')) {
           clearProductionMaterialDecisions(draft.productions.indexOf(production));
         }
@@ -1505,10 +1999,31 @@ export function PlanningPage() {
     });
 
     productionsTarget.addEventListener('click', event => {
+      if (!event.target.closest('.production-color-popover') && !event.target.closest('[data-color-trigger]')) {
+        closeColorPalette();
+      }
       const card = event.target.closest('[data-production-id]');
       if (!card) return;
       const production = draft.productions.find(item => item.id === card.dataset.productionId);
       if (!production) return;
+      if (event.target.closest('[data-color-trigger]')) {
+        event.stopPropagation();
+        if (card.querySelector('.production-color-popover')) closeColorPalette();
+        else openColorPalette(card, production);
+        return;
+      }
+      const colorButton = event.target.closest('[data-production-color]');
+      if (colorButton) {
+        production.color = colorButton.dataset.productionColor;
+        saveDraftNow();
+        closeColorPalette();
+        if (currentSimulation) {
+          renderSimulation(currentSimulation, form);
+        } else {
+          rerenderProductionsBuilder();
+        }
+        return;
+      }
       if (event.target.classList.contains('add-transport')) {
         production.transports = [...(production.transports || []), emptyTransport()];
         rerenderProductionsBuilder();
@@ -1529,6 +2044,10 @@ export function PlanningPage() {
       rerenderBuilder();
     });
 
+    document.addEventListener('click', event => {
+      if (!productionsTarget.contains(event.target)) closeColorPalette();
+    });
+
     target.querySelector('.add-shift').addEventListener('click', () => {
       const previous = draft.shifts.at(-1);
       draft.shifts.push(defaultShift(draft.shifts.length, previous?.shiftEndTime || '17:00'));
@@ -1537,7 +2056,10 @@ export function PlanningPage() {
     });
 
     target.querySelector('.add-production').addEventListener('click', () => {
-      draft.productions.push(emptyProduction(draft.productions.length));
+      const previousProduction = draft.productions.at(-1);
+      const production = emptyProduction(draft.productions.length);
+      production.color = nextProductionColor(previousProduction?.color, draft.productions.length);
+      draft.productions.push(production);
       hasPendingSimulationChanges = true;
       rerenderBuilder();
     });
@@ -1558,7 +2080,12 @@ export function PlanningPage() {
       if (!validateDraft(form)) return null;
       lastPayload = payload();
       draft.lastPayload = lastPayload;
-      const result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
+      let result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
+      if (syncStockOnlyMaterialsFromSimulation(result)) {
+        lastPayload = payload();
+        draft.lastPayload = lastPayload;
+        result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
+      }
       renderSimulation(result, form);
       return result;
     }
@@ -1583,6 +2110,7 @@ export function PlanningPage() {
       draft.stockOnlyMaterials = (draft.stockOnlyMaterials || []).filter(item =>
         !(indexSet.has(Number(item.productionIndex)) && Number(item.materialId) === materialId)
       );
+      setStockOnlyChoice(productionIndexes, materialId, event.target.checked);
       if (event.target.checked) {
         productionIndexes.forEach(productionIndex => draft.stockOnlyMaterials.push({ productionIndex, materialId }));
       }
@@ -1675,6 +2203,33 @@ export function PlanningPage() {
       }
     });
 
+    target.addEventListener('calendar-team-capacity-change', async event => {
+      const date = event.detail?.date;
+      const overrides = event.detail?.overrides;
+      if (!date || !overrides || typeof overrides !== 'object') return;
+      draft.dailyTeamOverrides = draft.dailyTeamOverrides && typeof draft.dailyTeamOverrides === 'object' ? draft.dailyTeamOverrides : {};
+      draft.dailyTeamOverrides[date] = {
+        ...(draft.dailyTeamOverrides[date] || {}),
+        ...overrides
+      };
+      saveDraftNow();
+      try {
+        await withOperationLoading('Recalculando producao...', simulateCurrent);
+      } catch (error) {
+        refreshTimelineOnly();
+        markPlanningInconsistent();
+        toast(error);
+      }
+    });
+
+    target.querySelector('.recalculate-planning')?.addEventListener('click', async () => {
+      try {
+        await withOperationLoading('Recalculando producao...', simulateCurrent);
+      } catch (error) {
+        toast(error);
+      }
+    });
+
     form.elements.save?.addEventListener('click', async () => {
       if (!canWritePlanning) return;
       try {
@@ -1709,22 +2264,23 @@ export function PlanningPage() {
       historyTarget.appendChild(DataTable({
         columns: [
           { label: 'C&oacute;digo do planejamento', key: 'code' },
-          { label: 'Per&iacute;odo', render: row => row.period_label || formatPeriod(row.start_date, row.end_date), sortValue: row => row.start_date || '' },
+          { label: 'Per&iacute;odo', render: row => row.period_label || operationPeriod(row.operations, row.start_date, row.end_date).label, sortValue: row => row.period_start_date || row.start_date || '' },
           { label: 'Produ&ccedil;&otilde;es', render: row => {
             const children = Array.isArray(row.schedule_tree?.children) ? row.schedule_tree.children : [];
             const match = String(row.material_name || '').match(/^(\d+)\s+produ/i);
             return children.length && isPlanningRootName(row.schedule_tree?.materialName) ? children.length : Number(match?.[1] || 1);
           } },
-          { label: 'Status', key: 'status' },
+          { label: 'Status', render: row => planningStatusPill(row.status), sortValue: row => formatStatus(row.status) },
           { label: 'A&ccedil;&otilde;es', render: row => `
             <div class="history-actions">
               <button class="small-action-button" data-view="${row.id}" type="button">Visualizar</button>
               <button class="small-action-button" data-pdf="${row.id}" type="button">Gerar PDF</button>
-              ${canWritePlanning ? `<button class="small-action-button danger" data-cancel="${row.id}" type="button">Cancelar</button>` : ''}
+              ${canWritePlanning && !isCanceledStatus(row.status) ? `<button class="small-action-button danger" data-cancel="${row.id}" type="button">Cancelar</button>` : ''}
             </div>
           ` }
         ],
-        rows
+        rows,
+        rowClass: row => isCanceledStatus(row.status) ? 'planning-canceled-row' : ''
       }));
     }
 

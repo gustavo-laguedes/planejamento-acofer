@@ -133,6 +133,7 @@ try {
   }
 
   console.log('\nObservacao: audit_logs foi preservada nesta limpeza principal.');
+  console.log('Observacao: nenhuma estrutura, migration, cadastro, usuario, permissao ou matriz sera removida.');
 
   const beforeClean = await countRows(sql, existingCleanTables);
   const beforePreserved = await countRows(sql, existingPreservedTables);

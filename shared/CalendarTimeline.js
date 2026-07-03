@@ -68,6 +68,22 @@ function formatDate(date) {
   return date ? new Date(`${date}T00:00:00`).toLocaleDateString('pt-BR') : '';
 }
 
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+const DEFAULT_TEAM_AVAILABLE = 6;
+
+function isDefaultShiftLabel(label = '') {
+  return /^Turno\s*1$/i.test(String(label || '').trim()) || /^T1$/i.test(String(label || '').trim());
+}
+
+function defaultTeamAvailableForShift(shift = {}, index = 0) {
+  const label = shift.label || `Turno ${index + 1}`;
+  const available = Math.max(Number(shift.teamAvailable || DEFAULT_TEAM_AVAILABLE), 0);
+  return isDefaultShiftLabel(label) ? Math.max(available, DEFAULT_TEAM_AVAILABLE) : available;
+}
+
 function formatDateLabel(date) {
   return new Date(`${date}T00:00:00`).toLocaleDateString('pt-BR', {
     weekday: 'short',
@@ -133,6 +149,33 @@ function escapeAttr(value) {
     .replaceAll('"', '&quot;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;');
+}
+
+function isHexColor(value) {
+  return /^#[0-9a-f]{6}$/i.test(String(value || '').trim());
+}
+
+function hexToRgb(value) {
+  const normalized = String(value || '').replace('#', '');
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16)
+  };
+}
+
+function rgbToHex({ r, g, b }) {
+  return `#${[r, g, b].map(value => Math.round(value).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
+}
+
+function mixHex(firstColor, secondColor, amount = 0.5) {
+  const first = hexToRgb(firstColor);
+  const second = hexToRgb(secondColor);
+  return rgbToHex({
+    r: first.r + ((second.r - first.r) * amount),
+    g: first.g + ((second.g - first.g) * amount),
+    b: first.b + ((second.b - first.b) * amount)
+  });
 }
 
 function safeTime(value) {
@@ -305,6 +348,33 @@ const CALENDAR_VIEW_STORAGE_KEY = 'planejamento_calendar_view';
 const CALENDAR_RANGE_MARGIN_DAYS = 3;
 const CALENDAR_MAX_EXTRA_DAYS = 14;
 const CALENDAR_MAX_VISIBLE_DAYS = 45;
+const CALENDAR_MODE_DEFAULTS = {
+  planning: {
+    showTeamCapacity: true,
+    editableTeamCapacity: true,
+    showStockModal: true,
+    showProductionDetails: true,
+    showOnlyFinalProducts: false,
+    readOnly: false
+  },
+  analysis: {
+    showTeamCapacity: true,
+    editableTeamCapacity: true,
+    showStockModal: true,
+    showProductionDetails: true,
+    showOnlyFinalProducts: false,
+    readOnly: false
+  },
+  commercial: {
+    showTeamCapacity: false,
+    editableTeamCapacity: false,
+    showStockModal: false,
+    showProductionDetails: true,
+    showOnlyFinalProducts: true,
+    showTeamDetails: false,
+    readOnly: true
+  }
+};
 const MACHINE_CALENDAR_ORDER = [
   'Trefila',
   'EC-125',
@@ -440,17 +510,35 @@ function productionColorSequenceIndex(index = 0) {
   return PRODUCTION_COLOR_SEQUENCE[normalized % PRODUCTION_COLOR_SEQUENCE.length] || 0;
 }
 
+function productionStageColorsFromBase(color) {
+  if (!isHexColor(color)) return null;
+  const border = String(color).toUpperCase();
+  return [
+    { bg: mixHex(border, '#FFFFFF', 0.9), border, text: '#1F2937' },
+    { bg: mixHex(border, '#FFFFFF', 0.94), border: mixHex(border, '#FFFFFF', 0.18), text: '#1F2937' },
+    { bg: mixHex(border, '#FFFFFF', 0.97), border: mixHex(border, '#FFFFFF', 0.34), text: '#1F2937' },
+    { bg: '#FFFFFF', border: mixHex(border, '#FFFFFF', 0.5), text: '#1F2937' }
+  ];
+}
+
+export function productionCalendarColor(index = 0, color = null) {
+  const customPalette = productionStageColorsFromBase(color);
+  if (customPalette) return { ...customPalette[0] };
+  const paletteIndex = productionColorSequenceIndex(index);
+  return { ...PRODUCTION_STAGE_COLORS[paletteIndex % PRODUCTION_STAGE_COLORS.length][0] };
+}
+
 function eventColorStyle(color, breakdown, colorForProduction) {
   const items = stableProductionBreakdown(breakdown);
   if (items.length <= 1) return colorStyle(color);
   const step = 100 / items.length;
   const bgStops = items.map((item, index) => {
-    const productionColor = colorForProduction(stableProductionKey(item));
+    const productionColor = colorForProduction(item);
     const start = Number((index * step).toFixed(3));
     const end = Number(((index + 1) * step).toFixed(3));
     return `${productionColor.bg} ${start}% ${end}%`;
   }).join(', ');
-  const firstColor = colorForProduction(stableProductionKey(items[0]));
+  const firstColor = colorForProduction(items[0]);
   return `--event-bg: linear-gradient(90deg, ${bgStops}); --event-border: ${firstColor.border}; --event-text: ${firstColor.text};`;
 }
 
@@ -586,12 +674,13 @@ function breakdownText(operation) {
 }
 
 function normalizeShiftConfig(config = {}) {
+  const dailyTeamOverrides = normalizeDailyTeamOverrides(config.dailyTeamOverrides);
   const source = Array.isArray(config.shifts) && config.shifts.length ? config.shifts : [{
     label: 'Turno 1',
     shiftStartTime: config.shiftStartTime || '07:00',
     shiftEndTime: config.shiftEndTime || '17:00',
     pauseHours: config.lunchHours || 0,
-    teamAvailable: 0
+    teamAvailable: DEFAULT_TEAM_AVAILABLE
   }];
   return source.map((shift, index) => {
     const shiftStart = parseTime(shift.shiftStartTime, index === 0 ? '07:00' : '17:00');
@@ -607,9 +696,26 @@ function normalizeShiftConfig(config = {}) {
       shiftEnd,
       lunchStart,
       lunchEnd: lunchStart + pauseMinutes,
-      teamAvailable: Math.max(Number(shift.teamAvailable || 0), 0)
+      teamAvailable: defaultTeamAvailableForShift(shift, index),
+      dailyTeamOverrides
     };
   });
+}
+
+function normalizeDailyTeamOverrides(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).map(([date, shifts]) => {
+    if (!shifts || typeof shifts !== 'object' || Array.isArray(shifts)) return [date, {}];
+    return [date, Object.fromEntries(Object.entries(shifts)
+      .map(([label, amount]) => [label, Math.max(Number(amount || 0), 0)])
+      .filter(([, amount]) => Number.isFinite(amount)))];
+  }));
+}
+
+function teamAvailableForShift(shift, date) {
+  const overrides = shift.dailyTeamOverrides?.[date] || {};
+  const override = overrides[shift.label] ?? overrides[String(shift.label || '').replace(/^Turno\s*/i, 'T')];
+  return override == null ? shift.teamAvailable : Math.max(Number(override || 0), 0);
 }
 
 function peakPeople(items) {
@@ -647,11 +753,13 @@ function capacityForDate(date, operations, dates, shifts) {
       });
     });
     const used = peakPeople(segments);
-    const available = shift.teamAvailable;
+    const hasOverride = shift.dailyTeamOverrides?.[date]?.[shift.label] != null;
+    const available = teamAvailableForShift(shift, date);
     return {
       label: shift.label,
       used,
       available,
+      overridden: hasOverride,
       exceeded: available > 0 && used > available
     };
   });
@@ -668,11 +776,13 @@ function capacityForDateFromSegments(date, operationSegments, shifts) {
       }
     }
     const used = peakPeople(segments);
-    const available = shift.teamAvailable;
+    const hasOverride = shift.dailyTeamOverrides?.[date]?.[shift.label] != null;
+    const available = teamAvailableForShift(shift, date);
     return {
       label: shift.label,
       used,
       available,
+      overridden: hasOverride,
       exceeded: available > 0 && used > available
     };
   });
@@ -694,19 +804,77 @@ function renderCapacityHeader(date, operations, dates, shifts, blockedDay) {
 function renderCapacityHeaderWithCapacity(date, capacity, blockedDay) {
   const capacityText = capacityTooltip(capacity);
   const title = [blockedDay?.name, capacityText].filter(Boolean).join('\n');
+  const hasOverride = capacity.some(item => item.overridden);
   return `
-    <div class="gantt-date${capacity.some(item => item.exceeded) ? ' team-exceeded' : ''}${blockedDay ? ' non-working-day' : ''}" data-date="${date}" title="${escapeAttr(title)}">
+    <div class="gantt-date${capacity.some(item => item.exceeded) ? ' team-exceeded' : ''}${blockedDay ? ' non-working-day' : ''}${hasOverride ? ' has-team-override' : ''}" data-date="${date}" title="${escapeAttr(title)}">
       <strong>${formatDateLabel(date)}</strong>
       <span>${formatDate(date)}</span>
       <div class="team-capacity-list">
         ${capacity.map(item => `
-          <small class="team-capacity${item.exceeded ? ' exceeded' : ''}" title="${escapeAttr(item.exceeded ? `Equipe excedida: ${item.used} pessoas usadas simultaneamente, ${item.available || 0} disponiveis.` : `${item.label}: Equipe ${item.used}/${item.available || 0}`)}">
+          <button class="team-capacity${item.exceeded ? ' exceeded' : ''}" type="button" data-capacity-date="${date}" title="${escapeAttr(item.exceeded ? `Equipe excedida: ${item.used} pessoas usadas simultaneamente, ${item.available || 0} disponiveis.` : `${item.label}: Equipe ${item.used}/${item.available || 0}`)}">
             ${escapeAttr(item.label.replace(/^Turno\s*/i, 'T'))}: ${item.used}/${item.available || 0}${item.exceeded ? ' !' : ''}
-          </small>
+          </button>
         `).join('')}
       </div>
     </div>
   `;
+}
+
+function showCapacityModal(wrapper, date, shifts) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal capacity-modal" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div>
+          <h2>Equipe dispon&iacute;vel</h2>
+          <p class="modal-subtitle">${escapeAttr(formatDate(date))}</p>
+        </div>
+        <button class="link-button close-modal" type="button">Fechar</button>
+      </div>
+      <form class="capacity-form">
+        <div class="grid-form">
+          ${shifts.map(shift => `
+            <label>${escapeAttr(shift.label)}
+              <input name="${escapeAttr(shift.label)}" type="number" min="0" step="1" inputmode="numeric" value="${escapeAttr(teamAvailableForShift(shift, date))}" />
+            </label>
+          `).join('')}
+        </div>
+        <div class="form-actions modal-actions">
+          <button class="secondary-button close-modal" type="button">Cancelar</button>
+          <button class="primary-button" type="submit">Salvar</button>
+        </div>
+      </form>
+    </div>
+  `;
+  const close = () => backdrop.remove();
+  backdrop.addEventListener('click', event => {
+    if (event.target === backdrop || event.target.classList.contains('close-modal')) close();
+  });
+  backdrop.querySelector('form').addEventListener('submit', event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const overrides = {};
+    for (const shift of shifts) {
+      const input = form.elements.namedItem(shift.label);
+      const amount = Number(String(input?.value || '').replace(',', '.'));
+      if (!Number.isFinite(amount) || amount < 0) {
+        alert('Informe uma quantidade valida de pessoas.');
+        return;
+      }
+      overrides[shift.label] = Math.floor(amount);
+    }
+    wrapper.dispatchEvent(new CustomEvent('calendar-team-capacity-change', {
+      bubbles: true,
+      detail: { date, overrides, recalculateFromDate: date }
+    }));
+    close();
+  });
+  wrapper.appendChild(backdrop);
+}
+
+function isHistoricalOperation(operation, minEditableDate = todayKey()) {
+  return String(operation?.startDate || '') < minEditableDate;
 }
 
 function lunchStyle(lunchStart, lunchEnd, dayStart, dayEnd, hourHeight) {
@@ -721,38 +889,47 @@ function overlaps(first, second) {
   return first.start < second.end && second.start < first.end;
 }
 
+function segmentLaneKey(item = {}) {
+  const operation = item.operation || {};
+  return [
+    operation.productionKey || operation.productionIndex || '',
+    operation.productionColor || '',
+    operation.machineName || '',
+    operation.operationId || operation.materialId || operation.materialName || ''
+  ].join('|');
+}
+
 function arrangeParallelSegments(items) {
   const sorted = items
     .map((item, index) => ({
       ...item,
       index,
+      laneKey: segmentLaneKey(item),
       start: parseTime(item.segment.startTime),
       end: Math.max(parseTime(item.segment.endTime), parseTime(item.segment.startTime) + 1)
     }))
     .sort((first, second) => first.start - second.start || first.end - second.end);
   const active = [];
-  const groups = [];
+  const lanesByKey = new Map();
+  let laneCount = 0;
 
   sorted.forEach(item => {
     for (let index = active.length - 1; index >= 0; index -= 1) {
       if (active[index].end <= item.start) active.splice(index, 1);
     }
-    if (!active.length) groups.push([]);
-    groups[groups.length - 1].push(item);
+    if (lanesByKey.has(item.laneKey) && !active.some(activeItem => activeItem.lane === lanesByKey.get(item.laneKey))) {
+      item.lane = lanesByKey.get(item.laneKey);
+    } else {
+      const used = new Set(active.map(activeItem => activeItem.lane));
+      item.lane = 0;
+      while (used.has(item.lane)) item.lane += 1;
+      if (!lanesByKey.has(item.laneKey)) lanesByKey.set(item.laneKey, item.lane);
+    }
+    laneCount = Math.max(laneCount, item.lane + 1);
     active.push(item);
   });
-
-  groups.forEach(group => {
-    group.forEach(item => {
-      const used = new Set(group.filter(other => other !== item && overlaps(item, other)).map(other => other.lane));
-      let lane = 0;
-      while (used.has(lane)) lane += 1;
-      item.lane = lane;
-    });
-    const laneCount = Math.max(...group.map(item => item.lane), 0) + 1;
-    group.forEach(item => {
-      item.laneCount = laneCount;
-    });
+  sorted.forEach(item => {
+    item.laneCount = laneCount;
   });
 
   sorted
@@ -1006,8 +1183,12 @@ function makeModalDraggable(backdrop) {
 }
 
 function tooltipText(operation) {
+  const prefix = operation._existingScheduleBlocker
+    ? [`Ja planejado${operation.planningCode ? `: ${operation.planningCode}` : ''}`, '']
+    : [];
   if (operation.operationType === 'transport') {
     return [
+      ...prefix,
       'Transporte',
       `Material: ${operation.materialName || '-'}`,
       `Rota: ${operation.originLocationName || '-'} -> ${operation.destinationLocationName || '-'}`,
@@ -1022,6 +1203,7 @@ function tooltipText(operation) {
   const people = Number(operation.peopleCount || 0);
   const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
   return [
+    ...prefix,
     `Material: ${operation.materialName || '-'}`,
     `Quantidade: ${quantity || '-'}`,
     `Máquina: ${operation.machineName || '-'}`,
@@ -1400,9 +1582,31 @@ function showOperationModal(wrapper, operation) {
   wrapper.appendChild(backdrop);
 }
 
+function isExistingScheduleBlocker(operation) {
+  return operation?._existingScheduleBlocker === true;
+}
+
+function calendarConfig(config = {}) {
+  const mode = ['planning', 'analysis', 'commercial'].includes(config.mode) ? config.mode : 'planning';
+  return {
+    mode,
+    ...(CALENDAR_MODE_DEFAULTS[mode] || CALENDAR_MODE_DEFAULTS.planning),
+    ...config
+  };
+}
+
 export function CalendarTimeline(days = [], operations = [], config = {}) {
+  config = calendarConfig(config);
   const wrapper = document.createElement('section');
-  wrapper.className = 'calendar-gantt';
+  const readOnly = config.readOnly === true;
+  const showTeamCapacity = config.showTeamCapacity !== false;
+  const showTeamDetails = config.showTeamDetails !== false;
+  const editableTeamCapacity = config.editableTeamCapacity !== false && !readOnly;
+  const showProductionDetails = config.showProductionDetails !== false;
+  const disablePastEditing = config.disablePastEditing === true;
+  const minEditableDate = config.minEditableDate || todayKey();
+  const showOperationalControls = config.mode !== 'commercial';
+  wrapper.className = `calendar-gantt calendar-gantt-${config.mode}${readOnly ? ' is-read-only' : ''}${disablePastEditing ? ' has-historical-lock' : ''}`;
   const zoomLevels = [
     { dayWidth: 170, hourHeight: 58, machineRowHeight: 76 },
     { dayWidth: 210, hourHeight: 72, machineRowHeight: 88 },
@@ -1412,20 +1616,26 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   ];
   const topPad = 18;
   let zoomIndex = 0;
-  let viewMode = savedCalendarView();
+  let viewMode = config.mode === 'commercial' ? 'time' : savedCalendarView();
 
-  if (!operations.length) {
+  if (!operations.length && config.mode !== 'commercial') {
     wrapper.innerHTML = '<div class="empty-state">Simule um planejamento para visualizar o calend&aacute;rio.</div>';
     return wrapper;
   }
 
   const knownDates = operations.flatMap(operation => [operation.startDate, operation.endDate]).filter(Boolean).sort();
-  const plannedStartDate = config.planningStartDate || config.startDate || config.selectedDate || knownDates[0];
-  const plannedEndDate = config.planningEndDate || config.endDate || plannedStartDate || knownDates[knownDates.length - 1];
+  const fallbackStartDate = days[0];
+  const fallbackEndDate = days[days.length - 1] || fallbackStartDate;
+  const plannedStartDate = config.planningStartDate || config.startDate || config.selectedDate || knownDates[0] || fallbackStartDate;
+  const plannedEndDate = config.planningEndDate || config.endDate || plannedStartDate || knownDates[knownDates.length - 1] || fallbackEndDate;
   const operationStartDate = knownDates[0];
   const operationEndDate = knownDates[knownDates.length - 1];
-  const calendarStartDate = minDate(plannedStartDate, addDays(operationStartDate, -CALENDAR_RANGE_MARGIN_DAYS)) || operationStartDate;
-  const naturalEndDate = maxDate(plannedEndDate, addDays(operationEndDate, CALENDAR_RANGE_MARGIN_DAYS)) || operationEndDate;
+  const calendarStartDate = config.mode === 'commercial'
+    ? plannedStartDate
+    : minDate(plannedStartDate, operationStartDate ? addDays(operationStartDate, -CALENDAR_RANGE_MARGIN_DAYS) : null) || operationStartDate;
+  const naturalEndDate = config.mode === 'commercial'
+    ? plannedEndDate
+    : maxDate(plannedEndDate, operationEndDate ? addDays(operationEndDate, CALENDAR_RANGE_MARGIN_DAYS) : null) || operationEndDate;
   const hardEndDate = addDays(plannedEndDate || calendarStartDate, CALENDAR_MAX_EXTRA_DAYS);
   let calendarEndDate = naturalEndDate > hardEndDate ? hardEndDate : naturalEndDate;
   if (dayDiff(calendarStartDate, calendarEndDate) + 1 > CALENDAR_MAX_VISIBLE_DAYS) {
@@ -1451,9 +1661,34 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
       }
     });
   const shifts = normalizeShiftConfig(config);
-  const colorForProduction = productionKey => {
-    const productionColorIndex = productionColorSequenceIndex(stableProductionIndex({ productionKey }));
+  const configuredProductionColors = new Map();
+  (config.productions || []).forEach(production => {
+    const color = production.color || production.productionColor;
+    if (!isHexColor(color)) return;
+    configuredProductionColors.set(String(production.productionKey || `production-${Number(production.productionIndex || 0)}`), color);
+    configuredProductionColors.set(String(Number(production.productionIndex || 0)), color);
+  });
+  const colorForProduction = item => {
+    const productionKey = typeof item === 'string' ? item : stableProductionKey(item);
+    const productionIndex = stableProductionIndex(typeof item === 'string' ? { productionKey: item } : item);
+    const configuredColor = typeof item === 'object' && isHexColor(item.productionColor)
+      ? item.productionColor
+      : configuredProductionColors.get(String(productionKey)) || configuredProductionColors.get(String(productionIndex));
+    const customPalette = productionStageColorsFromBase(configuredColor);
+    if (customPalette) return customPalette[0];
+    const productionColorIndex = productionColorSequenceIndex(productionIndex);
     return PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length][0];
+  };
+  const paletteForProduction = item => {
+    const productionKey = stableProductionKey(item);
+    const productionIndex = stableProductionIndex(item);
+    const configuredColor = isHexColor(item.productionColor)
+      ? item.productionColor
+      : configuredProductionColors.get(String(productionKey)) || configuredProductionColors.get(String(productionIndex));
+    const customPalette = productionStageColorsFromBase(configuredColor);
+    if (customPalette) return customPalette;
+    const productionColorIndex = productionColorSequenceIndex(productionIndex);
+    return PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length];
   };
   const shiftStart = Math.min(...shifts.map(shift => shift.shiftStart));
   const shiftEnd = Math.max(...shifts.map(shift => shift.shiftEnd));
@@ -1466,14 +1701,14 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
 
   wrapper.innerHTML = `
     <div class="gantt-zoom-controls" aria-label="Zoom do calend&aacute;rio">
-      <div class="calendar-view-toggle" role="group" aria-label="Visualiza&ccedil;&atilde;o do calend&aacute;rio">
+      ${showOperationalControls ? `<div class="calendar-view-toggle" role="group" aria-label="Visualiza&ccedil;&atilde;o do calend&aacute;rio">
         <button class="secondary-button is-active" type="button" data-calendar-view="time">Por tempo</button>
         <button class="secondary-button" type="button" data-calendar-view="machines">Por m&aacute;quinas</button>
       </div>
       <button class="secondary-button" type="button" data-zoom-out aria-label="Diminuir zoom">-</button>
       <button class="secondary-button" type="button" data-zoom-in aria-label="Aumentar zoom">+</button>
       <button class="secondary-button fullscreen-button" type="button" data-fullscreen aria-label="Tela cheia">Tela cheia</button>
-      <button class="secondary-button fullscreen-close" type="button" data-fullscreen-close aria-label="Sair da tela cheia">X</button>
+      <button class="secondary-button fullscreen-close" type="button" data-fullscreen-close aria-label="Sair da tela cheia">X</button>` : ''}
     </div>
     ${isRangeClipped ? '<p class="calendar-range-alert">A produ&ccedil;&atilde;o ultrapassa muito o per&iacute;odo planejado. Verifique produtividade, quantidade ou turnos.</p>' : ''}
     <div class="gantt-board gantt-board-full"></div>
@@ -1513,7 +1748,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
 
   function setViewMode(nextMode) {
     viewMode = nextMode === 'machines' ? 'machines' : 'time';
-    saveCalendarView(viewMode);
+    if (config.mode !== 'commercial') saveCalendarView(viewMode);
     wrapper.querySelectorAll('[data-calendar-view]').forEach(button => {
       const isActive = button.dataset.calendarView === viewMode;
       button.classList.toggle('is-active', isActive);
@@ -1527,19 +1762,22 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     const endTime = operationEndTime(operation);
     const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
     const isTransport = operation.operationType === 'transport';
+    const isHistorical = disablePastEditing && isHistoricalOperation(operation, minEditableDate);
+    const isExisting = isExistingScheduleBlocker(operation);
     const breakdown = isTransport ? [] : productionBreakdown(operation);
-    const shortLabel = isTransport ? 'TR' : `${operation.peopleCount || '-'}p`;
+    const shortLabel = isTransport ? 'TR' : (showTeamDetails ? `${operation.peopleCount || '-'}p` : String(operation.materialName || '-').slice(0, 2).toUpperCase());
     return `
-      <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${style} ${colorStyleText}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+      <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${isHistorical ? ' gantt-bar-historical' : ''}${isExisting ? ' gantt-bar-existing' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${style} ${colorStyleText}" data-tooltip="${escapeAttr(tooltipText(operation))}">
         ${shouldShowText && isTransport ? `
           <strong>Transporte</strong>
           <span>${operation.materialName || '-'}</span>
           <span>${operation.originLocationName || '-'} -&gt; ${operation.destinationLocationName || '-'}</span>
           <small>${formatHours(operation.transportHours)}h | ${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
         ` : shouldShowText ? `
+          ${isExisting ? '<em class="gantt-status-pill">Ja planejado</em>' : ''}
           <strong>${operation.materialName}</strong>
           <span>${quantity || '-'}</span>
-          <span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
+          ${showTeamDetails ? `<span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>` : ''}
           ${breakdown.length > 1 ? `<small>${breakdown.map(part => `${escapeAttr(part.productionTitle || `P${Number(part.productionIndex || 0) + 1}`)}: ${formatQty(part.quantity)}`).join(' | ')}</small>` : ''}
           <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
         ` : `<span class="gantt-compact-label">${escapeAttr(shortLabel)}</span>`}
@@ -1550,8 +1788,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   function operationEventColor(operation) {
     const isTransport = operation.operationType === 'transport';
     const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
-    const productionColorIndex = productionColorSequenceIndex(stableProductionIndex(operation));
-    const palette = PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length];
+    const palette = paletteForProduction(operation);
     const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
     const productionBaseColor = palette[0];
     return isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
@@ -1599,7 +1836,9 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         }
       }
     }
-    const capacityCache = new Map(dates.map(date => [date, capacityForDateFromSegments(date, segmentCache, shifts)]));
+    const capacityCache = showTeamCapacity
+      ? new Map(dates.map(date => [date, capacityForDateFromSegments(date, segmentCache, shifts)]))
+      : new Map();
     board.style.setProperty('--calendar-days', String(dates.length));
     board.style.setProperty('--calendar-day-width', `${machineDayWidth}px`);
     board.style.setProperty('--machine-row-height', `${zoom.machineRowHeight}px`);
@@ -1673,7 +1912,9 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
       operation,
       operationDaySegments(operation, dates, dayStart, dayEnd, lunchBreaks)
     ]));
-    const capacityCache = new Map(dates.map(date => [date, capacityForDateFromSegments(date, segmentCache, shifts)]));
+    const capacityCache = showTeamCapacity
+      ? new Map(dates.map(date => [date, capacityForDateFromSegments(date, segmentCache, shifts)]))
+      : new Map();
     board.style.setProperty('--calendar-days', String(dates.length));
     board.style.setProperty('--calendar-day-width', `${zoom.dayWidth}px`);
     board.style.setProperty('--calendar-hour-height', `${zoom.hourHeight}px`);
@@ -1709,27 +1950,29 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const endTime = operationEndTime(operation);
               const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
               const isTransport = operation.operationType === 'transport';
+              const isHistorical = disablePastEditing && isHistoricalOperation(operation, minEditableDate);
+              const isExisting = isExistingScheduleBlocker(operation);
               const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
               const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
               const shouldShowText = segment.visualIndex === 0 && ((end - start) / 60) * zoom.hourHeight >= 62;
-              const shortLabel = isTransport ? 'TR' : `${operation.peopleCount || '-'}p`;
-              const productionColorIndex = productionColorSequenceIndex(stableProductionIndex(operation));
-              const palette = PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length];
+              const shortLabel = isTransport ? 'TR' : (showTeamDetails ? `${operation.peopleCount || '-'}p` : String(operation.materialName || '-').slice(0, 2).toUpperCase());
+              const palette = paletteForProduction(operation);
               const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
               const productionBaseColor = palette[0];
               const eventColor = isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
               const breakdown = isTransport ? [] : productionBreakdown(operation);
               return `
-                <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle({ ...segment, visualStart: item.visualStart }, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${eventColorStyle(eventColor, breakdown, colorForProduction)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
+                <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${isHistorical ? ' gantt-bar-historical' : ''}${isExisting ? ' gantt-bar-existing' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle({ ...segment, visualStart: item.visualStart }, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${eventColorStyle(eventColor, breakdown, colorForProduction)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
                   ${shouldShowText && isTransport ? `
                     <strong>Transporte</strong>
                     <span>${operation.materialName || '-'}</span>
                     <span>${operation.originLocationName || '-'} -&gt; ${operation.destinationLocationName || '-'}</span>
                     <small>${formatHours(operation.transportHours)}h | ${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
                   ` : shouldShowText ? `
+                    ${isExisting ? '<em class="gantt-status-pill">Ja planejado</em>' : ''}
                     <strong>${operation.materialName}</strong>
                     <span>${quantity || '-'}</span>
-                    <span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>
+                    ${showTeamDetails ? `<span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>` : ''}
                     ${breakdown.length > 1 ? `<small>${breakdown.map(item => `${escapeAttr(item.productionTitle || `P${Number(item.productionIndex || 0) + 1}`)}: ${formatQty(item.quantity)}`).join(' | ')}</small>` : ''}
                     <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
                   ` : `<span class="gantt-compact-label">${escapeAttr(shortLabel)}</span>`}
@@ -1775,9 +2018,26 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   });
   wrapper.addEventListener('click', event => {
     const bar = event.target.closest('.gantt-bar');
-    if (!bar) return;
+    if (!bar) {
+      const dayTarget = event.target.closest('[data-date]');
+      const dateHeader = event.target.closest('.gantt-date[data-date]');
+      const date = dayTarget?.dataset.date || dateHeader?.dataset.date;
+      if (date && typeof config.onDayClick === 'function') {
+        config.onDayClick(date);
+        return;
+      }
+      if (!dateHeader || !editableTeamCapacity) return;
+      if (disablePastEditing && date < minEditableDate) return;
+      showCapacityModal(wrapper, date, shifts);
+      return;
+    }
     const operation = operations.find(item => String(item.operationId || item.materialId) === String(bar.dataset.operationId));
-    if (operation?.operationType === 'transport') return;
+    if (operation && typeof config.onOperationClick === 'function') {
+      config.onOperationClick(operationWithSplitParent(operation, operations));
+      return;
+    }
+    if (!showProductionDetails || operation?.operationType === 'transport' || isExistingScheduleBlocker(operation)) return;
+    if (readOnly || (disablePastEditing && isHistoricalOperation(operation, minEditableDate))) return;
     if (operation) showOperationModal(wrapper, operationWithSplitParent(operation, operations));
   });
 

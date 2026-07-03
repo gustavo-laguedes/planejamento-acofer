@@ -21,6 +21,21 @@ const expectedTables = [
   'stock_snapshot'
 ];
 
+const expectedColumns = {
+  app_users: ['active_browser_session_id', 'active_session_started_at', 'active_session_last_seen_at'],
+  import_history: ['period_start', 'period_end', 'business_days']
+};
+
+const expectedAppUserRoles = [
+  'Super Admin',
+  'Diretor',
+  'Gerente',
+  'PCP',
+  'Operador',
+  'Comercial',
+  'Visualizador'
+];
+
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL nao configurada. Preencha .env ou defina a variavel no ambiente.');
   process.exit(1);
@@ -43,11 +58,50 @@ try {
   `);
   const found = rows.map(row => row.table_name);
   const missing = expectedTables.filter(table => !found.includes(table));
+  const columnRows = await sql.unsafe(`
+    SELECT table_name, column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name IN ('app_users', 'import_history')
+  `);
+  const columnsByTable = new Map();
+  for (const row of columnRows) {
+    if (!columnsByTable.has(row.table_name)) columnsByTable.set(row.table_name, new Set());
+    columnsByTable.get(row.table_name).add(row.column_name);
+  }
+  const missingColumns = Object.entries(expectedColumns).flatMap(([table, columns]) =>
+    columns
+      .filter(column => !columnsByTable.get(table)?.has(column))
+      .map(column => `${table}.${column}`)
+  );
+  const constraintRows = await sql.unsafe(`
+    SELECT pg_get_constraintdef(c.oid) AS definition
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE n.nspname = 'public'
+      AND t.relname = 'app_users'
+      AND c.conname = 'app_users_role_check'
+  `);
+  const constraintDefinition = constraintRows[0]?.definition || '';
+  const missingRoles = expectedAppUserRoles.filter(role => !constraintDefinition.includes(`'${role}'`));
 
   console.log(found.join('\n'));
+  console.log(`app_users_role_check: ${constraintDefinition || 'ausente'}`);
 
   if (missing.length) {
     console.error(`Tabelas ausentes: ${missing.join(', ')}`);
+    process.exitCode = 1;
+  }
+  if (missingColumns.length) {
+    console.error(`Colunas ausentes: ${missingColumns.join(', ')}`);
+    process.exitCode = 1;
+  }
+  if (!constraintDefinition) {
+    console.error('Constraint ausente: app_users_role_check');
+    process.exitCode = 1;
+  } else if (missingRoles.length) {
+    console.error(`Roles ausentes na constraint app_users_role_check: ${missingRoles.join(', ')}`);
     process.exitCode = 1;
   }
 } catch (error) {

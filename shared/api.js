@@ -1,5 +1,6 @@
 import { getSessionToken } from './clerkAuth.js';
 import { apiUrl } from './config.js';
+import { getBrowserSessionId, rememberSessionToken } from './browserSession.js';
 
 let currentUser = null;
 
@@ -12,7 +13,11 @@ export async function api(path, options = {}) {
   const headers = new Headers(fetchOptions.headers || {});
   const token = await getSessionToken({ wait: authWait });
 
-  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+    rememberSessionToken(token);
+  }
+  headers.set('X-App-Session-Id', getBrowserSessionId());
   if (fetchOptions.body && !(fetchOptions.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }

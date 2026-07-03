@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS app_users (
   clerk_invitation_id TEXT,
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
-  role TEXT NOT NULL CHECK (role IN ('Super Admin', 'PCP', 'Gerente', 'Diretor', 'Operador', 'Visualizador')),
+  role TEXT NOT NULL CHECK (role IN ('Super Admin', 'PCP', 'Gerente', 'Diretor', 'Operador', 'Comercial', 'Visualizador')),
   status TEXT NOT NULL DEFAULT 'Ativo' CHECK (status IN ('Ativo', 'Inativo')),
   is_initial_super_admin BOOLEAN NOT NULL DEFAULT false,
   invited_at TIMESTAMPTZ,

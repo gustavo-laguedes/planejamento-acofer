@@ -10,7 +10,7 @@ import {
   isSuperAdmin,
   roleSlug
 } from '../auth/clerk.js';
-import { requireAuth, requireSuperAdmin } from './middleware.js';
+import { requireAuth, requireIdentity, requirePermission } from './middleware.js';
 import { permissionsForRole } from '../../shared/rbac.js';
 import { recordAuditLog } from '../audit.js';
 
@@ -55,6 +55,41 @@ router.get('/me', requireAuth, (req, res) => {
   });
 });
 
+router.post('/session/activate', requireIdentity, async (req, res, next) => {
+  try {
+    const browserSessionId = String(req.headers['x-app-session-id'] || '').trim();
+    if (!browserSessionId) return res.status(400).json({ error: 'Identificador da sessão ausente.' });
+    const sql = requireDb();
+    await sql`
+      UPDATE app_users
+      SET active_browser_session_id = ${browserSessionId},
+          active_session_started_at = now(),
+          active_session_last_seen_at = now()
+      WHERE id = ${req.user.id}
+    `;
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/session/close', requireAuth, async (req, res, next) => {
+  try {
+    const sql = requireDb();
+    await sql`
+      UPDATE app_users
+      SET active_browser_session_id = NULL,
+          active_session_started_at = NULL,
+          active_session_last_seen_at = now()
+      WHERE id = ${req.user.id}
+        AND active_browser_session_id = ${req.browserSessionId}
+    `;
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/events/login', requireAuth, async (req, res, next) => {
   try {
     const sql = requireDb();
@@ -87,7 +122,7 @@ router.post('/events/logout', requireAuth, async (req, res, next) => {
   }
 });
 
-router.get('/users', requireAuth, requireSuperAdmin, async (req, res, next) => {
+router.get('/users', requireAuth, requirePermission('users:manage'), async (req, res, next) => {
   try {
     await ensureInitialSuperAdmin();
     const sql = requireDb();
@@ -106,7 +141,7 @@ router.get('/users', requireAuth, requireSuperAdmin, async (req, res, next) => {
   }
 });
 
-router.post('/users', requireAuth, requireSuperAdmin, async (req, res, next) => {
+router.post('/users', requireAuth, requirePermission('users:manage'), async (req, res, next) => {
   try {
     const name = String(req.body?.name || '').trim();
     const email = normalizeEmail(req.body?.email);
@@ -152,7 +187,7 @@ router.post('/users', requireAuth, requireSuperAdmin, async (req, res, next) => 
   }
 });
 
-router.patch('/users/:id', requireAuth, requireSuperAdmin, async (req, res, next) => {
+router.patch('/users/:id', requireAuth, requirePermission('users:manage'), async (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const name = String(req.body?.name || '').trim();
@@ -213,7 +248,7 @@ router.patch('/users/:id', requireAuth, requireSuperAdmin, async (req, res, next
   }
 });
 
-router.delete('/users/:id', requireAuth, requireSuperAdmin, async (req, res, next) => {
+router.delete('/users/:id', requireAuth, requirePermission('users:manage'), async (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
