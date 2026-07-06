@@ -116,6 +116,12 @@ function formatQty(value) {
   return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 }
 
+function formatCeilQty(value) {
+  const quantity = Number(value);
+  if (!Number.isFinite(quantity)) return formatQty(value);
+  return Math.ceil(quantity).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+}
+
 function formatNumber(value, maximumFractionDigits = 1, minimumFractionDigits = 1) {
   return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits, minimumFractionDigits });
 }
@@ -228,6 +234,20 @@ function currentStockDurationDays(row) {
   return Math.max(balance, 0) / salesPerDay;
 }
 
+function roundStockDurationForDisplay(value) {
+  const days = Number(value);
+  if (!Number.isFinite(days)) return null;
+  const integer = Math.trunc(days);
+  const decimal = Math.round((days - integer) * 10);
+  return integer + (decimal >= 6 ? 1 : 0);
+}
+
+function formatStockDurationForDisplay(value) {
+  const displayDays = roundStockDurationForDisplay(value);
+  if (displayDays === null) return 'Não estimado';
+  return `${formatNumber(displayDays, 0, 0)} ${displayDays === 1 ? 'dia' : 'dias'}`;
+}
+
 function futureStockDurationDays(row, plannedRemainingQty = 0) {
   const salesPerDay = Number(row.salesPerDayQty);
   const balance = Number(row.totalLocationsQty) + Number(plannedRemainingQty || 0);
@@ -328,12 +348,27 @@ function bestProductivityForMaterial(matrixRows, stockRow) {
     .sort((left, right) => productivityRate(right) - productivityRate(left))[0] || null;
 }
 
-function formatDurationFromSeconds(seconds) {
+function pcpWorkdayMinutes(calendar) {
+  const minutes = (calendar?.shifts || [])
+    .reduce((sum, shift) => sum + Math.max(Number(shift.dailyMinutes || 0), 0), 0);
+  return minutes > 0 ? Math.round(minutes) : 528;
+}
+
+function formatDurationFromSeconds(seconds, calendar = null) {
   const value = Number(seconds);
   if (!Number.isFinite(value) || value <= 0) return 'Não estimado';
-  const hours = value / 3600;
-  if (hours < 1) return `${formatNumber(value / 60, 0, 0)} min`;
-  return `${formatNumber(hours, 1, 1)} h`;
+  const totalMinutes = Math.max(Math.round(value / 60), 0);
+  const workdayMinutes = pcpWorkdayMinutes(calendar);
+  const days = Math.floor(totalMinutes / workdayMinutes);
+  const remainingMinutes = totalMinutes % workdayMinutes;
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  const parts = [];
+  if (days) parts.push(`${days} ${days === 1 ? 'dia' : 'dias'}`);
+  if (hours) parts.push(`${hours}h`);
+  if (minutes || (!days && !hours)) parts.push(`${String(minutes).padStart(2, '0')}min`);
+  if (!days && hours && !minutes) parts.push('00min');
+  return parts.join(' ');
 }
 
 function estimatedProductionSeconds(quantity, productivity) {
@@ -1506,11 +1541,11 @@ export function AnalysisPage(options = {}) {
                   </div>
                   <strong>${escapeHtml(row.material?.name || '')}</strong>
                   <dl>
-                    <div><dt>Duração atual</dt><dd>${Number.isFinite(row.durationDays) ? `${formatNumber(row.durationDays)} dias` : 'Não estimado'}</dd></div>
+                    <div><dt>Duração atual</dt><dd>${formatStockDurationForDisplay(row.durationDays)}</dd></div>
                     <div><dt>Duração ajust.</dt><dd>${Number.isFinite(row.adjustedDurationDays) ? `${formatNumber(row.adjustedDurationDays)} dias` : 'Não estimado'}</dd></div>
                     <div><dt>Máquina</dt><dd>${canEstimate ? escapeHtml(row.productivity.machine_name) : 'Não estimada'}</dd></div>
-                    <div><dt>Falta</dt><dd>${row.targetQty === null ? 'Não estimado' : `${formatQty(row.targetQty)} ${escapeHtml(row.productivity?.output_unit || row.plannedUnit || '')}`.trim()}</dd></div>
-                    <div><dt>Tempo</dt><dd>${canEstimate ? formatDurationFromSeconds(row.estimatedSeconds) : 'Não estimado'}</dd></div>
+                    <div><dt>Falta</dt><dd>${row.targetQty === null ? 'Não estimado' : `${formatCeilQty(row.targetQty)} ${escapeHtml(row.productivity?.output_unit || row.plannedUnit || '')}`.trim()}</dd></div>
+                    <div><dt>Tempo</dt><dd>${canEstimate ? formatDurationFromSeconds(row.estimatedSeconds, productionCalendar) : 'Não estimado'}</dd></div>
                     <div><dt>Fim est.</dt><dd>${escapeHtml(stockEndLabel)}</dd></div>
                     <div><dt>Fim prod.</dt><dd>${escapeHtml(productionEndLabel)}</dd></div>
                   </dl>
@@ -1553,7 +1588,7 @@ export function AnalysisPage(options = {}) {
                   <td><input class="pcp-produce-checkbox" type="checkbox" data-pcp-produce="${escapeHtml(row.key)}" aria-label="Produzir ${escapeHtml(row.material?.name || '')}" /></td>
                   <td><input class="pcp-priority-input" type="number" min="1" step="1" value="${escapeHtml(row.manualPriority)}" data-pcp-priority="${escapeHtml(row.key)}" aria-label="Prioridade manual de ${escapeHtml(row.material?.name || '')}" /></td>
                   <td><strong>${escapeHtml(row.material?.name || '')}</strong><small>${escapeHtml((row.codes || []).join(', '))}</small></td>
-                  <td><strong>${Number.isFinite(row.durationDays) ? `${formatNumber(row.durationDays)} dias` : 'Não estimado'}</strong>${Number.isFinite(row.adjustedDurationDays) && Number(row.plannedRemainingQty) > 0 ? `<small>Ajust.: ${formatNumber(row.adjustedDurationDays)} dias</small>` : ''}</td>
+                  <td><strong>${formatStockDurationForDisplay(row.durationDays)}</strong>${Number.isFinite(row.adjustedDurationDays) && Number(row.plannedRemainingQty) > 0 ? `<small>Ajust.: ${formatNumber(row.adjustedDurationDays)} dias</small>` : ''}</td>
                   <td>${PcpStatusPill(row.status)}</td>
                   <td>${Number.isFinite(Number(row.salesPerDayQty)) && Number(row.salesPerDayQty) > 0 ? formatQty(row.salesPerDayQty) : 'Não estimado'}</td>
                   <td>${formatQty(row.totalLocationsQty)}</td>
@@ -1565,8 +1600,8 @@ export function AnalysisPage(options = {}) {
                     </label>
                   </td>
                   <td><strong>${formatQty(row.plannedRemainingQty)} ${escapeHtml(row.plannedUnit || row.productivity?.output_unit || '')}</strong></td>
-                  <td><strong>${row.targetQty === null ? 'Não estimado' : `${formatQty(row.targetQty)} ${escapeHtml(row.productivity?.output_unit || row.plannedUnit || '')}`.trim()}</strong></td>
-                  <td>${canEstimate ? formatDurationFromSeconds(row.estimatedSeconds) : 'Não estimado'}</td>
+                  <td><strong>${row.targetQty === null ? 'Não estimado' : `${formatCeilQty(row.targetQty)} ${escapeHtml(row.productivity?.output_unit || row.plannedUnit || '')}`.trim()}</strong></td>
+                  <td>${canEstimate ? formatDurationFromSeconds(row.estimatedSeconds, productionCalendar) : 'Não estimado'}</td>
                   <td class="pcp-date-cell">${escapeHtml(productionEndLabel)}</td>
                   <td>${canEstimate ? escapeHtml(row.productivity.machine_name) : 'Não estimada'}</td>
                   <td>${canEstimate ? Number(row.productivity.people_count) : '-'}</td>

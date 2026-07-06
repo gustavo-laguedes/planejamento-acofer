@@ -67,11 +67,20 @@ function currentStockDurationDays(row) {
   return Math.max(baseBalance, 0) / salesPerDay;
 }
 
+function roundStockDurationForDisplay(value) {
+  const days = Number(value);
+  if (!Number.isFinite(days)) return null;
+  const integer = Math.trunc(days);
+  const decimal = Math.round((days - integer) * 10);
+  return integer + (decimal >= 6 ? 1 : 0);
+}
+
 function formatDuration(row) {
   if (row.salesBlocked) return '*';
   const durationDays = currentStockDurationDays(row);
   if (durationDays === null) return '*';
-  return `${formatNumber(durationDays, 1, 1)} dias`;
+  const displayDays = roundStockDurationForDisplay(durationDays);
+  return `${formatNumber(displayDays)} ${displayDays === 1 ? 'dia' : 'dias'}`;
 }
 
 function readStockMinimumDays() {
