@@ -1731,6 +1731,25 @@ body.analysis-fullscreen-open .modal-backdrop {
   font-weight: 700;
 }
 
+.inventory-total-field {
+  align-self: stretch;
+}
+
+.inventory-edit-info {
+  margin: 10px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.manual-record-form {
+  margin-bottom: 16px;
+}
+
+.manual-record-form .wide-field {
+  min-width: min(320px, 100%);
+}
+
 .inventory-modal-actions {
   display: flex;
   justify-content: space-between;
@@ -3902,6 +3921,10 @@ body.analysis-fullscreen-open {
   width: 12%;
 }
 
+.stock-overview-table .col-inventory {
+  width: 12%;
+}
+
 .stock-overview-table .col-total {
   width: 12%;
 }
@@ -3966,6 +3989,23 @@ body.analysis-fullscreen-open {
   text-align: center;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.stock-inventory-cell {
+  display: grid;
+  gap: 3px;
+  justify-items: center;
+  text-align: center;
+}
+
+.stock-inventory-cell strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-inventory-cell small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
 }
 
 .total-estimated {
@@ -4126,6 +4166,10 @@ body.analysis-fullscreen-open {
 
   .stock-overview-table .col-correction {
     width: 170px;
+  }
+
+  .stock-overview-table .col-inventory {
+    width: 160px;
   }
 
   .stock-overview-table .col-total {

@@ -9,6 +9,12 @@ function normalizeName(value) {
   return String(value || '').trim();
 }
 
+function auditDescription(row, user) {
+  const when = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  const userName = String(user?.name || user?.email || 'Sistema');
+  return `Máquina excluída/inativada. Usuário: ${userName}. Data/hora: ${when}. Código: ${row.id}. Nome: ${row.name}.`;
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const db = requireDb();
@@ -84,6 +90,30 @@ router.put('/:id', requirePermission('registrations:write'), async (req, res, ne
       recordRef: row.id
     });
     res.json(row);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/:id', requirePermission('registrations:write'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    const [row] = await db`
+      UPDATE machines
+      SET active = false,
+          updated_at = now()
+      WHERE id = ${req.params.id}
+      RETURNING *
+    `;
+    if (!row) return res.status(404).json({ error: 'Maquina nao encontrada.' });
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Máquina excluída/inativada',
+      module: 'Cadastros',
+      description: auditDescription(row, req.user),
+      recordRef: row.id
+    });
+    res.status(204).end();
   } catch (error) {
     next(error);
   }

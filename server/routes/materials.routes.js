@@ -5,10 +5,72 @@ import { recordAuditLog } from '../audit.js';
 
 const router = Router();
 const units = new Set(['un', 'kg']);
+const MATERIAL_LINKED_MESSAGE = 'Este material possui vínculos e não pode ser excluído.';
+
+function auditDeleteDescription(row, user) {
+  const when = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  const userName = String(user?.name || user?.email || 'Sistema');
+  const codes = Array.isArray(row.codes) && row.codes.length ? row.codes.join(', ') : row.id;
+  return `Material excluído. Usuário: ${userName}. Data/hora: ${when}. Código: ${codes}. Nome: ${row.name}.`;
+}
 
 function normalizeCodes(value) {
   const codes = Array.isArray(value) ? value : String(value || '').split(',');
   return codes.map(code => String(code).trim()).filter(Boolean);
+}
+
+function materialCodes(row) {
+  return Array.isArray(row.codes) ? row.codes.map(code => String(code).trim()).filter(Boolean) : [];
+}
+
+async function tableExists(db, tableName) {
+  const [row] = await db`SELECT to_regclass(${`public.${tableName}`}) IS NOT NULL AS exists`;
+  return row?.exists === true;
+}
+
+async function countIfTableExists(db, tableName, whereSql, params) {
+  if (!await tableExists(db, tableName)) return 0;
+  const [row] = await db.unsafe(`SELECT COUNT(*)::int AS count FROM ${tableName} WHERE ${whereSql}`, params);
+  return Number(row?.count || 0);
+}
+
+async function materialHasLinks(db, row) {
+  const id = Number(row.id);
+  const codes = materialCodes(row);
+  const name = String(row.name || '').trim();
+  const textMatchWhere = `
+    material_name = $1
+    OR material_code = ANY($2::text[])
+  `;
+
+  const checks = [
+    countIfTableExists(db, 'productivity_matrix', `
+      material_name = $1
+      OR material_code = ANY($2::text[])
+      OR material_codes && $2::text[]
+    `, [name, codes]),
+    countIfTableExists(db, 'material_inputs', 'material_id = $1 OR input_material_id = $1', [id]),
+    countIfTableExists(db, 'production_plans', textMatchWhere, [name, codes]),
+    countIfTableExists(db, 'production_plan_days', textMatchWhere, [name, codes]),
+    countIfTableExists(db, 'production_actuals', textMatchWhere, [name, codes]),
+    countIfTableExists(db, 'production_launches', `
+      material_id = $1
+      OR input_material_id = $1
+      OR material_name = $2
+      OR input_material_name = $2
+      OR material_code = ANY($3::text[])
+      OR input_material_code = ANY($3::text[])
+    `, [id, name, codes]),
+    countIfTableExists(db, 'stock_material_corrections', 'material_id = $1', [id]),
+    countIfTableExists(db, 'stock_import_material_balances', 'material_id = $1', [id]),
+    countIfTableExists(db, 'stock_location_adjustments', 'material_id = $1', [id]),
+    countIfTableExists(db, 'inventory_count_items', 'material_id = $1', [id]),
+    countIfTableExists(db, 'stock_transport_records', 'material_id = $1', [id]),
+    countIfTableExists(db, 'material_purchase_records', 'material_id = $1', [id])
+  ];
+
+  const counts = await Promise.all(checks);
+  return counts.some(count => count > 0);
 }
 
 function normalizeInputs(value, materialId = null) {
@@ -186,6 +248,46 @@ router.put('/:id', requirePermission('registrations:write'), async (req, res, ne
     });
     res.json(row);
   } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/:id', requirePermission('registrations:write'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    const result = await db.begin(async tx => {
+      const [row] = await tx`
+        SELECT *
+        FROM materials
+        WHERE id = ${req.params.id}
+        FOR UPDATE
+      `;
+      if (!row) return { notFound: true };
+      if (await materialHasLinks(tx, row)) return { blocked: true };
+
+      const [deleted] = await tx`
+        DELETE FROM materials
+        WHERE id = ${req.params.id}
+        RETURNING *
+      `;
+      return { deleted };
+    });
+
+    if (result.notFound) return res.status(404).json({ error: 'Material nao encontrado.' });
+    if (result.blocked) return res.status(409).json({ error: MATERIAL_LINKED_MESSAGE });
+
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Material excluído',
+      module: 'Cadastros',
+      description: auditDeleteDescription(result.deleted, req.user),
+      recordRef: result.deleted.id
+    });
+    res.json({ deleted: true, id: result.deleted.id });
+  } catch (error) {
+    if (error.code === '23503') {
+      return res.status(409).json({ error: MATERIAL_LINKED_MESSAGE });
+    }
     next(error);
   }
 });

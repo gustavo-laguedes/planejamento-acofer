@@ -2,6 +2,7 @@ import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
 import { UploadCsvButton } from '../shared/UploadCsvButton.js';
 import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
+import { InternalTabs } from '../shared/InternalTabs.js';
 import { canAccess } from '../shared/rbac.js';
 
 function escapeHtml(value) {
@@ -37,6 +38,26 @@ function todayBrazil() {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+}
+
+const LOCATION_ORDER = ['matriz', 'feital', 'centro'];
+
+function normalizeText(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function locationOrderValue(location) {
+  const values = [location?.code, location?.name].map(normalizeText);
+  const index = LOCATION_ORDER.findIndex(expected => values.includes(expected));
+  return index === -1 ? LOCATION_ORDER.length : index;
+}
+
+function sortLocations(locations = []) {
+  return [...locations].sort((left, right) => {
+    const orderDiff = locationOrderValue(left) - locationOrderValue(right);
+    if (orderDiff) return orderDiff;
+    return String(left.name || '').localeCompare(String(right.name || ''), 'pt-BR');
+  });
 }
 
 function importUser(row) {
@@ -90,17 +111,21 @@ export function ImportHistoryPage() {
   page.innerHTML = `
     <div class="page-header">
       <div>
-        <h1>CSV / Inventário</h1>
-        <p>Importações, inventário e conferências de estoque.</p>
+        <h1>Lan&ccedil;amentos</h1>
+        <p>Importa&ccedil;&otilde;es, invent&aacute;rio e registros informativos.</p>
       </div>
     </div>
+    <div class="launches-tabs"></div>
     <div class="launches-target"></div>
   `;
 
+  const tabsTarget = page.querySelector('.launches-tabs');
   const target = page.querySelector('.launches-target');
   let materials = [];
   let machines = [];
   let matrix = [];
+  let locations = [];
+  let activeLaunchTab = sessionStorage.getItem('planejamento_launches_tab') || 'csv';
   let productionFilters = {
     materialId: '',
     machineName: '',
@@ -117,6 +142,7 @@ export function ImportHistoryPage() {
     materials = lookups.materials || [];
     machines = lookups.machines || [];
     matrix = lookups.matrix || [];
+    locations = sortLocations(lookups.locations || []);
   }
 
   async function renderImportHistory(container) {
@@ -174,6 +200,142 @@ export function ImportHistoryPage() {
   }
 
   async function openInventoryViewModal(id) {
+    let count = await api(`/stock/inventory/counts/${id}`);
+    let editing = false;
+    let saving = false;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+
+    function orderedInventoryLocations(material) {
+      return sortLocations((material.locations || []).map(location => ({
+        ...location,
+        code: location.locationCode,
+        name: location.locationName
+      })));
+    }
+
+    function inventoryViewTotal(material) {
+      return orderedInventoryLocations(material).reduce((sum, location) => {
+        const input = backdrop.querySelector(`[data-view-material-id="${material.materialId}"][data-view-location-id="${location.locationId}"]`);
+        const value = input ? input.value : location.countedQty;
+        return sum + Number(value || 0);
+      }, 0);
+    }
+
+    function editedInfo() {
+      if (!count.edited_at) return '';
+      const editedAt = new Date(count.edited_at);
+      const day = editedAt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      const time = editedAt.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+      return `<div class="inventory-edit-info">Editado por: ${escapeHtml(count.edited_by_user_name || count.edited_by_user_id || '-')} em ${day} &agrave;s ${time}</div>`;
+    }
+
+    function renderModal() {
+      const createdAt = count.created_at ? new Date(count.created_at) : null;
+      backdrop.innerHTML = `
+        <div class="modal wide-modal inventory-view-modal" role="dialog" aria-modal="true">
+          <div class="modal-header">
+            <h2>Visualizar invent&aacute;rio</h2>
+            <button class="link-button close-modal" type="button">Fechar</button>
+          </div>
+          <div class="detail-summary-strip">
+            <article><span>Data</span><strong>${createdAt ? createdAt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '-'}</strong></article>
+            <article><span>Hora</span><strong>${createdAt ? createdAt.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '-'}</strong></article>
+            <article><span>Usu&aacute;rio</span><strong>${escapeHtml(count.user_id || '-')}</strong></article>
+            <article><span>Observa&ccedil;&atilde;o</span><strong>${escapeHtml(count.notes || '-')}</strong></article>
+          </div>
+          ${editedInfo()}
+          <div class="inventory-view-list">
+            ${(count.materials || []).map(material => `
+              <article class="inventory-card inventory-view-card" data-view-card-material-id="${material.materialId}">
+                <div class="inventory-card-main">
+                  <h3>${escapeHtml(material.materialName)}</h3>
+                  <p>${escapeHtml((material.codes || []).join(', ') || 'Sem c&oacute;digos')}</p>
+                </div>
+                <div class="inventory-location-list">
+                  ${orderedInventoryLocations(material).map(location => editing ? `
+                    <label>
+                      <span>${escapeHtml(location.locationName)}</span>
+                      <input type="number" step="0.001" value="${escapeHtml(location.countedQty)}" data-view-material-id="${material.materialId}" data-view-location-id="${location.locationId}" />
+                    </label>
+                  ` : `
+                    <div class="readonly-field">
+                      <span>${escapeHtml(location.locationName)}</span>
+                      ${chips([formatNumber(location.countedQty)])}
+                    </div>
+                  `).join('')}
+                  <div class="readonly-field inventory-total-field">
+                    <span>Total</span>
+                    ${chips([formatNumber(inventoryViewTotal(material))])}
+                  </div>
+                </div>
+              </article>
+            `).join('') || '<div class="empty-state">Nenhum material encontrado neste invent&aacute;rio.</div>'}
+          </div>
+          <div class="form-actions inventory-modal-actions">
+            <span></span>
+            <div class="modal-header-actions">
+              ${canWriteInventory && !editing ? '<button class="secondary-button edit-inventory-view" type="button">Editar</button>' : ''}
+              ${canWriteInventory && editing ? '<button class="primary-button save-inventory-view" type="button">Salvar altera&ccedil;&otilde;es</button>' : ''}
+              <button class="secondary-button close-modal" type="button">Fechar</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function updateViewTotals() {
+      (count.materials || []).forEach(material => {
+        const totalTarget = backdrop.querySelector(`[data-view-card-material-id="${material.materialId}"] .inventory-total-field`);
+        if (totalTarget) totalTarget.innerHTML = `<span>Total</span>${chips([formatNumber(inventoryViewTotal(material))])}`;
+      });
+    }
+
+    function collectViewItems() {
+      return [...backdrop.querySelectorAll('[data-view-material-id][data-view-location-id]')].map(input => ({
+        materialId: Number(input.dataset.viewMaterialId),
+        locationId: Number(input.dataset.viewLocationId),
+        countedQty: input.value
+      }));
+    }
+
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
+      if (event.target.closest('.edit-inventory-view')) {
+        editing = true;
+        renderModal();
+      }
+      const saveButton = event.target.closest('.save-inventory-view');
+      if (saveButton) {
+        if (saving) return;
+        saving = true;
+        saveButton.disabled = true;
+        saveButton.textContent = 'Salvando...';
+        api(`/stock/inventory/counts/${id}`, {
+          method: 'PUT',
+          body: { items: collectViewItems() }
+        }).then(async () => {
+          count = await api(`/stock/inventory/counts/${id}`);
+          editing = false;
+          window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: 'Inventário atualizado.' }));
+          renderModal();
+        }).catch(error => {
+          toast(error);
+          saveButton.disabled = false;
+          saveButton.textContent = 'Salvar alterações';
+        }).finally(() => {
+          saving = false;
+        });
+      }
+    });
+    backdrop.addEventListener('input', event => {
+      if (event.target.matches('[data-view-material-id][data-view-location-id]')) updateViewTotals();
+    });
+    page.appendChild(backdrop);
+    renderModal();
+  }
+
+  async function openInventoryViewModalLegacy(id) {
     const count = await api(`/stock/inventory/counts/${id}`);
     const createdAt = count.created_at ? new Date(count.created_at) : null;
     const backdrop = document.createElement('div');
@@ -222,6 +384,7 @@ export function ImportHistoryPage() {
 
   async function openInventoryModal() {
     const template = await api('/stock/inventory/template');
+    template.locations = sortLocations(template.locations || []);
     const hasInventoryBase = template?.rows?.length && template?.locations?.length;
     const selected = new Map();
     let inventoryCandidateId = '';
@@ -260,6 +423,13 @@ export function ImportHistoryPage() {
 
     function currentQty(row, location) {
       return row.inventoryByLocation?.[String(location.id)] ?? row.stockByLocation?.[String(location.id)]?.nasajonQty ?? 0;
+    }
+
+    function inventoryRowTotal(row) {
+      return template.locations.reduce((sum, location) => {
+        const value = row.counts?.[String(location.id)];
+        return sum + (value === '' || value === null || value === undefined ? 0 : Number(value || 0));
+      }, 0);
     }
 
     function captureInventoryValues() {
@@ -310,6 +480,10 @@ export function ImportHistoryPage() {
                 </label>
               `;
             }).join('')}
+            <div class="readonly-field inventory-total-field">
+              <span>Total</span>
+              ${chips([formatNumber(inventoryRowTotal(row))])}
+            </div>
           </div>
         </article>
       `).join('') : '<div class="empty-state">Busque e adicione materiais para este inventário.</div>';
@@ -329,6 +503,17 @@ export function ImportHistoryPage() {
       renderInventoryCards();
     }
 
+    function updateInventoryTotals() {
+      captureInventoryValues();
+      backdrop.querySelectorAll('.inventory-card[data-material-id]').forEach(card => {
+        const row = selected.get(String(card.dataset.materialId));
+        const totalTarget = card.querySelector('.inventory-total-field');
+        if (row && totalTarget) {
+          totalTarget.innerHTML = `<span>Total</span>${chips([formatNumber(inventoryRowTotal(row))])}`;
+        }
+      });
+    }
+
     backdrop.addEventListener('click', event => {
       if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
       const pick = event.target.closest('[data-inventory-pick]');
@@ -342,7 +527,7 @@ export function ImportHistoryPage() {
         renderInventoryCards();
       }
     });
-    backdrop.querySelector('.inventory-card-list')?.addEventListener('input', captureInventoryValues);
+    backdrop.querySelector('.inventory-card-list')?.addEventListener('input', updateInventoryTotals);
     backdrop.querySelector('[name="inventorySearch"]')?.addEventListener('input', renderSearchResults);
     backdrop.querySelector('.add-inventory-material')?.addEventListener('click', addSelectedMaterial);
     backdrop.querySelector('.save-inventory')?.addEventListener('click', async event => {
@@ -390,6 +575,153 @@ export function ImportHistoryPage() {
       .map(material => `<option value="${material.id}" ${String(material.id) === String(selectedId) ? 'selected' : ''}>${escapeHtml(material.name)}</option>`)
       .join('');
     return `${includeBlank ? '<option value="">Selecione</option>' : ''}${options}`;
+  }
+
+  function locationOptions(selectedId = '', includeBlank = false) {
+    const options = locations
+      .filter(location => location.active !== false)
+      .map(location => `<option value="${location.id}" ${String(location.id) === String(selectedId) ? 'selected' : ''}>${escapeHtml(location.name)}</option>`)
+      .join('');
+    return `${includeBlank ? '<option value="">Selecione</option>' : ''}${options}`;
+  }
+
+  function firstCodeFromCodes(codes = []) {
+    return Array.isArray(codes) && codes.length ? codes[0] : '';
+  }
+
+  async function renderTransportRecords(container) {
+    await loadLookups();
+    container.innerHTML = `
+      <div class="section-heading">
+        <h2>Transportes</h2>
+      </div>
+      ${canWriteProduction ? `
+        <form class="filters manual-record-form transport-record-form">
+          <label>Data<input name="transportDate" type="date" required value="${todayBrazil()}" /></label>
+          <label>Material<select name="materialId" required>${materialOptions('', true)}</select></label>
+          <label>Local origem<select name="originLocationId" required>${locationOptions('', true)}</select></label>
+          <label>Local destino<select name="destinationLocationId" required>${locationOptions('', true)}</select></label>
+          <label>Quantidade<input name="quantity" type="number" step="0.001" min="0.001" required /></label>
+          <label>Nota fiscal<input name="invoiceNumber" /></label>
+          <label class="wide-field">Observa&ccedil;&atilde;o<input name="notes" /></label>
+          <button class="primary-button" type="submit">Registrar transporte</button>
+        </form>
+      ` : ''}
+      <div class="table-target"></div>
+    `;
+    const loadTable = async () => {
+      const rows = await api('/stock/manual-transports');
+      const tableTarget = container.querySelector('.table-target');
+      tableTarget.innerHTML = '';
+      tableTarget.appendChild(DataTable({
+        columns: [
+          { label: 'Data', render: row => formatDateOnly(row.transport_date), sortValue: row => row.transport_date },
+          { label: 'Material', render: row => row.material_name || '-' },
+          { label: 'C&oacute;digo', render: row => firstCodeFromCodes(row.material_codes) || '-' },
+          { label: 'Origem', render: row => row.origin_location_name || '-' },
+          { label: 'Destino', render: row => row.destination_location_name || '-' },
+          { label: 'Quantidade', render: row => formatNumber(row.quantity), sortValue: row => Number(row.quantity || 0) },
+          { label: 'Nota fiscal', render: row => row.invoice_number || '-' },
+          { label: 'Observa&ccedil;&atilde;o', render: row => row.notes || '-' }
+        ],
+        rows
+      }));
+    };
+    container.querySelector('.transport-record-form')?.addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const submit = form.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      try {
+        await api('/stock/manual-transports', {
+          method: 'POST',
+          body: {
+            transportDate: form.elements.transportDate.value,
+            materialId: Number(form.elements.materialId.value),
+            originLocationId: Number(form.elements.originLocationId.value),
+            destinationLocationId: Number(form.elements.destinationLocationId.value),
+            quantity: Number(form.elements.quantity.value || 0),
+            invoiceNumber: form.elements.invoiceNumber.value,
+            notes: form.elements.notes.value
+          }
+        });
+        form.reset();
+        form.elements.transportDate.value = todayBrazil();
+        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: 'Transporte registrado.' }));
+        await loadTable();
+      } catch (error) {
+        toast(error);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    await loadTable();
+  }
+
+  async function renderPurchaseRecords(container) {
+    await loadLookups();
+    container.innerHTML = `
+      <div class="section-heading">
+        <h2>Compra</h2>
+      </div>
+      ${canWriteProduction ? `
+        <form class="filters manual-record-form purchase-record-form">
+          <label>Data<input name="purchaseDate" type="date" required value="${todayBrazil()}" /></label>
+          <label>Material<select name="materialId" required>${materialOptions('', true)}</select></label>
+          <label>Local<select name="locationId" required>${locationOptions('', true)}</select></label>
+          <label>Quantidade<input name="quantity" type="number" step="0.001" min="0.001" required /></label>
+          <label>Nota fiscal<input name="invoiceNumber" /></label>
+          <label class="wide-field">Observa&ccedil;&atilde;o<input name="notes" /></label>
+          <button class="primary-button" type="submit">Registrar compra</button>
+        </form>
+      ` : ''}
+      <div class="table-target"></div>
+    `;
+    const loadTable = async () => {
+      const rows = await api('/stock/material-purchases');
+      const tableTarget = container.querySelector('.table-target');
+      tableTarget.innerHTML = '';
+      tableTarget.appendChild(DataTable({
+        columns: [
+          { label: 'Data', render: row => formatDateOnly(row.purchase_date), sortValue: row => row.purchase_date },
+          { label: 'Material', render: row => row.material_name || '-' },
+          { label: 'C&oacute;digo', render: row => firstCodeFromCodes(row.material_codes) || '-' },
+          { label: 'Local', render: row => row.location_name || '-' },
+          { label: 'Quantidade', render: row => formatNumber(row.quantity), sortValue: row => Number(row.quantity || 0) },
+          { label: 'Nota fiscal', render: row => row.invoice_number || '-' },
+          { label: 'Observa&ccedil;&atilde;o', render: row => row.notes || '-' }
+        ],
+        rows
+      }));
+    };
+    container.querySelector('.purchase-record-form')?.addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const submit = form.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      try {
+        await api('/stock/material-purchases', {
+          method: 'POST',
+          body: {
+            purchaseDate: form.elements.purchaseDate.value,
+            materialId: Number(form.elements.materialId.value),
+            locationId: Number(form.elements.locationId.value),
+            quantity: Number(form.elements.quantity.value || 0),
+            invoiceNumber: form.elements.invoiceNumber.value,
+            notes: form.elements.notes.value
+          }
+        });
+        form.reset();
+        form.elements.purchaseDate.value = todayBrazil();
+        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: 'Compra registrada.' }));
+        await loadTable();
+      } catch (error) {
+        toast(error);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    await loadTable();
   }
 
   function materialSearchLabel(material) {
@@ -934,27 +1266,33 @@ export function ImportHistoryPage() {
   }
 
   async function render() {
-    setInternalLoading(target, 'Carregando CSV / Inventário...');
+    setInternalLoading(target, 'Carregando Lançamentos...');
     try {
       const sections = [
-        (canReadLog || canImportCsv) ? { id: 'history', render: renderImportHistory } : null,
-        canReadInventory ? { id: 'inventory', render: renderInventory } : null
+        (canReadLog || canImportCsv) ? { id: 'csv', label: 'Importação CSV', render: renderImportHistory } : null,
+        canReadInventory ? { id: 'inventory', label: 'Inventário', render: renderInventory } : null,
+        { id: 'transports', label: 'Transportes', render: renderTransportRecords },
+        { id: 'purchase', label: 'Compra', render: renderPurchaseRecords }
       ].filter(Boolean);
 
       if (!sections.length) {
-        target.innerHTML = '<div class="empty-state">Nenhuma area de CSV / inventário disponivel para este perfil.</div>';
+        target.innerHTML = '<div class="empty-state">Nenhuma area de lançamentos disponivel para este perfil.</div>';
         return;
       }
 
-      target.innerHTML = sections.map(section => `
-        <div class="panel launches-wide-panel${section.id === 'inventory' ? ' inventory-history-panel' : ''}" data-launch-section="${section.id}"></div>
-      `).join('');
+      if (!sections.some(section => section.id === activeLaunchTab)) activeLaunchTab = sections[0].id;
+      sessionStorage.setItem('planejamento_launches_tab', activeLaunchTab);
+      tabsTarget.innerHTML = '';
+      tabsTarget.appendChild(InternalTabs(sections.map(({ id, label }) => ({ id, label })), activeLaunchTab, tab => {
+        activeLaunchTab = tab;
+        render().catch(toast);
+      }));
 
-      for (const section of sections) {
-        await section.render(target.querySelector(`[data-launch-section="${section.id}"]`));
-      }
+      const section = sections.find(item => item.id === activeLaunchTab);
+      target.innerHTML = `<div class="panel launches-wide-panel${section.id === 'inventory' ? ' inventory-history-panel' : ''}" data-launch-section="${section.id}"></div>`;
+      await section.render(target.querySelector(`[data-launch-section="${section.id}"]`));
     } catch (error) {
-      setInternalError(target, error.message || 'Nao foi possivel carregar CSV / inventário.');
+      setInternalError(target, error.message || 'Nao foi possivel carregar lançamentos.');
       throw error;
     }
   }

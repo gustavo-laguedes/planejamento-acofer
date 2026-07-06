@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireDb } from '../db.js';
 import { businessDaysInclusive } from '../../services/workingDays.service.js';
 import { requirePermission } from './middleware.js';
+import { auditUser, recordAuditLog } from '../audit.js';
 
 const router = Router();
 
@@ -15,6 +16,34 @@ function normalizeText(value) {
 }
 
 const INVENTORY_DUPLICATE_WINDOW_SECONDS = 120;
+const LOCATION_ORDER = ['matriz', 'feital', 'centro'];
+
+function locationOrderValue(location) {
+  const values = [location?.code, location?.name].map(normalizeText);
+  const index = LOCATION_ORDER.findIndex(expected => values.includes(expected));
+  return index === -1 ? LOCATION_ORDER.length : index;
+}
+
+function sortLocations(locations = []) {
+  return [...locations].sort((left, right) => {
+    const orderDiff = locationOrderValue(left) - locationOrderValue(right);
+    if (orderDiff) return orderDiff;
+    return String(left.name || '').localeCompare(String(right.name || ''), 'pt-BR');
+  });
+}
+
+function displayUserName(user) {
+  return auditUser(user).name || 'Sistema';
+}
+
+async function ensureInventoryEditMetadata(db) {
+  await db`
+    ALTER TABLE inventory_counts
+      ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS edited_by_user_id BIGINT,
+      ADD COLUMN IF NOT EXISTS edited_by_user_name TEXT
+  `;
+}
 
 function emptyLocation(location) {
   return {
@@ -48,7 +77,7 @@ function salesProjection(material, currentBalance, salesPeriodQty, businessDays)
   };
 }
 
-function summarizeMaterial(material, locations, stockRows, correctionRows, businessDays = 0) {
+function summarizeMaterial(material, locations, stockRows, correctionRows, businessDays = 0, latestInventory = null) {
   const codes = Array.isArray(material.codes) ? material.codes.map(String) : [];
   const codeSet = new Set(codes.map(normalizeText));
   const codeBreakdown = new Map(codes.map(code => [normalizeText(code), emptyCodeBreakdown(code, locations)]));
@@ -105,6 +134,7 @@ function summarizeMaterial(material, locations, stockRows, correctionRows, busin
     codeBreakdown: [...codeBreakdown.values()],
     stockByLocation,
     inventoryByLocation,
+    latestInventory,
     totalLocationsQty,
     correctionQty,
     unmappedNasajonQty,
@@ -136,10 +166,43 @@ async function buildInventoryTemplate(db) {
     adjustmentsByMaterial.get(key).push(adjustment);
   }
 
+  const orderedLocations = sortLocations(locations);
   return {
-    locations,
-    rows: materials.map(material => summarizeMaterial(material, locations, stockRows, adjustmentsByMaterial.get(String(material.id)) || []))
+    locations: orderedLocations,
+    rows: materials.map(material => summarizeMaterial(material, orderedLocations, stockRows, adjustmentsByMaterial.get(String(material.id)) || []))
   };
+}
+
+async function ensureManualLaunchTables(db) {
+  await db`
+    CREATE TABLE IF NOT EXISTS stock_transport_records (
+      id BIGSERIAL PRIMARY KEY,
+      transport_date DATE NOT NULL,
+      material_id BIGINT REFERENCES materials(id) ON DELETE SET NULL,
+      origin_location_id BIGINT REFERENCES locations(id) ON DELETE SET NULL,
+      destination_location_id BIGINT REFERENCES locations(id) ON DELETE SET NULL,
+      quantity NUMERIC NOT NULL DEFAULT 0,
+      invoice_number TEXT,
+      notes TEXT,
+      user_id BIGINT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )
+  `;
+  await db`
+    CREATE TABLE IF NOT EXISTS material_purchase_records (
+      id BIGSERIAL PRIMARY KEY,
+      purchase_date DATE NOT NULL,
+      material_id BIGINT REFERENCES materials(id) ON DELETE SET NULL,
+      location_id BIGINT REFERENCES locations(id) ON DELETE SET NULL,
+      quantity NUMERIC NOT NULL DEFAULT 0,
+      invoice_number TEXT,
+      notes TEXT,
+      user_id BIGINT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )
+  `;
+  await db`CREATE INDEX IF NOT EXISTS idx_stock_transport_records_date ON stock_transport_records (transport_date DESC, created_at DESC)`;
+  await db`CREATE INDEX IF NOT EXISTS idx_material_purchase_records_date ON material_purchase_records (purchase_date DESC, created_at DESC)`;
 }
 
 router.get('/', async (req, res, next) => {
@@ -214,7 +277,7 @@ router.get('/summary', async (req, res, next) => {
 router.get('/materials-overview', async (req, res, next) => {
   try {
     const db = requireDb();
-    const [materials, locations, stockRows, correctionRows, lastImportRows] = await Promise.all([
+    const [materials, locations, stockRows, correctionRows, latestInventoryRows, lastImportRows] = await Promise.all([
       db`
         SELECT id, name, codes, permits_sales, active
         FROM materials
@@ -238,6 +301,23 @@ router.get('/materials-overview', async (req, res, next) => {
         ORDER BY material_id, updated_at DESC, id DESC
       `,
       db`
+        WITH latest AS (
+          SELECT DISTINCT ON (i.material_id)
+                 i.material_id, i.inventory_count_id, c.created_at
+          FROM inventory_count_items i
+          JOIN inventory_counts c ON c.id = i.inventory_count_id
+          ORDER BY i.material_id, c.created_at DESC, c.id DESC
+        )
+        SELECT latest.material_id,
+               latest.created_at,
+               COALESCE(SUM(i.counted_qty), 0)::numeric AS total_counted_qty
+        FROM latest
+        JOIN inventory_count_items i
+          ON i.inventory_count_id = latest.inventory_count_id
+         AND i.material_id = latest.material_id
+        GROUP BY latest.material_id, latest.created_at
+      `,
+      db`
         SELECT id, filename, status, total_rows, finished_at, created_at,
                period_start, period_end, business_days
         FROM import_history
@@ -253,19 +333,25 @@ router.get('/materials-overview', async (req, res, next) => {
       if (!correctionsByMaterial.has(key)) correctionsByMaterial.set(key, []);
       correctionsByMaterial.get(key).push(correction);
     }
+    const latestInventoryByMaterial = new Map(latestInventoryRows.map(row => [String(row.material_id), {
+      totalCountedQty: toNumber(row.total_counted_qty),
+      countedAt: row.created_at
+    }]));
     const lastImport = lastImportRows[0] || null;
     const businessDays = Number(lastImport?.business_days || 0);
+    const orderedLocations = sortLocations(locations);
 
     const rows = materials.map(material => summarizeMaterial(
       material,
-      locations,
+      orderedLocations,
       stockRows,
       correctionsByMaterial.get(String(material.id)) || [],
-      businessDays
+      businessDays,
+      latestInventoryByMaterial.get(String(material.id)) || null
     ));
 
     res.json({
-      locations,
+      locations: orderedLocations,
       rows,
       lastImport
     });
@@ -378,8 +464,10 @@ router.post('/inventory/counts', requirePermission('inventory:write'), async (re
 router.get('/inventory/counts', requirePermission('inventory:read'), async (req, res, next) => {
   try {
     const db = requireDb();
+    await ensureInventoryEditMetadata(db);
     const rows = await db`
-      SELECT c.id, c.notes, c.user_id, c.created_at, COUNT(DISTINCT i.material_id)::int AS item_count
+      SELECT c.id, c.notes, c.user_id, c.created_at, c.edited_at, c.edited_by_user_id, c.edited_by_user_name,
+             COUNT(DISTINCT i.material_id)::int AS item_count
       FROM inventory_counts c
       LEFT JOIN inventory_count_items i ON i.inventory_count_id = c.id
       GROUP BY c.id
@@ -395,8 +483,9 @@ router.get('/inventory/counts', requirePermission('inventory:read'), async (req,
 router.get('/inventory/counts/:id', requirePermission('inventory:read'), async (req, res, next) => {
   try {
     const db = requireDb();
+    await ensureInventoryEditMetadata(db);
     const [count] = await db`
-      SELECT id, notes, user_id, created_at
+      SELECT id, notes, user_id, created_at, edited_at, edited_by_user_id, edited_by_user_name
       FROM inventory_counts
       WHERE id = ${req.params.id}
     `;
@@ -434,6 +523,232 @@ router.get('/inventory/counts/:id', requirePermission('inventory:read'), async (
     }
 
     res.json({ ...count, materials: [...materials.values()] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/inventory/counts/:id', requirePermission('inventory:write'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    await ensureInventoryEditMetadata(db);
+    const countId = Number(req.params.id);
+    const user = auditUser(req.user);
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    const normalizedItems = items
+      .map(item => ({
+        materialId: Number(item.materialId),
+        locationId: Number(item.locationId),
+        countedQty: item.countedQty === '' || item.countedQty === null || item.countedQty === undefined ? null : toNumber(item.countedQty)
+      }))
+      .filter(item => item.materialId && item.locationId && item.countedQty !== null);
+
+    if (!countId) return res.status(400).json({ error: 'Inventario invalido.' });
+    if (!normalizedItems.length) return res.status(400).json({ error: 'Informe ao menos um saldo.' });
+
+    const result = await db.begin(async tx => {
+      const [count] = await tx`
+        SELECT id, created_at
+        FROM inventory_counts
+        WHERE id = ${countId}
+        FOR UPDATE
+      `;
+      if (!count) return null;
+
+      const currentItems = await tx`
+        SELECT i.id, i.material_id, i.location_id, i.counted_qty, m.name AS material_name, l.name AS location_name
+        FROM inventory_count_items i
+        JOIN materials m ON m.id = i.material_id
+        JOIN locations l ON l.id = i.location_id
+        WHERE i.inventory_count_id = ${countId}
+      `;
+      const currentByKey = new Map(currentItems.map(item => [`${item.material_id}:${item.location_id}`, item]));
+      const changes = [];
+
+      for (const item of normalizedItems) {
+        const current = currentByKey.get(`${item.materialId}:${item.locationId}`);
+        if (!current) continue;
+        const previousQty = toNumber(current.counted_qty);
+        if (previousQty === item.countedQty) continue;
+        changes.push({ ...item, itemId: current.id, previousQty, materialName: current.material_name, locationName: current.location_name });
+      }
+
+      if (!changes.length) {
+        const [unchanged] = await tx`
+          SELECT id, notes, user_id, created_at, edited_at, edited_by_user_id, edited_by_user_name
+          FROM inventory_counts
+          WHERE id = ${countId}
+        `;
+        return { count: unchanged, changes: [] };
+      }
+
+      for (const change of changes) {
+        await tx`
+          UPDATE inventory_count_items
+          SET counted_qty = ${change.countedQty}
+          WHERE id = ${change.itemId}
+        `;
+
+        const [latestForLocation] = await tx`
+          SELECT i.id
+          FROM inventory_count_items i
+          JOIN inventory_counts c ON c.id = i.inventory_count_id
+          WHERE i.material_id = ${change.materialId}
+            AND i.location_id = ${change.locationId}
+          ORDER BY c.created_at DESC, c.id DESC, i.id DESC
+          LIMIT 1
+        `;
+        if (String(latestForLocation?.id || '') === String(change.itemId)) {
+          await tx`
+            INSERT INTO stock_location_adjustments (material_id, location_id, adjustment_qty, notes, updated_at)
+            VALUES (${change.materialId}, ${change.locationId}, ${change.countedQty}, 'Editado pelo inventario', now())
+            ON CONFLICT (material_id, location_id)
+            DO UPDATE SET adjustment_qty = EXCLUDED.adjustment_qty,
+                          notes = EXCLUDED.notes,
+                          updated_at = now()
+          `;
+        }
+      }
+
+      const [updatedCount] = await tx`
+        UPDATE inventory_counts
+        SET edited_at = now(),
+            edited_by_user_id = ${user.id},
+            edited_by_user_name = ${displayUserName(req.user)}
+        WHERE id = ${countId}
+        RETURNING id, notes, user_id, created_at, edited_at, edited_by_user_id, edited_by_user_name
+      `;
+
+      return { count: updatedCount, changes };
+    });
+
+    if (!result) return res.status(404).json({ error: 'Inventario nao encontrado.' });
+
+    if (result.changes.length) {
+      const changedMaterials = [...new Set(result.changes.map(change => change.materialName))].join(', ');
+      const inventoryDate = result.count.created_at
+        ? new Date(result.count.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+        : `ID ${countId}`;
+      await recordAuditLog(db, {
+        user: req.user,
+        action: 'Inventário editado',
+        module: 'Estoque',
+        description: `Inventario de ${inventoryDate}. Materiais alterados: ${changedMaterials}. Usuario: ${displayUserName(req.user)}.`,
+        recordRef: countId
+      });
+    }
+
+    res.json({ ...result.count, changedItems: result.changes.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/manual-transports', requirePermission('launches:read'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    await ensureManualLaunchTables(db);
+    const rows = await db`
+      SELECT r.id, r.transport_date, r.quantity, r.invoice_number, r.notes, r.user_id, r.created_at,
+             m.name AS material_name, m.codes AS material_codes,
+             origin.name AS origin_location_name,
+             destination.name AS destination_location_name
+      FROM stock_transport_records r
+      LEFT JOIN materials m ON m.id = r.material_id
+      LEFT JOIN locations origin ON origin.id = r.origin_location_id
+      LEFT JOIN locations destination ON destination.id = r.destination_location_id
+      ORDER BY r.transport_date DESC, r.created_at DESC, r.id DESC
+      LIMIT 200
+    `;
+    res.json(rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/manual-transports', requirePermission('launches:write'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    await ensureManualLaunchTables(db);
+    const transportDate = String(req.body.transportDate || '').slice(0, 10);
+    const materialId = Number(req.body.materialId);
+    const originLocationId = Number(req.body.originLocationId);
+    const destinationLocationId = Number(req.body.destinationLocationId);
+    const quantity = toNumber(req.body.quantity);
+    const invoiceNumber = String(req.body.invoiceNumber || '').trim() || null;
+    const notes = String(req.body.notes || '').trim() || null;
+    const userId = req.user?.id || null;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(transportDate) || !materialId || !originLocationId || !destinationLocationId || quantity <= 0) {
+      return res.status(400).json({ error: 'Data, material, locais e quantidade sao obrigatorios.' });
+    }
+    if (originLocationId === destinationLocationId) {
+      return res.status(400).json({ error: 'Local de origem e destino devem ser diferentes.' });
+    }
+
+    const [row] = await db`
+      INSERT INTO stock_transport_records (
+        transport_date, material_id, origin_location_id, destination_location_id,
+        quantity, invoice_number, notes, user_id
+      )
+      VALUES (
+        ${transportDate}, ${materialId}, ${originLocationId}, ${destinationLocationId},
+        ${quantity}, ${invoiceNumber}, ${notes}, ${userId}
+      )
+      RETURNING *
+    `;
+    res.status(201).json(row);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/material-purchases', requirePermission('launches:read'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    await ensureManualLaunchTables(db);
+    const rows = await db`
+      SELECT r.id, r.purchase_date, r.quantity, r.invoice_number, r.notes, r.user_id, r.created_at,
+             m.name AS material_name, m.codes AS material_codes,
+             l.name AS location_name
+      FROM material_purchase_records r
+      LEFT JOIN materials m ON m.id = r.material_id
+      LEFT JOIN locations l ON l.id = r.location_id
+      ORDER BY r.purchase_date DESC, r.created_at DESC, r.id DESC
+      LIMIT 200
+    `;
+    res.json(rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/material-purchases', requirePermission('launches:write'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    await ensureManualLaunchTables(db);
+    const purchaseDate = String(req.body.purchaseDate || '').slice(0, 10);
+    const materialId = Number(req.body.materialId);
+    const locationId = Number(req.body.locationId);
+    const quantity = toNumber(req.body.quantity);
+    const invoiceNumber = String(req.body.invoiceNumber || '').trim() || null;
+    const notes = String(req.body.notes || '').trim() || null;
+    const userId = req.user?.id || null;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate) || !materialId || !locationId || quantity <= 0) {
+      return res.status(400).json({ error: 'Data, material, local e quantidade sao obrigatorios.' });
+    }
+
+    const [row] = await db`
+      INSERT INTO material_purchase_records (
+        purchase_date, material_id, location_id, quantity, invoice_number, notes, user_id
+      )
+      VALUES (
+        ${purchaseDate}, ${materialId}, ${locationId}, ${quantity}, ${invoiceNumber}, ${notes}, ${userId}
+      )
+      RETURNING *
+    `;
+    res.status(201).json(row);
   } catch (error) {
     next(error);
   }

@@ -23,7 +23,8 @@ const expectedTables = [
 
 const expectedColumns = {
   app_users: ['active_browser_session_id', 'active_session_started_at', 'active_session_last_seen_at'],
-  import_history: ['period_start', 'period_end', 'business_days']
+  import_history: ['period_start', 'period_end', 'business_days'],
+  inventory_counts: ['edited_at', 'edited_by_user_id', 'edited_by_user_name']
 };
 
 const expectedAppUserRoles = [
@@ -62,7 +63,7 @@ try {
     SELECT table_name, column_name
     FROM information_schema.columns
     WHERE table_schema = 'public'
-      AND table_name IN ('app_users', 'import_history')
+      AND table_name IN ('app_users', 'import_history', 'inventory_counts')
   `);
   const columnsByTable = new Map();
   for (const row of columnRows) {

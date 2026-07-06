@@ -14,7 +14,10 @@ CREATE TABLE IF NOT EXISTS inventory_counts (
   id BIGSERIAL PRIMARY KEY,
   notes TEXT,
   user_id BIGINT,
-  created_at TIMESTAMPTZ DEFAULT now()
+  created_at TIMESTAMPTZ DEFAULT now(),
+  edited_at TIMESTAMPTZ,
+  edited_by_user_id BIGINT,
+  edited_by_user_name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS inventory_count_items (

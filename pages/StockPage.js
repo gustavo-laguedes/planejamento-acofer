@@ -43,6 +43,11 @@ function formatImportDateTime(value) {
   return `${day} às ${time}`;
 }
 
+function formatInventoryDate(value) {
+  if (!value) return '';
+  return new Date(value).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+}
+
 function formatSales(row) {
   if (row.salesBlocked) return '*';
   if (row.salesNotEstimated || row.salesPerDayQty === null || row.salesPerDayQty === undefined) return 'Não estimado';
@@ -125,6 +130,17 @@ function renderCodeLocationRows(row, location, field) {
 
 function locationCell(row, location, field) {
   return row.stockByLocation?.[String(location.id)]?.[field] ?? 0;
+}
+
+function inventoryCell(row) {
+  const inventory = row.latestInventory;
+  if (!inventory) return '<span class="muted-text">Sem contagem</span>';
+  return `
+    <div class="stock-inventory-cell">
+      <strong>${formatNumber(inventory.totalCountedQty || 0)}</strong>
+      <small>&Uacute;lt. contagem: ${escapeHtml(formatInventoryDate(inventory.countedAt) || '-')}</small>
+    </div>
+  `;
 }
 
 function correctionCell(row, canWrite) {
@@ -251,6 +267,7 @@ export function StockPage() {
             <col class="col-codes" />
             <col class="col-material" />
             ${nasajonCols}
+            <col class="col-inventory" />
             <col class="col-correction" />
             <col class="col-total" />
             <col class="col-total" />
@@ -261,12 +278,14 @@ export function StockPage() {
             <tr>
               <th class="group-material" colspan="2">Material</th>
               <th class="group-nasajon" colspan="${Math.max(locations.length * 2, 1)}">Estoque Nasajon por local</th>
+              <th class="group-inventory" colspan="1">Inventário</th>
               <th class="group-totals" colspan="5">Totais e movimentação</th>
             </tr>
             <tr>
               ${sortableStockHeader('Código', stockColumns, 'group-material', sortState)}
               ${sortableStockHeader('Nome do material', stockColumns, 'group-material', sortState)}
               ${locations.length ? nasajonHeaders : '<th class="group-nasajon">Sem locais cadastrados</th>'}
+              ${sortableStockHeader('Inventariado', stockColumns, 'group-inventory', sortState)}
               ${sortableStockHeader('Correção estoque', stockColumns, 'group-totals', sortState)}
               ${sortableStockHeader('Qtd. total locais', stockColumns, 'group-totals', sortState)}
               ${sortableStockHeader('Vendas Período', stockColumns, 'group-totals', sortState)}
@@ -283,6 +302,7 @@ export function StockPage() {
                   <td class="group-nasajon numeric-cell">${renderCodeLocationRows(row, location, 'nasajonQty')}</td>
                   <td class="group-nasajon numeric-cell">${renderCodeLocationRows(row, location, 'errorQty')}</td>
                 `).join('') : '<td class="group-nasajon muted-text">0</td>'}
+                <td class="group-inventory">${inventoryCell(row)}</td>
                 <td class="group-totals">${correctionCell(row, canWriteStock)}</td>
                 <td class="group-totals numeric-cell">${formatNumber(row.totalLocationsQty)}</td>
                 <td class="group-totals numeric-cell">${formatSalesPeriod(row)}</td>
@@ -368,6 +388,7 @@ function buildStockColumns(locations) {
       { label: `Nasajon ${location.name}`, sortValue: row => locationCell(row, location, 'nasajonQty') },
       { label: `Erro ${location.name}`, sortValue: row => locationCell(row, location, 'errorQty') }
     ]),
+    { label: 'Inventariado', sortValue: row => row.latestInventory?.countedAt || '' },
     { label: 'Correção estoque', sortValue: row => row.correctionQty },
     { label: 'Qtd. total locais', sortValue: row => row.totalLocationsQty },
     { label: 'Vendas Período', sortValue: row => row.salesPeriodQty ?? '' },

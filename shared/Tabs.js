@@ -6,7 +6,7 @@ export const TABS = [
   { id: 'dashboardReports', label: 'Dashboard / Relatórios' },
   { id: 'stock', label: 'Estoque' },
   { id: 'production', label: 'Produção' },
-  { id: 'history', label: 'CSV / Inventário' },
+  { id: 'history', label: 'Lançamentos' },
   { id: 'registrations', label: 'Cadastros' },
   { id: 'productivity', label: 'Matriz de Produtividade' },
   { id: 'audit', label: 'Log' }

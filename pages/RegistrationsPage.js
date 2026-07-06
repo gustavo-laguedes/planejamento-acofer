@@ -92,6 +92,7 @@ export function RegistrationsPage() {
           <label>Código do local<input name="code" required /></label>
           <label>Nome do local<input name="name" required /></label>
           <div class="form-actions">
+            ${row ? '<button class="danger-button delete-registration" type="button">Excluir</button>' : '<span></span>'}
             <button class="primary-button" type="submit">Salvar</button>
             <button class="secondary-button close-modal" type="button">Cancelar</button>
           </div>
@@ -104,6 +105,14 @@ export function RegistrationsPage() {
         event.preventDefault();
         const body = { code: form.elements.code.value, name: form.elements.name.value, active: true };
         await api(row ? `/locations/${row.id}` : '/locations', { method: row ? 'PUT' : 'POST', body });
+        closeModal(modal);
+        await load();
+      });
+      modal.querySelector('.delete-registration')?.addEventListener('click', async event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!confirm('Tem certeza que deseja excluir este cadastro?')) return;
+        await api(`/locations/${row.id}`, { method: 'DELETE' });
         closeModal(modal);
         await load();
       });
@@ -147,6 +156,7 @@ export function RegistrationsPage() {
           <label>Nome da máquina<input name="name" required /></label>
           <label>Local<select name="locationId" required><option value="">Selecione</option>${locationOptions(row?.location_id)}</select></label>
           <div class="form-actions">
+            ${row ? '<button class="danger-button delete-registration" type="button">Excluir</button>' : '<span></span>'}
             <button class="primary-button" type="submit">Salvar</button>
             <button class="secondary-button close-modal" type="button">Cancelar</button>
           </div>
@@ -162,6 +172,14 @@ export function RegistrationsPage() {
           active: true
         };
         await api(row ? `/machines/${row.id}` : '/machines', { method: row ? 'PUT' : 'POST', body });
+        closeModal(modal);
+        await load();
+      });
+      modal.querySelector('.delete-registration')?.addEventListener('click', async event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!confirm('Tem certeza que deseja excluir este cadastro?')) return;
+        await api(`/machines/${row.id}`, { method: 'DELETE' });
         closeModal(modal);
         await load();
       });
@@ -181,8 +199,16 @@ export function RegistrationsPage() {
     let rows = [];
 
     async function load() {
-      rows = await api(`/materials?search=${encodeURIComponent(search.value)}`);
-      materials = rows;
+      const searchValue = search.value;
+      if (searchValue) {
+        [materials, rows] = await Promise.all([
+          api('/materials'),
+          api(`/materials?search=${encodeURIComponent(searchValue)}`)
+        ]);
+      } else {
+        rows = await api('/materials');
+        materials = rows;
+      }
       tableTarget.innerHTML = '';
       tableTarget.appendChild(DataTable({
         columns: [
@@ -221,6 +247,7 @@ export function RegistrationsPage() {
             <div class="production-models-target"></div>
           </div>
           <div class="form-actions">
+            ${row ? '<button class="danger-button delete-registration" type="button">Excluir</button>' : '<span></span>'}
             <button class="primary-button" type="submit">Salvar</button>
             <button class="secondary-button close-modal" type="button">Cancelar</button>
           </div>
@@ -235,8 +262,6 @@ export function RegistrationsPage() {
       form.elements.primaryToSecondaryFactor.value = row?.primary_to_secondary_factor || '';
       form.elements.isInitialRawMaterial.checked = row?.is_initial_raw_material === true;
       form.elements.permitsSales.checked = row?.permits_sales !== false;
-      updateConsumedVisibility(modal);
-      form.elements.isInitialRawMaterial.addEventListener('change', () => updateConsumedVisibility(modal));
       form.addEventListener('submit', async event => {
         event.preventDefault();
         const body = {
@@ -247,12 +272,24 @@ export function RegistrationsPage() {
           primaryToSecondaryFactor: Number(form.elements.primaryToSecondaryFactor.value),
           isInitialRawMaterial: form.elements.isInitialRawMaterial.checked,
           permitsSales: form.elements.permitsSales.checked,
-          productionModels: form.elements.isInitialRawMaterial.checked ? [] : getProductionModels(modal),
+          productionModels: getProductionModels(modal),
           active: true
         };
         await api(row ? `/materials/${row.id}` : '/materials', { method: row ? 'PUT' : 'POST', body });
         closeModal(modal);
         await load();
+      });
+      modal.querySelector('.delete-registration')?.addEventListener('click', async event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!confirm('Tem certeza que deseja excluir este cadastro?')) return;
+        try {
+          await api(`/materials/${row.id}`, { method: 'DELETE' });
+          closeModal(modal);
+          await load();
+        } catch (error) {
+          toast(error);
+        }
       });
       form.elements.name.focus();
     }
@@ -422,15 +459,6 @@ export function RegistrationsPage() {
         qtyPerOutput: Number(row.querySelector('.usage-qty').value || 1)
       }))
     })).filter(model => model.inputMaterials.length);
-  }
-
-  function updateConsumedVisibility(modal) {
-    const disabled = modal.querySelector('[name="isInitialRawMaterial"]').checked;
-    const block = modal.querySelector('.consumed-selector-block');
-    block.classList.toggle('muted-block', disabled);
-    block.querySelectorAll('input').forEach(input => {
-      input.disabled = disabled;
-    });
   }
 
   render().catch(toast);

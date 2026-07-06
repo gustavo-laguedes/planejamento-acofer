@@ -209,7 +209,7 @@ function materialResponse(row) {
 router.get('/lookups', requirePermission('launches:read'), async (req, res, next) => {
   try {
     const db = requireDb();
-    const [materials, machines, matrix] = await Promise.all([
+    const [materials, machines, matrix, locations] = await Promise.all([
       db`
         SELECT m.*,
                COALESCE(
@@ -233,9 +233,15 @@ router.get('/lookups', requirePermission('launches:read'), async (req, res, next
         SELECT *
         FROM productivity_matrix
         ORDER BY active DESC, material_name, machine_name, people_count
+      `,
+      db`
+        SELECT id, code, name, active
+        FROM locations
+        WHERE active = true
+        ORDER BY code NULLS LAST, name
       `
     ]);
-    res.json({ materials: materials.map(materialResponse), machines, matrix });
+    res.json({ materials: materials.map(materialResponse), machines, matrix, locations });
   } catch (error) {
     next(error);
   }
