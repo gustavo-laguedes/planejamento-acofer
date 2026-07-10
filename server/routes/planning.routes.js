@@ -358,8 +358,8 @@ function enrichCalendarDays(rows) {
       : row.machine_name || operation.machineName || null;
     const peopleCount = operationType === 'transport'
       ? 0
-      : row.people_count || operation.peopleCount || null;
-    if (operationType !== 'transport' && (!machineName || !(Number(peopleCount) > 0))) return null;
+      : row.people_count ?? operation.peopleCount ?? null;
+    if (operationType !== 'transport' && (!machineName || !Number.isFinite(Number(peopleCount)) || Number(peopleCount) < 0)) return null;
     return {
       event_id: row.day_id ? `day-${row.day_id}` : `plan-${row.plan_id}-${dateOnlyValue(row.planned_date)}`,
       plan_id: row.plan_id,
@@ -716,6 +716,8 @@ router.get('/plans/:id', async (req, res, next) => {
         planningEndDate: period.endDate,
         shifts: meta.shifts || [],
         dailyTeamOverrides: meta.dailyTeamOverrides || {},
+        manualWorkDates: Array.isArray(meta.manualWorkDates) ? meta.manualWorkDates : [],
+        setupHours: Number(meta.setupHours || 0),
         productions: meta.productions || []
       }
     });

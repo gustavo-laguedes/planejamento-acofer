@@ -24,7 +24,8 @@ const expectedTables = [
 const expectedColumns = {
   app_users: ['active_browser_session_id', 'active_session_started_at', 'active_session_last_seen_at'],
   import_history: ['period_start', 'period_end', 'business_days'],
-  inventory_counts: ['edited_at', 'edited_by_user_id', 'edited_by_user_name']
+  inventory_counts: ['edited_at', 'edited_by_user_id', 'edited_by_user_name'],
+  productivity_matrix: ['machine_priority']
 };
 
 const expectedAppUserRoles = [
@@ -63,7 +64,7 @@ try {
     SELECT table_name, column_name
     FROM information_schema.columns
     WHERE table_schema = 'public'
-      AND table_name IN ('app_users', 'import_history', 'inventory_counts')
+      AND table_name IN ('app_users', 'import_history', 'inventory_counts', 'productivity_matrix')
   `);
   const columnsByTable = new Map();
   for (const row of columnRows) {
@@ -86,9 +87,21 @@ try {
   `);
   const constraintDefinition = constraintRows[0]?.definition || '';
   const missingRoles = expectedAppUserRoles.filter(role => !constraintDefinition.includes(`'${role}'`));
+  const productivityConstraintRows = await sql.unsafe(`
+    SELECT pg_get_constraintdef(c.oid) AS definition
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE n.nspname = 'public'
+      AND t.relname = 'productivity_matrix'
+      AND c.conname = 'productivity_matrix_people_count_check'
+  `);
+  const productivityPeopleConstraintDefinition = productivityConstraintRows[0]?.definition || '';
+  const normalizedProductivityPeopleConstraint = productivityPeopleConstraintDefinition.replace(/\s+/g, ' ');
 
   console.log(found.join('\n'));
   console.log(`app_users_role_check: ${constraintDefinition || 'ausente'}`);
+  console.log(`productivity_matrix_people_count_check: ${productivityPeopleConstraintDefinition || 'ausente'}`);
 
   if (missing.length) {
     console.error(`Tabelas ausentes: ${missing.join(', ')}`);
@@ -103,6 +116,13 @@ try {
     process.exitCode = 1;
   } else if (missingRoles.length) {
     console.error(`Roles ausentes na constraint app_users_role_check: ${missingRoles.join(', ')}`);
+    process.exitCode = 1;
+  }
+  if (!productivityPeopleConstraintDefinition) {
+    console.error('Constraint ausente: productivity_matrix_people_count_check');
+    process.exitCode = 1;
+  } else if (!/\bpeople_count\b\s*>=\s*0\b/.test(normalizedProductivityPeopleConstraint)) {
+    console.error(`Constraint productivity_matrix_people_count_check invalida: ${productivityPeopleConstraintDefinition}`);
     process.exitCode = 1;
   }
 } catch (error) {

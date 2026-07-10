@@ -23,6 +23,8 @@ const files = [
   '015_app_users_role_check_final.sql',
   '016_manual_stock_records.sql',
   '017_inventory_edit_metadata.sql',
+  '018_productivity_machine_priority.sql',
+  '019_productivity_people_zero.sql',
   '002_indexes.sql',
   '003_seed_optional.sql'
 ];

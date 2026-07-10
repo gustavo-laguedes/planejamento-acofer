@@ -1,11 +1,8 @@
 export function internalLoadingHtml(text = 'Carregando dados...') {
   return `
     <div class="internal-loading" role="status" aria-live="polite">
-      <div class="industrial-loader internal-industrial-loader" aria-hidden="true">
-        <span class="metal-bar"></span>
-        <span class="cut-line"></span>
-        <span class="spark spark-a"></span>
-        <span class="spark spark-b"></span>
+      <div class="simple-loading-bar" aria-hidden="true">
+        <span></span>
       </div>
       <p>${text}</p>
     </div>
@@ -22,7 +19,7 @@ export function setInternalError(target, message = 'Nao foi possivel carregar os
   target.innerHTML = `<div class="empty-state error-state">${message}</div>`;
 }
 
-export function createOperationOverlay(text = 'Atualizando calendario...') {
+export function createOperationOverlay(text = 'Organizando produção...') {
   const overlay = document.createElement('div');
   overlay.className = 'operation-loading-overlay';
   overlay.innerHTML = internalLoadingHtml(text);

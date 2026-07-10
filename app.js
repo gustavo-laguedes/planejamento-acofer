@@ -34,13 +34,10 @@ export async function render() {
         <img src="/assets/logo-acofer.png" alt="A&ccedil;o-Fer" onerror="this.style.display='none'; this.nextElementSibling.style.display='block'" />
         <strong>Planejamento A&ccedil;o-Fer</strong>
       </div>
-      <div class="industrial-loader" aria-hidden="true">
-        <span class="metal-bar"></span>
-        <span class="cut-line"></span>
-        <span class="spark spark-a"></span>
-        <span class="spark spark-b"></span>
+      <div class="simple-loading-bar" aria-hidden="true">
+        <span></span>
       </div>
-      <p>Preparando produ&ccedil;&atilde;o...</p>
+      <p>Organizando produ&ccedil;&atilde;o...</p>
     </section>
   `;
   root.appendChild(loading);

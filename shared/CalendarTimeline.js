@@ -125,6 +125,30 @@ function formatHours(value) {
   return number.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
 }
 
+function productiveMinutes(value, fallback = 8) {
+  const rawValue = String(value ?? '').trim();
+  const durationValue = rawValue.match(/^(\d+),(\d{2})$/);
+  if (durationValue && Number(durationValue[2]) <= 59) {
+    return Math.max((Number(durationValue[1]) * 60) + Number(durationValue[2]), 1);
+  }
+  const number = Number(rawValue.replace(',', '.'));
+  return Math.max(Math.round((Number.isFinite(number) && number > 0 ? number : fallback) * 60), 1);
+}
+
+function formatProductiveMinutes(minutes) {
+  const safeMinutes = Math.max(Math.round(Number(minutes) || 0), 0);
+  const hours = Math.floor(safeMinutes / 60);
+  const mins = safeMinutes % 60;
+  return mins ? `${hours}h${String(mins).padStart(2, '0')}` : `${hours}h`;
+}
+
+function formatDurationMinutes(minutes) {
+  const safeMinutes = Math.max(Math.round(Number(minutes) || 0), 0);
+  const hours = Math.floor(safeMinutes / 60);
+  const mins = safeMinutes % 60;
+  return `${hours}h${String(mins).padStart(2, '0')}min`;
+}
+
 function escapeAttr(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -244,82 +268,82 @@ function clampMinutes(minutes, start, end) {
 
 const PRODUCTION_STAGE_COLORS = [
   [
-    { bg: '#F4F6F8', border: '#2F343B', text: '#1F2937' },
-    { bg: '#F8FAFC', border: '#4B5563', text: '#1F2937' },
-    { bg: '#F9FAFB', border: '#6B7280', text: '#1F2937' },
-    { bg: '#FFFFFF', border: '#9CA3AF', text: '#1F2937' }
+    { bg: '#E5E7EB', border: '#111827', text: '#111827' },
+    { bg: '#F3F4F6', border: '#374151', text: '#111827' },
+    { bg: '#F9FAFB', border: '#6B7280', text: '#111827' },
+    { bg: '#FFFFFF', border: '#9CA3AF', text: '#111827' }
   ],
   [
-    { bg: '#EEF6FA', border: '#4D86A6', text: '#18384A' },
-    { bg: '#F4FAFD', border: '#6FA0BA', text: '#18384A' },
-    { bg: '#F8FCFD', border: '#9BBBD0', text: '#18384A' },
-    { bg: '#FFFFFF', border: '#B9CEDD', text: '#18384A' }
+    { bg: '#D9EEF7', border: '#0E7490', text: '#083344' },
+    { bg: '#E8F6FB', border: '#0891B2', text: '#083344' },
+    { bg: '#F0FAFD', border: '#22A7C7', text: '#083344' },
+    { bg: '#FFFFFF', border: '#67C3D8', text: '#083344' }
   ],
   [
-    { bg: '#ECF8F1', border: '#63B485', text: '#173D2E' },
-    { bg: '#F2FBF6', border: '#83BF9A', text: '#173D2E' },
-    { bg: '#F8FEFA', border: '#A8D5B8', text: '#173D2E' },
-    { bg: '#FFFFFF', border: '#C5E3CF', text: '#173D2E' }
+    { bg: '#DDF4E7', border: '#15803D', text: '#052E16' },
+    { bg: '#EAF8F0', border: '#16A34A', text: '#052E16' },
+    { bg: '#F2FBF6', border: '#4FBC73', text: '#052E16' },
+    { bg: '#FFFFFF', border: '#86D39E', text: '#052E16' }
   ],
   [
-    { bg: '#FFF4E4', border: '#DE9642', text: '#56320D' },
-    { bg: '#FFF8EE', border: '#E7AA5D', text: '#56320D' },
-    { bg: '#FFFCF6', border: '#F2BF71', text: '#56320D' },
-    { bg: '#FFFFFF', border: '#F5D09A', text: '#56320D' }
+    { bg: '#FFE7C2', border: '#C76A00', text: '#431407' },
+    { bg: '#FFF0D6', border: '#EA8500', text: '#431407' },
+    { bg: '#FFF6E8', border: '#F59E0B', text: '#431407' },
+    { bg: '#FFFFFF', border: '#F7B844', text: '#431407' }
   ],
   [
-    { bg: '#F6F0FA', border: '#A485B7', text: '#3C294B' },
-    { bg: '#FAF6FC', border: '#BCA4C9', text: '#3C294B' },
-    { bg: '#FDFBFE', border: '#CDBDDA', text: '#3C294B' },
-    { bg: '#FFFFFF', border: '#DDD1E5', text: '#3C294B' }
+    { bg: '#EBDDF8', border: '#7E22CE', text: '#2E1065' },
+    { bg: '#F2E9FB', border: '#9333EA', text: '#2E1065' },
+    { bg: '#F8F2FE', border: '#A855F7', text: '#2E1065' },
+    { bg: '#FFFFFF', border: '#C084FC', text: '#2E1065' }
   ],
   [
-    { bg: '#FAEEF1', border: '#B87182', text: '#4A202D' },
-    { bg: '#FCF4F6', border: '#C98B99', text: '#4A202D' },
-    { bg: '#FEFAFB', border: '#D7A1AE', text: '#4A202D' },
-    { bg: '#FFFFFF', border: '#E4BDC6', text: '#4A202D' }
+    { bg: '#FADBE2', border: '#BE123C', text: '#4C0519' },
+    { bg: '#FCE8ED', border: '#E11D48', text: '#4C0519' },
+    { bg: '#FFF1F4', border: '#F43F5E', text: '#4C0519' },
+    { bg: '#FFFFFF', border: '#FB7185', text: '#4C0519' }
   ],
   [
-    { bg: '#EAF7F6', border: '#5AA9A4', text: '#163F3D' },
-    { bg: '#F1FAF9', border: '#78BDB8', text: '#163F3D' },
-    { bg: '#F8FDFD', border: '#9ACCC8', text: '#163F3D' },
-    { bg: '#FFFFFF', border: '#B7DDDA', text: '#163F3D' }
+    { bg: '#D6F0ED', border: '#0F766E', text: '#042F2E' },
+    { bg: '#E4F7F5', border: '#0D9488', text: '#042F2E' },
+    { bg: '#F0FCFA', border: '#14B8A6', text: '#042F2E' },
+    { bg: '#FFFFFF', border: '#5EEAD4', text: '#042F2E' }
   ],
   [
-    { bg: '#FBF5E3', border: '#C29635', text: '#4F3909' },
-    { bg: '#FDF8EA', border: '#CEAA50', text: '#4F3909' },
-    { bg: '#FEFCF4', border: '#DDBB68', text: '#4F3909' },
-    { bg: '#FFFFFF', border: '#E7CF94', text: '#4F3909' }
+    { bg: '#F8E8B8', border: '#A16207', text: '#422006' },
+    { bg: '#FCF0CA', border: '#CA8A04', text: '#422006' },
+    { bg: '#FEF7E0', border: '#EAB308', text: '#422006' },
+    { bg: '#FFFFFF', border: '#FACC15', text: '#422006' }
   ],
   [
-    { bg: '#F1F4F6', border: '#64717D', text: '#202A33' },
-    { bg: '#F6F8F9', border: '#7D8994', text: '#202A33' },
-    { bg: '#FAFBFC', border: '#98A2AD', text: '#202A33' },
-    { bg: '#FFFFFF', border: '#B7C0C8', text: '#202A33' }
+    { bg: '#E2E8F0', border: '#475569', text: '#0F172A' },
+    { bg: '#EEF2F6', border: '#64748B', text: '#0F172A' },
+    { bg: '#F8FAFC', border: '#94A3B8', text: '#0F172A' },
+    { bg: '#FFFFFF', border: '#CBD5E1', text: '#0F172A' }
   ],
   [
-    { bg: '#EAF4F6', border: '#4C8993', text: '#12333A' },
-    { bg: '#F2F9FA', border: '#6DA2AA', text: '#12333A' },
-    { bg: '#F8FCFD', border: '#86B2BB', text: '#12333A' },
-    { bg: '#FFFFFF', border: '#AFCBD0', text: '#12333A' }
+    { bg: '#D7F0F4', border: '#117184', text: '#082F49' },
+    { bg: '#E6F7FA', border: '#0E8CA6', text: '#082F49' },
+    { bg: '#F1FBFD', border: '#38AFC8', text: '#082F49' },
+    { bg: '#FFFFFF', border: '#79CEE0', text: '#082F49' }
   ],
   [
-    { bg: '#F3F6E7', border: '#8C9B54', text: '#343B18' },
-    { bg: '#F8FAF0', border: '#A2AF69', text: '#343B18' },
-    { bg: '#FCFDF7', border: '#B9C47B', text: '#343B18' },
-    { bg: '#FFFFFF', border: '#CFD7A2', text: '#343B18' }
+    { bg: '#E7EFBF', border: '#657A16', text: '#1A2E05' },
+    { bg: '#F0F6D4', border: '#84A11B', text: '#1A2E05' },
+    { bg: '#F7FAE7', border: '#A3BF3F', text: '#1A2E05' },
+    { bg: '#FFFFFF', border: '#C6D96B', text: '#1A2E05' }
   ],
   [
-    { bg: '#F8F0EA', border: '#AA7452', text: '#432717' },
-    { bg: '#FBF5F1', border: '#BB8866', text: '#432717' },
-    { bg: '#FEFAF7', border: '#C99B7A', text: '#432717' },
-    { bg: '#FFFFFF', border: '#DBB79E', text: '#432717' }
+    { bg: '#F2DECF', border: '#9A3412', text: '#431407' },
+    { bg: '#F8E9DE', border: '#C2410C', text: '#431407' },
+    { bg: '#FCF3EC', border: '#EA580C', text: '#431407' },
+    { bg: '#FFFFFF', border: '#FB923C', text: '#431407' }
   ],
   [
-    { bg: '#FBF0F2', border: '#C88392', text: '#4F2730' },
-    { bg: '#FDF6F7', border: '#D196A3', text: '#4F2730' },
-    { bg: '#FEFBFC', border: '#DCABB5', text: '#4F2730' },
-    { bg: '#FFFFFF', border: '#E6C1C8', text: '#4F2730' }
+    { bg: '#F8DDE6', border: '#A21CAF', text: '#4A044E' },
+    { bg: '#FCE9F1', border: '#C026D3', text: '#4A044E' },
+    { bg: '#FDF4F8', border: '#D946EF', text: '#4A044E' },
+    { bg: '#FFFFFF', border: '#E879F9', text: '#4A044E' }
   ]
 ];
 const PRODUCTION_COLOR_SEQUENCE = [1, 3, 2, 4, 7, 6, 5, 8, 10, 9, 11, 12, 0];
@@ -390,9 +414,9 @@ function operationMachineNames(operation) {
 
 function savedCalendarView() {
   try {
-    return sessionStorage.getItem(CALENDAR_VIEW_STORAGE_KEY) || 'time';
+    return sessionStorage.getItem(CALENDAR_VIEW_STORAGE_KEY) || 'machines';
   } catch {
-    return 'time';
+    return 'machines';
   }
 }
 
@@ -495,12 +519,44 @@ function productionColorSequenceIndex(index = 0) {
 function productionStageColorsFromBase(color) {
   if (!isHexColor(color)) return null;
   const border = String(color).toUpperCase();
-  return [
-    { bg: mixHex(border, '#FFFFFF', 0.9), border, text: '#1F2937' },
-    { bg: mixHex(border, '#FFFFFF', 0.94), border: mixHex(border, '#FFFFFF', 0.18), text: '#1F2937' },
-    { bg: mixHex(border, '#FFFFFF', 0.97), border: mixHex(border, '#FFFFFF', 0.34), text: '#1F2937' },
-    { bg: '#FFFFFF', border: mixHex(border, '#FFFFFF', 0.5), text: '#1F2937' }
-  ];
+  const solid = { bg: mixHex(border, '#FFFFFF', 0.78), border, text: '#1F2937' };
+  return [solid, solid, solid, solid];
+}
+
+function operationDailyCapacity(operation = {}) {
+  const capacity = operation.calendarDailyCapacity || operation.dailyCapacity || {};
+  const capacityPerDay = Number(capacity.capacityPerDay || capacity.maxQtyPerMachineDay || capacity.maxQtyPerTeamDay || 0);
+  const quantity = Number(operation.produceQty || 0);
+  const percent = capacityPerDay > 0 ? Math.round((quantity / capacityPerDay) * 100) : null;
+  const available = capacityPerDay > 0 ? Math.max(capacityPerDay - quantity, 0) : null;
+  return { capacityPerDay, percent, available };
+}
+
+function operationCapacityLabel(operation = {}) {
+  const { percent } = operationDailyCapacity(operation);
+  return percent == null ? '-' : `${percent}%`;
+}
+
+function operationAvailableCapacityLabel(operation = {}) {
+  const { available } = operationDailyCapacity(operation);
+  if (available == null) return '-';
+  return `${formatQty(available)} ${operation.unit || ''}`.trim();
+}
+
+function operationMaxCapacityLabel(operation = {}) {
+  const { capacityPerDay } = operationDailyCapacity(operation);
+  if (!(capacityPerDay > 0)) return '-';
+  return `${formatQty(capacityPerDay)} ${operation.unit || ''}`.trim();
+}
+
+function operationDayDurationLabel(operation = {}, segments = []) {
+  const segmentMinutesTotal = segments.reduce((sum, segment) => {
+    const start = parseTime(segment.startTime, '00:00');
+    const end = parseTime(segment.endTime, '00:00');
+    return sum + Math.max(end - start, 0);
+  }, 0);
+  const fallbackMinutes = Number(operation.totalMinutes || operation.durationMinutes || 0);
+  return formatDurationMinutes(segmentMinutesTotal || fallbackMinutes);
 }
 
 export function productionCalendarColor(index = 0, color = null) {
@@ -513,15 +569,8 @@ export function productionCalendarColor(index = 0, color = null) {
 function eventColorStyle(color, breakdown, colorForProduction) {
   const items = stableProductionBreakdown(breakdown);
   if (items.length <= 1) return colorStyle(color);
-  const step = 100 / items.length;
-  const bgStops = items.map((item, index) => {
-    const productionColor = colorForProduction(item);
-    const start = Number((index * step).toFixed(3));
-    const end = Number(((index + 1) * step).toFixed(3));
-    return `${productionColor.bg} ${start}% ${end}%`;
-  }).join(', ');
   const firstColor = colorForProduction(items[0]);
-  return `--event-bg: linear-gradient(90deg, ${bgStops}); --event-border: ${firstColor.border}; --event-text: ${firstColor.text};`;
+  return colorStyle(firstColor);
 }
 
 function stableProductionBreakdown(items = []) {
@@ -563,7 +612,7 @@ function productionBreakdown(operation) {
     current.materialId = current.materialId || item.materialId || operation.materialId;
     current.materialName = current.materialName || item.materialName || operation.materialName;
     current.machineName = current.machineName || item.machineName || operation.machineName;
-    current.peopleCount = current.peopleCount || item.peopleCount || operation.peopleCount;
+    current.peopleCount = current.peopleCount ?? item.peopleCount ?? operation.peopleCount;
     current.productionModelName = current.productionModelName || item.productionModelName || operation.productionModelName;
     current.productivityOptions = current.productivityOptions?.length ? current.productivityOptions : item.productivityOptions || operation.productivityOptions || [];
     current.productionModelOptions = current.productionModelOptions?.length ? current.productionModelOptions : item.productionModelOptions || operation.productionModelOptions || [];
@@ -621,10 +670,9 @@ function productivitySummary(operation, breakdown = productionBreakdown(operatio
   const labels = [...new Set(items.map(item => {
     const outputQty = item.outputQty ?? operation.outputQty;
     const outputUnit = item.outputUnit ?? operation.outputUnit;
-    const timeSeconds = item.timeSeconds ?? operation.timeSeconds;
-    if (outputQty && timeSeconds) return `${formatQty(outputQty)} ${outputUnit || ''} em ${formatQty(timeSeconds)}s`.trim();
+    if (outputQty) return `${formatQty(outputQty)} ${outputUnit || ''}/dia`.trim();
     const machineName = item.machineName || operation.machineName || '-';
-    const peopleCount = item.peopleCount || operation.peopleCount || '-';
+    const peopleCount = item.peopleCount ?? operation.peopleCount ?? '-';
     return `${machineName} | ${peopleCount} pessoa${Number(peopleCount) === 1 ? '' : 's'}`;
   }).filter(Boolean))];
   return labels.join(' | ');
@@ -666,18 +714,16 @@ function normalizeShiftConfig(config = {}) {
   }];
   return source.map((shift, index) => {
     const shiftStart = parseTime(shift.shiftStartTime, index === 0 ? '07:00' : '17:00');
-    let shiftEnd = parseTime(shift.shiftEndTime, minutesToTime(shiftStart + 60));
+    const dailyMinutes = productiveMinutes(shift.hoursPerDay, index === 0 ? 8.8 : 6);
+    let shiftEnd = parseTime(shift.shiftEndTime, minutesToTime(shiftStart + dailyMinutes));
     if (shiftEnd <= shiftStart) shiftEnd += 24 * 60;
-    const pauseMinutes = parseLunchMinutes(shift.pauseHours ?? shift.lunchHours ?? 0);
-    const lunchStart = shift.pauseStartTime
-      ? parseTime(shift.pauseStartTime, minutesToTime(shiftStart + Math.floor((shiftEnd - shiftStart - pauseMinutes) / 2)))
-      : index === 0 ? 12 * 60 : shiftStart + Math.max(Math.floor((shiftEnd - shiftStart - pauseMinutes) / 2), 0);
     return {
       label: shift.label || `Turno ${index + 1}`,
       shiftStart,
       shiftEnd,
-      lunchStart,
-      lunchEnd: lunchStart + pauseMinutes,
+      lunchStart: shiftStart,
+      lunchEnd: shiftStart,
+      dailyMinutes: Math.min(dailyMinutes, Math.max(shiftEnd - shiftStart, 1)),
       teamAvailable: defaultTeamAvailableForShift(shift, index),
       dailyTeamOverrides
     };
@@ -783,13 +829,29 @@ function renderCapacityHeader(date, operations, dates, shifts, blockedDay) {
   return renderCapacityHeaderWithCapacity(date, capacity, blockedDay);
 }
 
-function renderCapacityHeaderWithCapacity(date, capacity, blockedDay) {
+function stockAlertTitle(alert) {
+  const count = Number(alert?.criticalCount ?? alert?.count ?? 0);
+  if (!count) return '';
+  return `${count} materiais abaixo do estoque minimo`;
+}
+
+function renderStockAlertIcon(alert) {
+  const title = stockAlertTitle(alert);
+  if (!title) return '';
+  return `<span class="calendar-stock-alert" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">!</span>`;
+}
+
+function hasStockAlert(alert) {
+  return Boolean(alert && Number(alert?.criticalCount ?? alert?.count ?? 0) > 0);
+}
+
+function renderCapacityHeaderWithCapacity(date, capacity, blockedDay, stockAlert = null) {
   const capacityText = capacityTooltip(capacity);
-  const title = [blockedDay?.name, capacityText].filter(Boolean).join('\n');
+  const title = [blockedDay?.name, stockAlertTitle(stockAlert), capacityText].filter(Boolean).join('\n');
   const hasOverride = capacity.some(item => item.overridden);
   return `
-    <div class="gantt-date${capacity.some(item => item.exceeded) ? ' team-exceeded' : ''}${blockedDay ? ' non-working-day' : ''}${hasOverride ? ' has-team-override' : ''}" data-date="${date}" title="${escapeAttr(title)}">
-      <strong>${formatDateLabel(date)}</strong>
+    <div class="gantt-date${capacity.some(item => item.exceeded) ? ' team-exceeded' : ''}${hasStockAlert(stockAlert) ? ' has-stock-alert' : ''}${blockedDay ? ' non-working-day' : ''}${hasOverride ? ' has-team-override' : ''}" data-date="${date}" title="${escapeAttr(title)}">
+      <strong>${formatDateLabel(date)}${renderStockAlertIcon(stockAlert)}</strong>
       <span>${formatDate(date)}</span>
       <div class="team-capacity-list">
         ${capacity.map(item => `
@@ -852,7 +914,7 @@ function showCapacityModal(wrapper, date, shifts) {
     }));
     close();
   });
-  wrapper.appendChild(backdrop);
+  document.body.appendChild(backdrop);
 }
 
 function isHistoricalOperation(operation, minEditableDate = todayKey()) {
@@ -1070,7 +1132,7 @@ function productionConfigTemplate(item, operation) {
   const models = item.productionModelOptions?.length ? item.productionModelOptions : modelOptions(operation);
   const selectedValue = optionValue({
     machineName: item.machineName || operation.machineName,
-    peopleCount: item.peopleCount || operation.peopleCount
+    peopleCount: item.peopleCount ?? operation.peopleCount
   });
   const selectedModel = item.productionModelName || operation.productionModelName || models[0]?.modelName || '';
   return `
@@ -1119,12 +1181,13 @@ function makeModalDraggable(backdrop) {
       offsetX: event.clientX - rect.left,
       offsetY: event.clientY - rect.top
     };
+    modal.style.left = `${rect.left}px`;
+    modal.style.top = `${rect.top}px`;
+    modal.style.width = `${rect.width}px`;
+    modal.style.transform = 'none';
     backdrop.classList.add('modal-backdrop-floating');
     modal.classList.add('is-floating');
     modal.classList.add('is-dragging');
-    modal.style.left = `${rect.left}px`;
-    modal.style.top = `${rect.top}px`;
-    modal.style.transform = 'none';
     return true;
   };
   const moveDrag = event => {
@@ -1142,16 +1205,21 @@ function makeModalDraggable(backdrop) {
     modal.classList.remove('is-dragging');
   };
   handle.addEventListener('pointerdown', event => {
-    if (startDrag(event)) handle.setPointerCapture(event.pointerId);
+    if (!startDrag(event)) return;
+    event.preventDefault();
+    const movePointer = moveEvent => moveDrag(moveEvent);
+    const stopPointer = () => {
+      stopDrag();
+      document.removeEventListener('pointermove', movePointer);
+      document.removeEventListener('pointerup', stopPointer);
+      document.removeEventListener('pointercancel', stopPointer);
+    };
+    document.addEventListener('pointermove', movePointer);
+    document.addEventListener('pointerup', stopPointer);
+    document.addEventListener('pointercancel', stopPointer);
   });
-  handle.addEventListener('pointermove', moveDrag);
-  const stopPointerDrag = event => {
-    stopDrag();
-    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
-  };
-  handle.addEventListener('pointerup', stopPointerDrag);
-  handle.addEventListener('pointercancel', stopPointerDrag);
   handle.addEventListener('mousedown', event => {
+    if (window.PointerEvent) return;
     if (!startDrag(event)) return;
     const moveMouse = moveEvent => moveDrag(moveEvent);
     const stopMouse = () => {
@@ -1245,7 +1313,7 @@ function splitRowTemplate(index, part, operation, machineOptions, totalParts = 0
   const models = modelOptions(operation);
   const selectedValue = optionValue({
     machineName: part.machineName || operation.machineName,
-    peopleCount: part.peopleCount || operation.peopleCount
+    peopleCount: part.peopleCount ?? operation.peopleCount
   });
   const selectedModel = part.productionModelName || operation.productionModelName || models[0]?.modelName || '';
   return `
@@ -1291,7 +1359,7 @@ function collectSplitRows(container, operation) {
 
 function validateSplitParts(parts, total, warning, unit = '') {
   const sum = parts.reduce((amount, part) => amount + Number(part.quantity || 0), 0);
-  if (Math.abs(sum - total) > 0.001 || parts.some(part => !(part.quantity > 0) || !part.startDate || !part.startTime || !part.machineName || !part.peopleCount)) {
+  if (Math.abs(sum - total) > 0.001 || parts.some(part => !(part.quantity > 0) || !part.startDate || !part.startTime || !part.machineName || !Number.isFinite(Number(part.peopleCount)) || Number(part.peopleCount) < 0)) {
     if (warning) {
       warning.textContent = `A soma das partes deve ser ${formatQty(total)} ${unit} e todos os campos devem estar preenchidos.`;
       warning.hidden = false;
@@ -1374,7 +1442,7 @@ function confirmManualNonWorkingDates(modal, operation) {
   return true;
 }
 
-function showOperationModal(wrapper, operation) {
+function showOperationModal(wrapper, operation, eventColor = null) {
   const machineOptions = operation.productivityOptions || [];
   const models = modelOptions(operation);
   const selectedModel = operation.productionModelName || models[0]?.modelName || '';
@@ -1383,6 +1451,14 @@ function showOperationModal(wrapper, operation) {
   const breakdown = productionBreakdown(operation);
   const isSharedOperation = breakdown.length > 1;
   const productivityLabel = productivitySummary(operation, breakdown);
+  const modalColor = eventColor || { bg: '#F4F6F8', border: '#2F343B', text: '#1F2937' };
+  const modalColorStyle = colorStyle(modalColor);
+  const dayCapacity = operationDailyCapacity(operation);
+  const planLabel = operation.productionTitle || `Produção ${Number(operation.productionIndex || 0) + 1}`;
+  const flowLabel = [
+    operation.productionModelName || selectedModel || productionModelFallback(operation),
+    operation.calendarParentOperationId ? `operação base ${operation.calendarParentOperationId}` : null
+  ].filter(Boolean).join(' | ');
   const breakdownHtml = breakdown.length > 1 ? `
     <section class="wide operation-breakdown operation-productions-section">
       <div class="section-heading compact-heading">
@@ -1396,12 +1472,41 @@ function showOperationModal(wrapper, operation) {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   backdrop.innerHTML = `
-    <div class="modal operation-modal" role="dialog" aria-modal="true">
+    <div class="modal operation-modal" role="dialog" aria-modal="true" style="${modalColorStyle}">
       <div class="modal-header">
-        <h2>${operation.materialName}</h2>
+        <div>
+          <h2>${operation.materialName}</h2>
+          <p class="modal-subtitle">${escapeAttr(planLabel)} | ${escapeAttr(formatDate(operation.startDate))}</p>
+        </div>
         <button class="link-button close-modal" type="button">Fechar</button>
       </div>
       <form class="operation-modal-form">
+        <section class="operation-day-summary">
+          <div>
+            <span>Qtd dia</span>
+            <strong>${formatQty(operation.produceQty)} ${escapeAttr(operation.unit || '')}</strong>
+          </div>
+          <div>
+            <span>M&aacute;quina</span>
+            <strong>${escapeAttr(operation.machineName || '-')}</strong>
+          </div>
+          <div>
+            <span>Pessoas</span>
+            <strong>${escapeAttr(operation.peopleCount ?? '-')}</strong>
+          </div>
+          <div>
+            <span>Capacidade usada</span>
+            <strong>${dayCapacity.percent == null ? '-' : `${dayCapacity.percent}%`}</strong>
+          </div>
+          <div>
+            <span>Capacidade m&aacute;xima</span>
+            <strong>${operationMaxCapacityLabel(operation)}</strong>
+          </div>
+          <div class="wide">
+            <span>Plano e fluxo produtivo</span>
+            <strong>${escapeAttr(planLabel)}${flowLabel ? ` | ${escapeAttr(flowLabel)}` : ''}</strong>
+          </div>
+        </section>
         <div class="operation-detail-grid">
           <article><span>Material</span><strong>${operation.materialName}</strong></article>
           <article><span>Quantidade total</span><strong>${formatQty(operation.produceQty)} ${operation.unit || ''}</strong></article>
@@ -1561,7 +1666,7 @@ function showOperationModal(wrapper, operation) {
     dispatchConfig(wrapper, operation, backdrop);
     backdrop.remove();
   });
-  wrapper.appendChild(backdrop);
+  document.body.appendChild(backdrop);
 }
 
 function isExistingScheduleBlocker(operation) {
@@ -1588,6 +1693,10 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   const disablePastEditing = config.disablePastEditing === true;
   const minEditableDate = config.minEditableDate || todayKey();
   const showOperationalControls = config.mode !== 'commercial';
+  const showViewToggle = showOperationalControls && config.mode !== 'planning';
+  const stockAlerts = config.stockAlerts instanceof Map
+    ? config.stockAlerts
+    : new Map(Object.entries(config.stockAlerts || {}));
   wrapper.className = `calendar-gantt calendar-gantt-${config.mode}${readOnly ? ' is-read-only' : ''}${disablePastEditing ? ' has-historical-lock' : ''}`;
   const zoomLevels = [
     { dayWidth: 170, hourHeight: 58, machineRowHeight: 76 },
@@ -1597,8 +1706,8 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     { dayWidth: 390, hourHeight: 132, machineRowHeight: 144 }
   ];
   const topPad = 18;
-  let zoomIndex = 0;
-  let viewMode = config.mode === 'commercial' ? 'time' : savedCalendarView();
+  let zoomIndex = zoomLevels.length - 1;
+  let viewMode = config.mode === 'commercial' ? 'time' : config.mode === 'planning' ? 'machines' : savedCalendarView();
 
   if (!operations.length && config.mode !== 'commercial') {
     wrapper.innerHTML = '<div class="empty-state">Simule um planejamento para visualizar o calend&aacute;rio.</div>';
@@ -1625,23 +1734,6 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   }
   const dates = eachDate(calendarStartDate, calendarEndDate);
   const isRangeClipped = Boolean(operationEndDate && operationEndDate > calendarEndDate);
-  const stageIndexes = new Map();
-  operations
-    .filter(operation => operation.operationType !== 'transport')
-    .slice()
-    .sort((left, right) =>
-      Number(left.productionOrder || 0) - Number(right.productionOrder || 0)
-      || String(left.materialName || '').localeCompare(String(right.materialName || ''))
-    )
-    .forEach(operation => {
-      const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
-      const operationKey = String(operation.operationId || operation.materialId || operation.materialName || '');
-      const key = `${productionKey}:${operationKey}`;
-      if (!stageIndexes.has(key)) {
-        const currentCount = [...stageIndexes.keys()].filter(item => item.startsWith(`${productionKey}:`)).length;
-        stageIndexes.set(key, currentCount);
-      }
-    });
   const shifts = normalizeShiftConfig(config);
   const configuredProductionColors = new Map();
   (config.productions || []).forEach(production => {
@@ -1670,7 +1762,8 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     const customPalette = productionStageColorsFromBase(configuredColor);
     if (customPalette) return customPalette;
     const productionColorIndex = productionColorSequenceIndex(productionIndex);
-    return PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length];
+    const solid = PRODUCTION_STAGE_COLORS[productionColorIndex % PRODUCTION_STAGE_COLORS.length][0];
+    return [solid, solid, solid, solid];
   };
   const shiftStart = Math.min(...shifts.map(shift => shift.shiftStart));
   const shiftEnd = Math.max(...shifts.map(shift => shift.shiftEnd));
@@ -1683,10 +1776,11 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
 
   wrapper.innerHTML = `
     <div class="gantt-zoom-controls" aria-label="Zoom do calend&aacute;rio">
-      ${showOperationalControls ? `<div class="calendar-view-toggle" role="group" aria-label="Visualiza&ccedil;&atilde;o do calend&aacute;rio">
-        <button class="secondary-button is-active" type="button" data-calendar-view="time">Por tempo</button>
+      ${showOperationalControls ? `${showViewToggle ? `<div class="calendar-view-toggle" role="group" aria-label="Visualiza&ccedil;&atilde;o do calend&aacute;rio">
+        <button class="secondary-button" type="button" data-calendar-view="time">Por tempo</button>
         <button class="secondary-button" type="button" data-calendar-view="machines">Por m&aacute;quinas</button>
-      </div>
+      </div>` : ''}
+      <div class="calendar-selection-status" data-selection-status hidden></div>
       <button class="secondary-button" type="button" data-zoom-out aria-label="Diminuir zoom">-</button>
       <button class="secondary-button" type="button" data-zoom-in aria-label="Aumentar zoom">+</button>
       <button class="secondary-button fullscreen-button" type="button" data-fullscreen aria-label="Tela cheia">Tela cheia</button>
@@ -1699,26 +1793,135 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
 
   const tooltip = wrapper.querySelector('.calendar-tooltip');
 
-  function showTooltip(event, text) {
-    tooltip.textContent = text;
-    tooltip.hidden = false;
-    moveTooltip(event);
-  }
-
-  function moveTooltip(event) {
-    if (tooltip.hidden) return;
-    const padding = 12;
-    const rect = tooltip.getBoundingClientRect();
-    let left = event.clientX + 14;
-    let top = event.clientY + 14;
-    if (left + rect.width > window.innerWidth - padding) left = event.clientX - rect.width - 14;
-    if (top + rect.height > window.innerHeight - padding) top = event.clientY - rect.height - 14;
-    tooltip.style.left = `${Math.max(padding, left)}px`;
-    tooltip.style.top = `${Math.max(padding, top)}px`;
-  }
-
   function hideTooltip() {
     tooltip.hidden = true;
+  }
+
+  function operationDragId(operation = {}) {
+    return String(operation.operationId || operation.materialId || '');
+  }
+
+  let selectedOperationId = null;
+  let selectedOperationDate = null;
+
+  function selectedOperation() {
+    if (!selectedOperationId) return null;
+    return operations.find(item => operationDragId(item) === selectedOperationId) || null;
+  }
+
+  function operationSelectionLabel(operation = {}) {
+    const productionLabel = operation.productionTitle || `Produ\u00e7\u00e3o ${Number(operation.productionIndex || 0) + 1}`;
+    const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim() || '-';
+    return `${productionLabel} \u00b7 ${operation.materialName || '-'} \u00b7 ${formatDate(selectedOperationDate || operation.startDate)} \u00b7 ${quantity}`;
+  }
+
+  function updateSelectionStatus() {
+    const status = wrapper.querySelector('[data-selection-status]');
+    if (!status) return;
+    const operation = selectedOperation();
+    if (!operation) {
+      selectedOperationId = null;
+      selectedOperationDate = null;
+      status.hidden = true;
+      status.innerHTML = '';
+      wrapper.classList.remove('has-selected-operation');
+      wrapper.querySelectorAll('.machine-production-card.is-selected').forEach(card => card.classList.remove('is-selected'));
+      wrapper.querySelectorAll('.machine-day-cell.is-click-move-target, .machine-day-cell.is-click-move-invalid').forEach(cell => {
+        cell.classList.remove('is-click-move-target', 'is-click-move-invalid');
+      });
+      wrapper.querySelectorAll('[data-operation-selector]').forEach(selector => {
+        selector.setAttribute('aria-checked', 'false');
+      });
+      return;
+    }
+    const label = operationSelectionLabel(operation);
+    status.hidden = false;
+    status.innerHTML = `
+      <span title="${escapeAttr(label)}"><strong>Selecionado:</strong> ${escapeAttr(label)}</span>
+      <button class="link-button" type="button" data-clear-selection>Cancelar sele&ccedil;&atilde;o</button>
+    `;
+    wrapper.classList.add('has-selected-operation');
+    wrapper.querySelectorAll('.machine-production-card[data-drag-operation-id]').forEach(card => {
+      const selected = String(card.dataset.dragOperationId) === selectedOperationId;
+      card.classList.toggle('is-selected', selected);
+      card.querySelector('[data-operation-selector]')?.setAttribute('aria-checked', String(selected));
+    });
+  }
+
+  function setSelectedOperation(operation, date = null) {
+    const nextId = operation ? operationDragId(operation) : null;
+    selectedOperationId = nextId || null;
+    selectedOperationDate = nextId ? (date || operation.startDate || null) : null;
+    updateSelectionStatus();
+  }
+
+  function canDragOperation(operation = {}) {
+    return Boolean(operation && operationDragId(operation))
+      && viewMode === 'machines'
+      && !readOnly
+      && operation.operationType !== 'transport'
+      && !isExistingScheduleBlocker(operation)
+      && !(disablePastEditing && isHistoricalOperation(operation, minEditableDate));
+  }
+
+  function operationCompatibleWithMachine(operation = {}, machineName = '') {
+    const targetMachine = normalizeMachineName(machineName);
+    if (!targetMachine) return false;
+    const options = Array.isArray(operation.productivityOptions) ? operation.productivityOptions : [];
+    if (options.length) {
+      return options.some(option => normalizeMachineName(option.machineName) === targetMachine);
+    }
+    return normalizeMachineName(operation.machineName) === targetMachine;
+  }
+
+  function operationMachineOption(operation = {}, machineName = '') {
+    const targetMachine = normalizeMachineName(machineName);
+    const options = Array.isArray(operation.productivityOptions) ? operation.productivityOptions : [];
+    return options.find(option =>
+      normalizeMachineName(option.machineName) === targetMachine
+      && Number(option.peopleCount || 0) === Number(operation.peopleCount || 0)
+    ) || options.find(option => normalizeMachineName(option.machineName) === targetMachine) || null;
+  }
+
+  function draggableAttrs(operation = {}) {
+    if (!canDragOperation(operation)) return '';
+    return ` draggable="true" data-drag-operation-id="${escapeAttr(operationDragId(operation))}"`;
+  }
+
+  function dispatchOperationDrop(operation, cell, source = 'drag') {
+    const targetDate = cell?.dataset.date;
+    const targetMachine = cell?.closest('.machine-row')?.dataset.machine;
+    if (!operation || !targetDate || !targetMachine) return false;
+    if (!operationCompatibleWithMachine(operation, targetMachine)) {
+      window.alert('Não existe produtividade cadastrada para este material nesta máquina.');
+      return false;
+    }
+    const targetOption = operationMachineOption(operation, targetMachine);
+    if (!confirmProductionDate(targetDate)) return false;
+    wrapper.dispatchEvent(new CustomEvent('operation-card-drop', {
+      bubbles: true,
+      detail: {
+        materialId: String(operation.materialId),
+        operationId: operationDragId(operation),
+        sourceOperationId: String(operation.calendarParentOperationId || operation.splitParentOperationId || operation.operationId || operation.materialId),
+        productionIndex: Number(operation.productionIndex || 0),
+        materialName: operation.materialName,
+        source,
+        previousStartDate: operation.startDate,
+        previousStartTime: operationStartTime(operation),
+        previousMachine: operation.machineName,
+        startDate: targetDate,
+        startTime: operationStartTime(operation) || '00:00',
+        machineName: targetOption?.machineName || targetMachine,
+        peopleCount: Number(targetOption?.peopleCount ?? operation.peopleCount ?? 0),
+        productionModelName: operation.productionModelName || null,
+        movedBackward: Boolean(operation.startDate && targetDate < operation.startDate),
+        dailyCapacity: operation.calendarDailyCapacity || operation.dailyCapacity || null,
+        produceQty: Number(operation.produceQty || 0),
+        unit: operation.unit || ''
+      }
+    }));
+    return true;
   }
 
   function setZoom(nextIndex) {
@@ -1729,7 +1932,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   }
 
   function setViewMode(nextMode) {
-    viewMode = nextMode === 'machines' ? 'machines' : 'time';
+    viewMode = config.mode === 'planning' ? 'machines' : nextMode === 'machines' ? 'machines' : 'time';
     if (config.mode !== 'commercial') saveCalendarView(viewMode);
     wrapper.querySelectorAll('[data-calendar-view]').forEach(button => {
       const isActive = button.dataset.calendarView === viewMode;
@@ -1747,7 +1950,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     const isHistorical = disablePastEditing && isHistoricalOperation(operation, minEditableDate);
     const isExisting = isExistingScheduleBlocker(operation);
     const breakdown = isTransport ? [] : productionBreakdown(operation);
-    const shortLabel = isTransport ? 'TR' : (showTeamDetails ? `${operation.peopleCount || '-'}p` : String(operation.materialName || '-').slice(0, 2).toUpperCase());
+    const shortLabel = isTransport ? 'TR' : (showTeamDetails ? `${operation.peopleCount ?? '-'}p` : String(operation.materialName || '-').slice(0, 2).toUpperCase());
     return `
       <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${isHistorical ? ' gantt-bar-historical' : ''}${isExisting ? ' gantt-bar-existing' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${style} ${colorStyleText}" data-tooltip="${escapeAttr(tooltipText(operation))}">
         ${shouldShowText && isTransport ? `
@@ -1759,7 +1962,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
           ${isExisting ? '<em class="gantt-status-pill">Ja planejado</em>' : ''}
           <strong>${operation.materialName}</strong>
           <span>${quantity || '-'}</span>
-          ${showTeamDetails ? `<span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>` : ''}
+          ${showTeamDetails ? `<span>${operation.machineName || '-'} | ${operation.peopleCount ?? '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>` : ''}
           ${breakdown.length > 1 ? `<small>${breakdown.map(part => `${escapeAttr(part.productionTitle || `P${Number(part.productionIndex || 0) + 1}`)}: ${formatQty(part.quantity)}`).join(' | ')}</small>` : ''}
           <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
         ` : `<span class="gantt-compact-label">${escapeAttr(shortLabel)}</span>`}
@@ -1767,33 +1970,58 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     `;
   }
 
+  function renderMachineDayCard(operation, colorStyleText, daySegments = []) {
+    const quantity = `${formatQty(operation.produceQty)} ${operation.unit || ''}`.trim();
+    const isHistorical = disablePastEditing && isHistoricalOperation(operation, minEditableDate);
+    const productionLabel = operation.productionTitle || `Produção ${Number(operation.productionIndex || 0) + 1}`;
+    const dragId = operationDragId(operation);
+    const isSelected = dragId && dragId === selectedOperationId;
+    return `
+      <button class="gantt-bar machine-production-card${isHistorical ? ' gantt-bar-historical' : ''}${isSelected ? ' is-selected' : ''}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" data-material-id="${escapeAttr(operation.materialId || '')}" data-production-index="${escapeAttr(Number(operation.productionIndex || 0))}"${draggableAttrs(operation)} style="${colorStyleText}">
+        ${canDragOperation(operation) ? `<span class="machine-card-selector" role="checkbox" tabindex="0" aria-label="Selecionar ${escapeAttr(productionLabel)}" aria-checked="${isSelected ? 'true' : 'false'}" data-operation-selector data-operation-selector-id="${escapeAttr(dragId)}"></span>` : ''}
+        <span class="machine-card-kicker">${escapeAttr(productionLabel)}</span>
+        <strong>${escapeAttr(operation.materialName || '-')}</strong>
+        <span>Qtd dia: ${escapeAttr(quantity || '-')}</span>
+        <span>Pessoas: ${escapeAttr(operation.peopleCount ?? '-')}</span>
+        <span>Dura&ccedil;&atilde;o: ${escapeAttr(operationDayDurationLabel(operation, daySegments))}</span>
+        <span>Capacidade utilizada: ${escapeAttr(operationCapacityLabel(operation))}</span>
+        <span>Capacidade m&aacute;xima/dia: ${escapeAttr(operationMaxCapacityLabel(operation))}</span>
+      </button>
+    `;
+  }
+
+  function renderMachineShiftBands() {
+    if (shifts.length <= 1) return '';
+    const totalMinutes = shifts.reduce((sum, shift) => sum + Math.max(Number(shift.dailyMinutes || (shift.shiftEnd - shift.shiftStart)), 1), 0) || 1;
+    let offset = 0;
+    return shifts.map((shift, index) => {
+      const minutes = Math.max(Number(shift.dailyMinutes || (shift.shiftEnd - shift.shiftStart)), 1);
+      const top = (offset / totalMinutes) * 100;
+      const height = (minutes / totalMinutes) * 100;
+      offset += minutes;
+      return `
+        <span class="machine-shift-band shift-band-${index % 2 === 0 ? 'light' : 'dark'}" style="--shift-top: ${top}%; --shift-height: ${height}%;">
+          ${escapeAttr(shift.label.replace(/^Turno\s*/i, 'T'))} ${formatProductiveMinutes(minutes)}
+        </span>
+      `;
+    }).join('');
+  }
+
   function operationEventColor(operation) {
     const isTransport = operation.operationType === 'transport';
-    const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
     const palette = paletteForProduction(operation);
-    const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
     const productionBaseColor = palette[0];
-    return isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
+    return isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : productionBaseColor;
   }
 
   function renderMachineBoard() {
     const zoom = zoomLevels[zoomIndex];
-    const machineDayWidth = Math.max(zoom.dayWidth, 280);
-    const machineRanges = shiftRangesForMachine(shifts);
-    const totalMinutes = Math.max(rangesDuration(machineRanges), 1);
-    const machineStart = machineRanges[0]?.start ?? shiftStart;
-    const machineEnd = machineRanges[machineRanges.length - 1]?.end ?? shiftEnd;
-    const bodyHeight = MACHINE_CALENDAR_ORDER.length * zoom.machineRowHeight;
-    const lunchBreaks = shifts
-      .filter(shift => shift.lunchEnd > shift.lunchStart && shift.lunchEnd > shift.shiftStart && shift.lunchStart < shift.shiftEnd)
-      .map(shift => ({
-        label: shift.label,
-        lunchStart: shift.lunchStart,
-        lunchEnd: shift.lunchEnd,
-        left: (rangeOffset(clampMinutes(shift.lunchStart, shift.shiftStart, shift.shiftEnd), machineRanges) / totalMinutes) * 100,
-        width: ((rangeOffset(clampMinutes(shift.lunchEnd, shift.shiftStart, shift.shiftEnd), machineRanges) - rangeOffset(clampMinutes(shift.lunchStart, shift.shiftStart, shift.shiftEnd), machineRanges)) / totalMinutes) * 100
-      }))
-      .filter(shift => shift.width > 0);
+    const minMachineCardWidth = wrapper.classList.contains('is-calendar-fullscreen')
+      ? Math.min(240, Math.max(170, Math.round(zoom.dayWidth * 0.8)))
+      : Math.min(240, Math.max(140, Math.round(zoom.dayWidth * 0.72)));
+    const machineCellPadding = 16;
+    const machineCardGap = 8;
+    const baseMachineDayWidth = Math.max(zoom.dayWidth, minMachineCardWidth);
     const board = wrapper.querySelector('.gantt-board');
     const machineOperations = new Map();
     for (const machine of MACHINE_CALENDAR_ORDER) {
@@ -1818,12 +2046,41 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         }
       }
     }
+    const dayOperationsForMachine = (machine, date) => {
+      const dayMap = new Map();
+      (machineOperations.get(machine) || []).forEach(operation => {
+        const segments = segmentCache.get(operation)?.get(date) || [];
+        if (!segments.length) return;
+        const id = String(operation.operationId || operation.materialId || operation.materialName || '');
+        if (!dayMap.has(id)) dayMap.set(id, operation);
+      });
+      return [...dayMap.values()].sort((left, right) =>
+        dateTimeMs(left.startDate, operationStartTime(left)) - dateTimeMs(right.startDate, operationStartTime(right))
+        || String(left.materialName || '').localeCompare(String(right.materialName || ''))
+      );
+    };
+    const maxCardsByMachine = new Map(MACHINE_CALENDAR_ORDER.map(machine => [
+      machine,
+      Math.max(...dates.map(date => dayOperationsForMachine(machine, date).length), 1)
+    ]));
+    const maxCardsPerDay = Math.max(...maxCardsByMachine.values(), 1);
+    const requiredMachineDayWidth = (maxCardsPerDay * minMachineCardWidth)
+      + (Math.max(maxCardsPerDay - 1, 0) * machineCardGap)
+      + machineCellPadding;
+    const machineDayWidth = Math.max(baseMachineDayWidth, requiredMachineDayWidth);
+    const cardHeight = 164;
+    const rowHeight = Math.max(
+      zoom.machineRowHeight,
+      cardHeight + 20
+    );
+    const bodyHeight = MACHINE_CALENDAR_ORDER.length * rowHeight;
     const capacityCache = showTeamCapacity
       ? new Map(dates.map(date => [date, capacityForDateFromSegments(date, segmentCache, shifts)]))
       : new Map();
     board.style.setProperty('--calendar-days', String(dates.length));
     board.style.setProperty('--calendar-day-width', `${machineDayWidth}px`);
-    board.style.setProperty('--machine-row-height', `${zoom.machineRowHeight}px`);
+    board.style.setProperty('--machine-card-min-width', `${minMachineCardWidth}px`);
+    board.style.setProperty('--machine-row-height', `${rowHeight}px`);
     board.style.setProperty('--calendar-body-height', `${bodyHeight}px`);
     board.innerHTML = `
       <div class="machine-grid">
@@ -1834,7 +2091,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         <div class="machine-dates">
           ${dates.map(date => {
             const blockedDay = nonWorkingInfo(date);
-            return renderCapacityHeaderWithCapacity(date, capacityCache.get(date) || [], blockedDay);
+            return renderCapacityHeaderWithCapacity(date, capacityCache.get(date) || [], blockedDay, stockAlerts.get(date));
           }).join('')}
         </div>
         <div class="machine-axis">
@@ -1845,24 +2102,15 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
             <div class="machine-row" data-machine="${escapeAttr(machine)}">
               ${dates.map(date => {
                 const blockedDay = nonWorkingInfo(date);
-                const daySegments = (machineOperations.get(machine) || [])
-                  .flatMap(operation => {
-                    const segments = segmentCache.get(operation)?.get(date) || [];
-                    return segments.map(segment => ({ operation, segment }));
-                  });
-                const dayOperations = arrangeParallelSegments(daySegments).map(item => {
-                  const { operation, segment } = item;
-                  const { start, end } = segmentMinutes(segment, machineStart, machineEnd);
-                  const compressedMinutes = Math.max(rangeOffset(end, machineRanges) - rangeOffset(start, machineRanges), 1);
-                  const shouldShowText = (compressedMinutes / totalMinutes) * machineDayWidth >= 96 || zoom.machineRowHeight >= 118;
+                const dayItems = dayOperationsForMachine(machine, date);
+                const dayOperations = dayItems.map(operation => {
                   const eventColor = operationEventColor(operation);
                   const breakdown = productionBreakdown(operation);
-                  const style = machineSegmentStyleByRanges({ ...segment, visualStart: item.visualStart }, machineRanges, item.lane, item.laneCount);
-                  return renderOperationButton(operation, segment, item, style, shouldShowText, eventColorStyle(eventColor, breakdown, colorForProduction));
+                  return renderMachineDayCard(operation, eventColorStyle(eventColor, breakdown, colorForProduction), segmentCache.get(operation)?.get(date) || []);
                 }).join('');
                 return `
-                  <div class="machine-day-cell${blockedDay ? ' non-working-day' : ''}" data-date="${date}">
-                    ${lunchBreaks.map(band => `<span class="machine-lunch-band" style="--lunch-left: ${band.left}%; --lunch-width: ${band.width}%;">Pausa ${escapeAttr(band.label.replace(/^Turno\s*/i, 'T'))}</span>`).join('')}
+                  <div class="machine-day-cell${blockedDay ? ' non-working-day' : ''}${shifts.length > 1 ? ' has-shift-bands' : ' has-single-shift'}" data-date="${date}" style="--machine-card-count: ${Math.max(dayItems.length, 1)};">
+                    ${renderMachineShiftBands()}
                     ${dayOperations}
                   </div>
                 `;
@@ -1877,6 +2125,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   function renderBoard() {
     if (viewMode === 'machines') {
       renderMachineBoard();
+      updateSelectionStatus();
       return;
     }
     const zoom = zoomLevels[zoomIndex];
@@ -1911,7 +2160,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         <div class="gantt-dates">
           ${dates.map(date => {
             const blockedDay = nonWorkingInfo(date);
-            return renderCapacityHeaderWithCapacity(date, capacityCache.get(date) || [], blockedDay);
+            return renderCapacityHeaderWithCapacity(date, capacityCache.get(date) || [], blockedDay, stockAlerts.get(date));
           }).join('')}
         </div>
         <div class="agenda-time-axis">
@@ -1934,14 +2183,12 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
               const isTransport = operation.operationType === 'transport';
               const isHistorical = disablePastEditing && isHistoricalOperation(operation, minEditableDate);
               const isExisting = isExistingScheduleBlocker(operation);
-              const productionKey = String(operation.productionKey || (operation.productionIndex ?? operation.materialId) || operation.materialName || '');
               const { start, end } = segmentMinutes(segment, dayStart, dayEnd);
               const shouldShowText = segment.visualIndex === 0 && ((end - start) / 60) * zoom.hourHeight >= 62;
-              const shortLabel = isTransport ? 'TR' : (showTeamDetails ? `${operation.peopleCount || '-'}p` : String(operation.materialName || '-').slice(0, 2).toUpperCase());
+              const shortLabel = isTransport ? 'TR' : (showTeamDetails ? `${operation.peopleCount ?? '-'}p` : String(operation.materialName || '-').slice(0, 2).toUpperCase());
               const palette = paletteForProduction(operation);
-              const stageKey = `${productionKey}:${operation.operationId || operation.materialId || operation.materialName || ''}`;
               const productionBaseColor = palette[0];
-              const eventColor = isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : palette[(stageIndexes.get(stageKey) || 0) % palette.length];
+              const eventColor = isTransport ? { ...TRANSPORT_COLOR, border: productionBaseColor.border } : productionBaseColor;
               const breakdown = isTransport ? [] : productionBreakdown(operation);
               return `
                 <button class="gantt-bar${isTransport ? ' gantt-bar-transport' : ''}${isHistorical ? ' gantt-bar-historical' : ''}${isExisting ? ' gantt-bar-existing' : ''}${shouldShowText ? '' : ' gantt-bar-compact'}" type="button" data-operation-id="${escapeAttr(operation.operationId || operation.materialId)}" style="${segmentStyle({ ...segment, visualStart: item.visualStart }, dayStart, dayEnd, zoom.hourHeight)} ${laneStyle(item.lane, item.laneCount)} ${eventColorStyle(eventColor, breakdown, colorForProduction)}" data-tooltip="${escapeAttr(tooltipText(operation))}">
@@ -1954,7 +2201,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
                     ${isExisting ? '<em class="gantt-status-pill">Ja planejado</em>' : ''}
                     <strong>${operation.materialName}</strong>
                     <span>${quantity || '-'}</span>
-                    ${showTeamDetails ? `<span>${operation.machineName || '-'} | ${operation.peopleCount || '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>` : ''}
+                    ${showTeamDetails ? `<span>${operation.machineName || '-'} | ${operation.peopleCount ?? '-'} pessoa${Number(operation.peopleCount) === 1 ? '' : 's'}</span>` : ''}
                     ${breakdown.length > 1 ? `<small>${breakdown.map(item => `${escapeAttr(item.productionTitle || `P${Number(item.productionIndex || 0) + 1}`)}: ${formatQty(item.quantity)}`).join(' | ')}</small>` : ''}
                     <small>${formatDate(operation.startDate)} ${startTime} at&eacute; ${formatDate(operation.endDate)} ${endTime}</small>
                   ` : `<span class="gantt-compact-label">${escapeAttr(shortLabel)}</span>`}
@@ -1974,33 +2221,261 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
         </div>
       </div>
     `;
+    updateSelectionStatus();
   }
 
-  wrapper.addEventListener('mouseover', event => {
-    const bar = event.target.closest('.gantt-bar');
-    if (!bar) return;
-    showTooltip(event, bar.dataset.tooltip || '');
-  });
-  wrapper.addEventListener('mousemove', event => {
-    if (event.target.closest('.gantt-bar')) moveTooltip(event);
-  });
-  wrapper.addEventListener('mouseout', event => {
-    const bar = event.target.closest('.gantt-bar');
-    if (!bar || bar.contains(event.relatedTarget)) return;
-    hideTooltip();
-  });
-  wrapper.addEventListener('focusin', event => {
-    const bar = event.target.closest('.gantt-bar');
-    if (!bar) return;
-    const rect = bar.getBoundingClientRect();
-    showTooltip({ clientX: rect.left + 8, clientY: rect.top + 8 }, bar.dataset.tooltip || '');
-  });
   wrapper.addEventListener('focusout', event => {
     if (event.target.closest('.gantt-bar')) hideTooltip();
   });
+  let draggingOperationId = null;
+  const autoScrollState = {
+    pointerX: 0,
+    pointerY: 0,
+    frame: null
+  };
+  const autoScrollEdgeSize = 82;
+  const autoScrollMaxSpeed = 22;
+  const autoScrollBoard = () => wrapper.querySelector('.gantt-board');
+  const stopAutoScroll = () => {
+    if (autoScrollState.frame) window.cancelAnimationFrame(autoScrollState.frame);
+    autoScrollState.frame = null;
+  };
+  const autoScrollVelocity = (pointer, start, end) => {
+    if (pointer < start || pointer > end) return 0;
+    const leftDistance = pointer - start;
+    const rightDistance = end - pointer;
+    if (leftDistance < autoScrollEdgeSize) {
+      return -Math.round(((autoScrollEdgeSize - leftDistance) / autoScrollEdgeSize) * autoScrollMaxSpeed);
+    }
+    if (rightDistance < autoScrollEdgeSize) {
+      return Math.round(((autoScrollEdgeSize - rightDistance) / autoScrollEdgeSize) * autoScrollMaxSpeed);
+    }
+    return 0;
+  };
+  const runAutoScroll = () => {
+    autoScrollState.frame = null;
+    const board = autoScrollBoard();
+    if (!board || (!draggingOperationId && !pointerDrag?.active)) return;
+    const rect = board.getBoundingClientRect();
+    const deltaX = autoScrollVelocity(autoScrollState.pointerX, rect.left, rect.right);
+    const deltaY = autoScrollVelocity(autoScrollState.pointerY, rect.top, rect.bottom);
+    if (!deltaX && !deltaY) return;
+    board.scrollLeft = Math.max(0, Math.min(board.scrollWidth - board.clientWidth, board.scrollLeft + deltaX));
+    board.scrollTop = Math.max(0, Math.min(board.scrollHeight - board.clientHeight, board.scrollTop + deltaY));
+    autoScrollState.frame = window.requestAnimationFrame(runAutoScroll);
+  };
+  const updateAutoScroll = event => {
+    const board = autoScrollBoard();
+    if (!board) return;
+    autoScrollState.pointerX = event.clientX;
+    autoScrollState.pointerY = event.clientY;
+    const rect = board.getBoundingClientRect();
+    const nearHorizontal = event.clientX >= rect.left && event.clientX <= rect.right
+      && (event.clientX - rect.left < autoScrollEdgeSize || rect.right - event.clientX < autoScrollEdgeSize);
+    const nearVertical = event.clientY >= rect.top && event.clientY <= rect.bottom
+      && (event.clientY - rect.top < autoScrollEdgeSize || rect.bottom - event.clientY < autoScrollEdgeSize);
+    if (nearHorizontal || nearVertical) {
+      if (!autoScrollState.frame) runAutoScroll();
+    } else {
+      stopAutoScroll();
+    }
+  };
+  wrapper.addEventListener('dragstart', event => {
+    if (event.target.closest('[data-operation-selector]')) {
+      event.preventDefault();
+      return;
+    }
+    const bar = event.target.closest('.machine-production-card[data-drag-operation-id]');
+    if (!bar) return;
+    const operation = operations.find(item => operationDragId(item) === String(bar.dataset.dragOperationId));
+    if (!canDragOperation(operation)) {
+      event.preventDefault();
+      return;
+    }
+    hideTooltip();
+    draggingOperationId = operationDragId(operation);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', draggingOperationId);
+    bar.classList.add('is-dragging');
+    wrapper.classList.add('is-calendar-dragging');
+  });
+  wrapper.addEventListener('dragend', event => {
+    stopAutoScroll();
+    draggingOperationId = null;
+    event.target.closest('.machine-production-card')?.classList.remove('is-dragging');
+    wrapper.classList.remove('is-calendar-dragging');
+    clearPointerDropTargets();
+  });
+  wrapper.addEventListener('dragover', event => {
+    if (draggingOperationId) updateAutoScroll(event);
+    const cell = event.target.closest('.machine-day-cell[data-date]');
+    if (!cell) return;
+    const operationId = draggingOperationId || event.dataTransfer.getData('text/plain');
+    const operation = operations.find(item => operationDragId(item) === operationId);
+    if (!canDragOperation(operation)) return;
+    event.preventDefault();
+    const compatible = operationCompatibleWithMachine(operation, cell.closest('.machine-row')?.dataset.machine);
+    event.dataTransfer.dropEffect = compatible ? 'move' : 'none';
+    wrapper.querySelectorAll('.machine-day-cell.is-drop-target, .machine-day-cell.is-drop-invalid').forEach(target => {
+      if (target !== cell) target.classList.remove('is-drop-target', 'is-drop-invalid');
+    });
+    cell.classList.toggle('is-drop-target', compatible);
+    cell.classList.toggle('is-drop-invalid', !compatible);
+  });
+  wrapper.addEventListener('dragleave', event => {
+    const cell = event.target.closest('.machine-day-cell[data-date]');
+    if (!cell || cell.contains(event.relatedTarget)) return;
+    cell.classList.remove('is-drop-target', 'is-drop-invalid');
+  });
+  document.addEventListener('dragover', event => {
+    if (!draggingOperationId) return;
+    updateAutoScroll(event);
+  });
+  wrapper.addEventListener('drop', event => {
+    stopAutoScroll();
+    const cell = event.target.closest('.machine-day-cell[data-date]');
+    if (!cell) return;
+    const operationId = draggingOperationId || event.dataTransfer.getData('text/plain');
+    const operation = operations.find(item => operationDragId(item) === operationId);
+    if (!canDragOperation(operation)) return;
+    event.preventDefault();
+    draggingOperationId = null;
+    cell.classList.remove('is-drop-target', 'is-drop-invalid', 'is-click-move-target', 'is-click-move-invalid');
+    suppressCardClick = true;
+    dispatchOperationDrop(operation, cell, 'drag');
+  });
+  let pointerDrag = null;
+  let suppressCardClick = false;
+  const clearPointerDropTargets = () => {
+    wrapper.querySelectorAll('.machine-day-cell.is-drop-target, .machine-day-cell.is-drop-invalid, .machine-day-cell.is-click-move-target, .machine-day-cell.is-click-move-invalid').forEach(cell => {
+      cell.classList.remove('is-drop-target', 'is-drop-invalid', 'is-click-move-target', 'is-click-move-invalid');
+    });
+  };
+  const updateSelectedMoveTarget = cell => {
+    wrapper.querySelectorAll('.machine-day-cell.is-click-move-target, .machine-day-cell.is-click-move-invalid').forEach(target => {
+      if (target !== cell) target.classList.remove('is-click-move-target', 'is-click-move-invalid');
+    });
+    if (!cell || draggingOperationId || pointerDrag?.active) return;
+    const operation = selectedOperation();
+    if (!operation) return;
+    const occupied = Boolean(cell.querySelector('.machine-production-card'));
+    const compatible = operationCompatibleWithMachine(operation, cell.closest('.machine-row')?.dataset.machine);
+    const blocked = Boolean(nonWorkingInfo(cell.dataset.date));
+    cell.classList.toggle('is-click-move-target', !occupied && compatible && !blocked);
+    cell.classList.toggle('is-click-move-invalid', occupied || !compatible || blocked);
+  };
+  const finishPointerDrag = event => {
+    if (!pointerDrag) return;
+    const { operation, card, active } = pointerDrag;
+    const cell = active ? document.elementFromPoint(event.clientX, event.clientY)?.closest('.machine-day-cell[data-date]') : null;
+    pointerDrag = null;
+    stopAutoScroll();
+    card.classList.remove('is-dragging');
+    wrapper.classList.remove('is-calendar-dragging');
+    clearPointerDropTargets();
+    if (!active || !cell || !wrapper.contains(cell)) return;
+    suppressCardClick = true;
+    dispatchOperationDrop(operation, cell, 'drag');
+  };
+  wrapper.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || event.pointerType === 'touch') return;
+    if (event.target.closest('[data-operation-selector]')) return;
+    const card = event.target.closest('.machine-production-card[data-drag-operation-id]');
+    if (!card) return;
+    const operation = operations.find(item => operationDragId(item) === String(card.dataset.dragOperationId));
+    if (!canDragOperation(operation)) return;
+    pointerDrag = {
+      operation,
+      card,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false
+    };
+  });
+  document.addEventListener('pointermove', event => {
+    if (!pointerDrag) return;
+    if (!pointerDrag.active && Math.hypot(event.clientX - pointerDrag.startX, event.clientY - pointerDrag.startY) < 8) return;
+    pointerDrag.active = true;
+    updateAutoScroll(event);
+    pointerDrag.card.classList.add('is-dragging');
+    wrapper.classList.add('is-calendar-dragging');
+    clearPointerDropTargets();
+    const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest('.machine-day-cell[data-date]');
+    if (!cell || !wrapper.contains(cell)) return;
+    const compatible = operationCompatibleWithMachine(pointerDrag.operation, cell.closest('.machine-row')?.dataset.machine);
+    cell.classList.toggle('is-drop-target', compatible);
+    cell.classList.toggle('is-drop-invalid', !compatible);
+  });
+  document.addEventListener('pointerup', finishPointerDrag);
+  document.addEventListener('pointercancel', event => {
+    stopAutoScroll();
+    finishPointerDrag(event);
+  });
+  wrapper.addEventListener('mouseover', event => {
+    const cell = event.target.closest('.machine-day-cell[data-date]');
+    if (!cell || !wrapper.contains(cell)) return;
+    updateSelectedMoveTarget(cell);
+  });
+  wrapper.addEventListener('mouseout', event => {
+    const cell = event.target.closest('.machine-day-cell[data-date]');
+    if (!cell || cell.contains(event.relatedTarget)) return;
+    cell.classList.remove('is-click-move-target', 'is-click-move-invalid');
+  });
+  wrapper.addEventListener('keydown', event => {
+    const selector = event.target.closest('[data-operation-selector]');
+    if (!selector || !['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    const operation = operations.find(item => operationDragId(item) === String(selector.dataset.operationSelectorId));
+    if (!operation) return;
+    const selected = selectedOperationId === operationDragId(operation);
+    setSelectedOperation(selected ? null : operation, selector.closest('.machine-day-cell[data-date]')?.dataset.date || null);
+  });
   wrapper.addEventListener('click', event => {
+    if (suppressCardClick) {
+      suppressCardClick = false;
+      event.preventDefault();
+      return;
+    }
+    const clearSelection = event.target.closest('[data-clear-selection]');
+    if (clearSelection) {
+      event.preventDefault();
+      setSelectedOperation(null);
+      return;
+    }
+    const selector = event.target.closest('[data-operation-selector]');
+    if (selector) {
+      event.preventDefault();
+      const operation = operations.find(item => operationDragId(item) === String(selector.dataset.operationSelectorId));
+      if (!operation) return;
+      const selected = selectedOperationId === operationDragId(operation);
+      setSelectedOperation(selected ? null : operation, selector.closest('.machine-day-cell[data-date]')?.dataset.date || null);
+      return;
+    }
     const bar = event.target.closest('.gantt-bar');
+    const selectedForMove = selectedOperation();
+    const selectedMoveCell = event.target.closest('.machine-day-cell[data-date]');
+    if (selectedForMove && selectedMoveCell) {
+      const clickedOperationId = bar?.dataset.dragOperationId || null;
+      const isSelectedCardBody = clickedOperationId && clickedOperationId === operationDragId(selectedForMove);
+      if (!isSelectedCardBody && selectedMoveCell.querySelector('.machine-production-card')) {
+        event.preventDefault();
+        window.alert('Este destino j\u00e1 possui uma produ\u00e7\u00e3o. Unifica\u00e7\u00e3o e substitui\u00e7\u00e3o ser\u00e3o implementadas nas pr\u00f3ximas etapas.');
+        return;
+      }
+    }
     if (!bar) {
+      const cell = event.target.closest('.machine-day-cell[data-date]');
+      const operation = selectedForMove;
+      if (cell && operation) {
+        event.preventDefault();
+        if (cell.querySelector('.machine-production-card')) {
+          window.alert('Este destino j\u00e1 possui uma produ\u00e7\u00e3o. Unifica\u00e7\u00e3o e substitui\u00e7\u00e3o ser\u00e3o implementadas nas pr\u00f3ximas etapas.');
+          return;
+        }
+        const moved = dispatchOperationDrop(operation, cell, 'click_move');
+        if (moved) setSelectedOperation(null);
+        return;
+      }
       const dayTarget = event.target.closest('[data-date]');
       const dateHeader = event.target.closest('.gantt-date[data-date]');
       const date = dayTarget?.dataset.date || dateHeader?.dataset.date;
@@ -2020,7 +2495,7 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
     }
     if (!showProductionDetails || operation?.operationType === 'transport' || isExistingScheduleBlocker(operation)) return;
     if (readOnly || (disablePastEditing && isHistoricalOperation(operation, minEditableDate))) return;
-    if (operation) showOperationModal(wrapper, operationWithSplitParent(operation, operations));
+    if (operation) showOperationModal(wrapper, operationWithSplitParent(operation, operations), operationEventColor(operation));
   });
 
   wrapper.querySelector('[data-zoom-out]')?.addEventListener('click', () => setZoom(zoomIndex - 1));
@@ -2030,21 +2505,85 @@ export function CalendarTimeline(days = [], operations = [], config = {}) {
   });
   const normalZoomIndex = () => 0;
   const fullscreenZoomIndex = () => Math.min(2, zoomLevels.length - 1);
-  wrapper.querySelector('[data-fullscreen]')?.addEventListener('click', () => {
+  let zoomBeforeFullscreen = zoomIndex;
+  let fullscreenPortal = null;
+  const bridgedCalendarEvents = [
+    'calendar-team-capacity-change',
+    'operation-card-drop',
+    'operation-date-change',
+    'operation-config-change'
+  ];
+  const bridgeCalendarEvent = event => {
+    if (!fullscreenPortal?.placeholder || event.__calendarPortalBridge) return;
+    const bridgedEvent = new CustomEvent(event.type, {
+      bubbles: true,
+      cancelable: event.cancelable,
+      detail: event.detail
+    });
+    Object.defineProperty(bridgedEvent, '__calendarPortalBridge', { value: true });
+    fullscreenPortal.placeholder.dispatchEvent(bridgedEvent);
+  };
+  bridgedCalendarEvents.forEach(eventName => {
+    wrapper.addEventListener(eventName, bridgeCalendarEvent);
+  });
+  const mountFullscreenPortal = () => {
+    if (fullscreenPortal) return;
+    const parent = wrapper.parentNode;
+    if (!parent) return;
+    const placeholder = document.createElement('span');
+    placeholder.className = 'calendar-fullscreen-placeholder';
+    placeholder.hidden = true;
+    fullscreenPortal = {
+      parent,
+      nextSibling: wrapper.nextSibling,
+      placeholder
+    };
+    parent.insertBefore(placeholder, wrapper);
+    document.body.appendChild(wrapper);
+  };
+  const restoreFullscreenPortal = () => {
+    if (!fullscreenPortal) return;
+    const { parent, nextSibling, placeholder } = fullscreenPortal;
+    const reference = nextSibling && nextSibling.parentNode === parent ? nextSibling : placeholder;
+    const replacement = parent.isConnected
+      ? [...parent.children].find(child => child !== placeholder && child !== wrapper && child.classList?.contains('calendar-gantt'))
+      : null;
+    if (replacement) {
+      wrapper.remove();
+    } else if (parent.isConnected) {
+      parent.insertBefore(wrapper, reference);
+    }
+    placeholder.remove();
+    fullscreenPortal = null;
+  };
+  const enterFullscreen = () => {
+    if (wrapper.classList.contains('is-calendar-fullscreen')) return;
+    zoomBeforeFullscreen = zoomIndex;
+    mountFullscreenPortal();
     wrapper.classList.add('is-calendar-fullscreen');
     document.body.classList.add('calendar-fullscreen-open');
+    wrapper.querySelector('[data-fullscreen]')?.setAttribute('aria-expanded', 'true');
+    wrapper.querySelector('[data-fullscreen-close]')?.removeAttribute('hidden');
     setZoom(fullscreenZoomIndex());
-  });
-  wrapper.querySelector('[data-fullscreen-close]')?.addEventListener('click', () => {
+  };
+  const exitFullscreen = () => {
+    if (!wrapper.classList.contains('is-calendar-fullscreen')) return;
     wrapper.classList.remove('is-calendar-fullscreen');
     document.body.classList.remove('calendar-fullscreen-open');
-    setZoom(normalZoomIndex());
+    wrapper.querySelector('[data-fullscreen]')?.setAttribute('aria-expanded', 'false');
+    wrapper.querySelector('[data-fullscreen-close]')?.setAttribute('hidden', '');
+    restoreFullscreenPortal();
+    setZoom(zoomBeforeFullscreen ?? normalZoomIndex());
+  };
+  wrapper.querySelector('[data-fullscreen]')?.setAttribute('aria-expanded', 'false');
+  wrapper.querySelector('[data-fullscreen-close]')?.setAttribute('hidden', '');
+  wrapper.querySelector('[data-fullscreen]')?.addEventListener('click', enterFullscreen);
+  wrapper.querySelector('[data-fullscreen-close]')?.addEventListener('click', () => {
+    exitFullscreen();
   });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || !wrapper.classList.contains('is-calendar-fullscreen')) return;
-    wrapper.classList.remove('is-calendar-fullscreen');
-    document.body.classList.remove('calendar-fullscreen-open');
-    setZoom(normalZoomIndex());
+    exitFullscreen();
   });
 
   setViewMode(viewMode);

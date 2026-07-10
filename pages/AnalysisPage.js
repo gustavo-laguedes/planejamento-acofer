@@ -12,7 +12,7 @@ const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 const MONTH_FORMAT = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const DAY_START_HOUR = 0;
 const DAY_END_HOUR = 24;
-const HOUR_HEIGHT = 58;
+const HOUR_HEIGHT = 54;
 const TIME_TOP_PAD = 18;
 const STOCK_MINIMUM_DAYS_KEY = 'acofer.stock.minimumDays';
 const PCP_IDEAL_DAYS_KEY = 'acofer.analysis.pcpIdealDays';
@@ -20,7 +20,7 @@ const PCP_IDEAL_OVERRIDES_STORAGE_KEY = 'acofer.analysis.pcpIdealDaysByMaterial'
 const PCP_PRIORITY_STORAGE_KEY = 'acofer.analysis.pcpPriorities';
 const PLANNING_DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
 const COMMERCIAL_PINS_STORAGE_KEY = 'acofer.commercial.materialPins.v1';
-const PCP_STATUS_WEIGHT = { critical: 0, attention: 1, productionAlert: 2, planned: 3, outOfRadar: 4, unknown: 5 };
+const PCP_STATUS_WEIGHT = { critical: 0, attention: 1, productionAlert: 2, belowTarget: 3, planned: 4, outOfRadar: 5, unknown: 6 };
 const PCP_GROUP_WEIGHT = {
   criticalOpen: 0,
   criticalPartial: 1,
@@ -28,8 +28,10 @@ const PCP_GROUP_WEIGHT = {
   attentionPartial: 3,
   productionAlertOpen: 4,
   productionAlertPartial: 5,
-  planned: 6,
-  other: 7
+  belowTargetOpen: 6,
+  belowTargetPartial: 7,
+  planned: 8,
+  other: 9
 };
 
 function escapeHtml(value) {
@@ -267,6 +269,14 @@ function plannedPcpStatus() {
   return { key: 'planned', label: 'Planejado', className: 'planned' };
 }
 
+function pcpStatusForIdealTarget(baseStatus, durationDays, idealDays) {
+  if (baseStatus?.key !== 'outOfRadar') return baseStatus;
+  if (Number.isFinite(durationDays) && Number.isFinite(Number(idealDays)) && durationDays < Number(idealDays)) {
+    return { key: 'belowTarget', label: 'Abaixo da meta', className: 'below-target' };
+  }
+  return baseStatus;
+}
+
 function materialKey(row) {
   return String(row.material?.id || row.material?.name || (row.codes || []).join('|'));
 }
@@ -337,9 +347,8 @@ function productivityMatchesMaterial(productivity, stockRow) {
 
 function productivityRate(row) {
   const outputQty = Number(row.output_qty);
-  const timeSeconds = Number(row.time_seconds ?? Number(row.time_minutes || 0) * 60);
-  if (!Number.isFinite(outputQty) || outputQty <= 0 || !Number.isFinite(timeSeconds) || timeSeconds <= 0) return 0;
-  return outputQty / timeSeconds;
+  if (!Number.isFinite(outputQty) || outputQty <= 0) return 0;
+  return outputQty;
 }
 
 function bestProductivityForMaterial(matrixRows, stockRow) {
@@ -373,9 +382,9 @@ function formatDurationFromSeconds(seconds, calendar = null) {
 
 function estimatedProductionSeconds(quantity, productivity) {
   const outputQty = Number(productivity?.output_qty);
-  const timeSeconds = Number(productivity?.time_seconds ?? Number(productivity?.time_minutes || 0) * 60);
-  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(outputQty) || outputQty <= 0 || !Number.isFinite(timeSeconds) || timeSeconds <= 0) return null;
-  return (quantity / outputQty) * timeSeconds;
+  const workdaySeconds = pcpWorkdayMinutes(pcpProductionCalendar()) * 60;
+  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(outputQty) || outputQty <= 0) return null;
+  return (quantity / outputQty) * workdaySeconds;
 }
 
 function canEstimatePcpProduction(row) {
@@ -384,7 +393,7 @@ function canEstimatePcpProduction(row) {
     && !!row.productivity
     && !!String(row.productivity.machine_name || '').trim()
     && Number.isFinite(Number(row.productivity.people_count))
-    && Number(row.productivity.people_count) > 0
+    && Number(row.productivity.people_count) >= 0
     && row.estimatedSeconds !== null;
 }
 
@@ -393,7 +402,7 @@ function pcpObservation(row) {
   if (row.status.key === 'planned') return 'Sugestao atual coberta por planejamento ativo.';
   if (!row.productivity) return 'Sem matriz de produtividade.';
   if (!String(row.productivity.machine_name || '').trim()) return 'Sem máquina cadastrada.';
-  if (!Number.isFinite(Number(row.productivity.people_count)) || Number(row.productivity.people_count) <= 0) return 'Sem pessoas configuradas.';
+  if (!Number.isFinite(Number(row.productivity.people_count)) || Number(row.productivity.people_count) < 0) return 'Sem pessoas configuradas.';
   if (row.status.key === 'outOfRadar') return 'Produto fora do radar.';
   return 'Pronto para análise do PCP.';
 }
@@ -424,6 +433,7 @@ function pcpCoverageGroup(row) {
   if (row.baseStatus?.key === 'critical') return `critical${suffix}`;
   if (row.baseStatus?.key === 'attention') return `attention${suffix}`;
   if (row.baseStatus?.key === 'productionAlert') return `productionAlert${suffix}`;
+  if (row.baseStatus?.key === 'belowTarget') return `belowTarget${suffix}`;
   return 'other';
 }
 
@@ -443,13 +453,15 @@ function buildPcpRows(stockRows = [], minimumDays, matrixRows = [], priorities =
       const fullyPlanned = suggestion.grossTargetQty !== null
         && suggestion.grossTargetQty > 0
         && plannedRemainingQty >= suggestion.grossTargetQty;
-      const status = fullyPlanned ? plannedPcpStatus() : baseStatus;
+      const actionStatus = pcpStatusForIdealTarget(baseStatus, durationDays, rowIdealDays);
+      const status = fullyPlanned ? plannedPcpStatus() : actionStatus;
       return {
         ...row,
         key,
         durationDays,
         adjustedDurationDays,
-        baseStatus,
+        thresholdStatus: baseStatus,
+        baseStatus: actionStatus,
         status,
         minimumDays,
         idealDays: rowIdealDays,
@@ -477,12 +489,15 @@ function recalculatePcpRowsForIdealDays(rows = [], idealDays, idealOverrides = {
     const fullyPlanned = suggestion.grossTargetQty !== null
       && suggestion.grossTargetQty > 0
       && Number(row.plannedRemainingQty || 0) >= suggestion.grossTargetQty;
+    const actionStatus = pcpStatusForIdealTarget(row.thresholdStatus || row.baseStatus, row.durationDays, rowIdealDays);
     return {
       ...row,
       idealDays: rowIdealDays,
       followsGlobalIdeal: !override,
       grossTargetQty: suggestion.grossTargetQty,
-      status: fullyPlanned ? plannedPcpStatus() : row.baseStatus,
+      thresholdStatus: row.thresholdStatus || row.baseStatus,
+      baseStatus: actionStatus,
+      status: fullyPlanned ? plannedPcpStatus() : actionStatus,
       targetQty: suggestion.targetQty,
       estimatedSeconds: suggestion.estimatedSeconds
     };
@@ -688,14 +703,15 @@ function estimatedProductionEndLabel(row, calendar) {
 function pcpDraftProduction(row, index) {
   const material = row.material || {};
   const suggestedQty = Number(row.targetQty);
+  const displayedQty = Number.isFinite(suggestedQty) && suggestedQty > 0 ? Math.ceil(suggestedQty) : NaN;
   return {
     id: `pcp-production-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
     materialId: material.id || '',
     materialSearch: material.name || '',
     productionModelName: '',
-    plannedQty: Number.isFinite(suggestedQty) && suggestedQty > 0 ? Number(suggestedQty.toFixed(3)) : '',
+    plannedQty: Number.isFinite(displayedQty) && displayedQty > 0 ? displayedQty : '',
     machineName: row.productivity?.machine_name || '',
-    peopleCount: row.productivity?.people_count ? String(row.productivity.people_count) : '',
+    peopleCount: row.productivity?.people_count !== null && row.productivity?.people_count !== undefined ? String(row.productivity.people_count) : '',
     desiredDate: '',
     transports: [],
     source: 'Assistente PCP',
@@ -1195,7 +1211,7 @@ export function AnalysisPage(options = {}) {
   const mode = options.mode || 'analysis';
   const commercialMode = mode === 'commercial';
   const canEditPlanning = !commercialMode && canAccess(getCurrentUser(), 'planning:write');
-  const availableViews = ['day', 'week', 'month', 'year'];
+  const availableViews = commercialMode ? ['month', 'year'] : ['week', 'month', 'year'];
   const page = document.createElement('section');
   page.className = `stack analysis-page${commercialMode ? ' commercial-calendar-page' : ''}`;
   page.innerHTML = `
@@ -1211,7 +1227,7 @@ export function AnalysisPage(options = {}) {
         </div>
         <div class="analysis-calendar-actions">
           <div class="calendar-view-toggle">
-            ${['day', 'week', 'month', 'year'].map(item => `<button class="secondary-button" type="button" data-view="${item}">${({ day: 'Dia', week: 'Semana', month: 'Mês', year: 'Ano' })[item]}</button>`).join('')}
+            ${availableViews.map(item => `<button class="secondary-button" type="button" data-view="${item}">${({ week: 'Semana', month: 'Mês', year: 'Ano' })[item]}</button>`).join('')}
           </div>
           ${commercialMode ? '' : '<button class="secondary-button analysis-fullscreen-button" type="button" data-fullscreen>Tela cheia</button>'}
         </div>
@@ -1224,9 +1240,6 @@ export function AnalysisPage(options = {}) {
     page.querySelector('h1').textContent = 'Comercial';
     page.querySelector('.page-header p').textContent = 'Consulta de produção final programada para vendas.';
     page.querySelector('.analysis-tabs')?.remove();
-    page.querySelectorAll('[data-view]').forEach(button => {
-      if (!availableViews.includes(button.dataset.view)) button.remove();
-    });
   }
   const assistantPanel = document.createElement('div');
   assistantPanel.className = 'panel analysis-assistant-panel';
@@ -1461,8 +1474,6 @@ export function AnalysisPage(options = {}) {
   }
 
   function openCommercialPinDetail(pin) {
-    const user = currentCommercialUser();
-    const ownPin = String(pin.usuario_id) === String(user.id);
     const { backdrop, close } = closeableModal(`
       <div class="modal-header">
         <div><h2>Solicitação comercial</h2><p class="modal-subtitle">${formatDate(pin.date)}</p></div>
@@ -1475,19 +1486,9 @@ export function AnalysisPage(options = {}) {
         <span>Observação<strong>${escapeHtml(pin.observacao || 'Sem observação')}</strong></span>
       </div>
       <div class="modal-actions">
-        ${ownPin ? '<button class="primary-button" type="button" data-edit-pin>Editar</button><button class="danger-button" type="button" data-delete-pin>Excluir</button>' : ''}
         <button class="secondary-button" type="button" data-close>Fechar</button>
       </div>
     `, 'analysis-event-modal');
-    backdrop.querySelector('[data-edit-pin]')?.addEventListener('click', () => {
-      close();
-      openCommercialRequestModal(pin.date, pin);
-    });
-    backdrop.querySelector('[data-delete-pin]')?.addEventListener('click', () => {
-      saveCommercialPins(currentCommercialPins.filter(item => item.id !== pin.id));
-      close();
-      window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: 'Solicitação comercial excluída.' }));
-    });
   }
 
   function renderInternalTab() {
@@ -1513,6 +1514,7 @@ export function AnalysisPage(options = {}) {
           <article class="pcp-summary-card critical"><span>Críticos</span><strong>${counts.critical || 0}</strong></article>
           <article class="pcp-summary-card attention"><span>Atenção</span><strong>${counts.attention || 0}</strong></article>
           <article class="pcp-summary-card production-alert"><span>Alerta de produção</span><strong>${counts.productionAlert || 0}</strong></article>
+          <article class="pcp-summary-card below-target"><span>Abaixo da meta</span><strong>${counts.belowTarget || 0}</strong></article>
           <article class="pcp-summary-card target">
             <label for="pcp-ideal-days">Meta ideal (dias)</label>
             <input id="pcp-ideal-days" class="pcp-ideal-days-input" type="number" min="1" step="1" value="${escapeHtml(idealDays)}" data-pcp-ideal-days />
@@ -1841,7 +1843,6 @@ export function AnalysisPage(options = {}) {
       <section class="analysis-day-summary-section">
         <div class="commercial-section-heading">
           <h3>Solicitações comerciais</h3>
-          <button class="primary-button" type="button" data-commercial-request="${escapeHtml(date)}">Solicitar material</button>
         </div>
         <div class="commercial-day-pins">
           ${commercialPinsForDate(date).length ? commercialPinsForDate(date).map(pin => commercialPinButton(pin)).join('') : '<p class="muted-text">Nenhuma solicitação comercial para esta data.</p>'}
@@ -1861,11 +1862,6 @@ export function AnalysisPage(options = {}) {
       if (selected) openEventDetail({ ...selected, commercialMode }, canEditPlanning ? openPlanningTimeline : null);
     }));
     backdrop.addEventListener('click', event => {
-      const requestButton = event.target.closest('[data-commercial-request]');
-      if (requestButton) {
-        openCommercialRequestModal(requestButton.dataset.commercialRequest);
-        return;
-      }
       const pinButton = event.target.closest('[data-commercial-pin]');
       if (pinButton) {
         const pin = currentCommercialPins.find(item => item.id === pinButton.dataset.commercialPin);
@@ -1940,6 +1936,36 @@ export function AnalysisPage(options = {}) {
       </div>`;
   }
 
+  function renderWeek() {
+    const range = viewRange(cursor, 'week');
+    const grouped = eventsByDate(groupMonthEvents(currentEvents));
+    const days = [];
+    for (let date = range.start; date <= range.end; date = addDays(date, 1)) days.push(date);
+    target.innerHTML = `
+      <div class="analysis-week-grid">
+        ${days.map(date => {
+          const holiday = holidayFor(date);
+          const events = grouped.get(date) || [];
+          return `<article class="analysis-week-day${isWeekend(date) ? ' weekend' : ''}${holiday ? ' holiday' : ''}" data-day-summary="${date}" title="${holiday ? escapeHtml(holiday.name) : 'Abrir resumo do dia'}">
+            <header>
+              <button type="button" data-day-summary="${date}">
+                <strong>${WEEKDAYS[utcDate(date).getUTCDay()]}</strong>
+                <span>${formatDate(date)}</span>
+              </button>
+              <div class="analysis-week-day-badges">
+                ${stockAlertIcon(date)}
+                ${renderCapacityPillsForDate(date)}
+                ${holiday ? `<span class="analysis-holiday-label" title="${escapeHtml(holiday.name)}">${escapeHtml(holiday.name)}</span>` : ''}
+              </div>
+            </header>
+            <div class="analysis-week-events">
+              ${events.length ? events.map(event => eventButton(event, '', '', { commercial: false })).join('') : '<span class="analysis-no-events">Sem produção</span>'}
+            </div>
+          </article>`;
+        }).join('')}
+      </div>`;
+  }
+
   function commercialTimelineOperation(event) {
     return {
       ...event,
@@ -1999,7 +2025,7 @@ export function AnalysisPage(options = {}) {
     }));
     const hasAllDayEvents = [...dayEvents.values()].some(item => item.allDay.length);
     target.innerHTML = `
-      <div class="analysis-time-calendar${hasAllDayEvents ? '' : ' without-all-day'}" style="--analysis-days:${days.length};--analysis-hours:${hourCount};--analysis-min-width:${86 + days.length * (view === 'day' ? 390 : 170)}px;--analysis-body-height:${TIME_TOP_PAD + hourCount * HOUR_HEIGHT}px;--analysis-hour-height:${HOUR_HEIGHT}px;--analysis-top-pad:${TIME_TOP_PAD}px;--analysis-day-width:${view === 'day' ? 390 : 170}px">
+      <div class="analysis-time-calendar${hasAllDayEvents ? '' : ' without-all-day'}" style="--analysis-days:${days.length};--analysis-hours:${hourCount};--analysis-min-width:${78 + days.length * (view === 'day' ? 430 : 210)}px;--analysis-body-height:${TIME_TOP_PAD + hourCount * HOUR_HEIGHT}px;--analysis-hour-height:${HOUR_HEIGHT}px;--analysis-top-pad:${TIME_TOP_PAD}px;--analysis-day-width:${view === 'day' ? 430 : 210}px">
         <div class="analysis-time-corner">Horário</div>
         <div class="analysis-time-day-headers">
           ${days.map(date => {
@@ -2067,6 +2093,7 @@ export function AnalysisPage(options = {}) {
     title.textContent = titleFor(cursor, view, commercialMode ? commercialViewRange : viewRange);
     page.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('is-active', button.dataset.view === view));
     if (view === 'month') renderMonth();
+    else if (view === 'week') renderWeek();
     else if (view === 'year') renderYear();
     else renderTimeGrid();
   }

@@ -23,7 +23,23 @@ function normalizeSeconds(item) {
       : rawSeconds;
     return Number(normalizedSeconds);
   }
-  return Number(item.timeMinutes || 0) * 60;
+  const minutes = Number(item.timeMinutes || 0);
+  return minutes > 0 ? minutes * 60 : 24 * 60 * 60;
+}
+
+function normalizePriority(item) {
+  const priority = Number(item.machinePriority ?? item.machine_priority ?? 1);
+  return Number.isFinite(priority) && priority > 0 ? Math.floor(priority) : 1;
+}
+
+function normalizePeopleCount(item) {
+  const peopleCount = Number(item.peopleCount ?? item.people_count);
+  if (!Number.isInteger(peopleCount) || peopleCount < 0) {
+    const error = new Error('Informe uma quantidade de pessoas inteira maior ou igual a zero.');
+    error.status = 400;
+    throw error;
+  }
+  return peopleCount;
 }
 
 router.get('/', async (req, res, next) => {
@@ -33,12 +49,13 @@ router.get('/', async (req, res, next) => {
     const rows = await db`
       SELECT *
       FROM productivity_matrix
-      WHERE (${req.query.search || ''} = ''
+      WHERE active = true
+        AND (${req.query.search || ''} = ''
         OR material_name ILIKE ${search}
         OR machine_name ILIKE ${search}
         OR material_code ILIKE ${search}
         OR array_to_string(COALESCE(material_codes, ARRAY[]::text[]), ', ') ILIKE ${search})
-      ORDER BY active DESC, material_name, machine_name, people_count
+      ORDER BY material_name, machine_priority, machine_name, people_count
     `;
     res.json(rows);
   } catch (error) {
@@ -53,9 +70,10 @@ router.post('/', requirePermission('matrix:write'), async (req, res, next) => {
     const materialCodes = normalizeCodes(item);
     const primaryCode = materialCodes[0] || null;
     const timeSeconds = normalizeSeconds(item);
+    const peopleCount = normalizePeopleCount(item);
     const [row] = await db`
-      INSERT INTO productivity_matrix (material_name, material_code, material_codes, machine_name, people_count, output_qty, output_unit, time_minutes, time_seconds, notes, active)
-      VALUES (${item.materialName}, ${primaryCode}, ${materialCodes}, ${item.machineName}, ${Number(item.peopleCount)}, ${Number(item.outputQty)}, ${item.outputUnit || 'un'}, ${timeSeconds / 60}, ${timeSeconds}, ${item.notes || null}, ${item.active !== false})
+      INSERT INTO productivity_matrix (material_name, material_code, material_codes, machine_name, machine_priority, people_count, output_qty, output_unit, time_minutes, time_seconds, notes, active)
+      VALUES (${item.materialName}, ${primaryCode}, ${materialCodes}, ${item.machineName}, ${normalizePriority(item)}, ${peopleCount}, ${Number(item.outputQty)}, ${item.outputUnit || 'un'}, ${timeSeconds / 60}, ${timeSeconds}, ${item.notes || null}, ${item.active !== false})
       RETURNING *
     `;
     await recordAuditLog(db, {
@@ -78,13 +96,15 @@ router.put('/:id', requirePermission('matrix:write'), async (req, res, next) => 
     const materialCodes = normalizeCodes(item);
     const primaryCode = materialCodes[0] || null;
     const timeSeconds = normalizeSeconds(item);
+    const peopleCount = normalizePeopleCount(item);
     const [row] = await db`
       UPDATE productivity_matrix
       SET material_name = ${item.materialName},
           material_code = ${primaryCode},
           material_codes = ${materialCodes},
           machine_name = ${item.machineName},
-          people_count = ${Number(item.peopleCount)},
+          machine_priority = ${normalizePriority(item)},
+          people_count = ${peopleCount},
           output_qty = ${Number(item.outputQty)},
           output_unit = ${item.outputUnit || 'un'},
           time_minutes = ${timeSeconds / 60},

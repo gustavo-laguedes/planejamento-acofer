@@ -29,6 +29,14 @@ function normalizeColor(value) {
 
 const MIN_DEPENDENCY_FINISH_BUFFER_MINUTES = 60;
 const DEFAULT_TEAM_AVAILABLE = 6;
+const MAX_WORKDAY_SEARCH_DAYS = 370;
+const MAX_SCHEDULE_ITERATIONS = 10000;
+
+function planningSimulationError(message, status = 400) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
 
 function isDefaultShiftLabel(label = '') {
   return /^Turno\s*1$/i.test(String(label || '').trim()) || /^T1$/i.test(String(label || '').trim());
@@ -69,11 +77,10 @@ function toOperationalHours(value) {
 
 function shiftAvailableHours(shift = {}) {
   const start = parseTime(shift.shiftStartTime, '07:00');
-  const pauseMinutes = Math.max(toOperationalHours(shift.pauseHours ?? shift.lunchHours ?? 0), 0) * 60;
   const fallbackDailyMinutes = Math.max(toOperationalHours(shift.hoursPerDay || 8), 1 / 60) * 60;
-  let end = parseTime(shift.shiftEndTime, minutesToTime(start + fallbackDailyMinutes + pauseMinutes));
+  let end = parseTime(shift.shiftEndTime, minutesToTime(start + fallbackDailyMinutes));
   if (end <= start) end += 24 * 60;
-  return Math.max((end - start - pauseMinutes) / 60, 1 / 60);
+  return Math.max(Math.min(end - start, fallbackDailyMinutes) / 60, 1 / 60);
 }
 
 function normalizedMaterialKey(operation) {
@@ -140,39 +147,134 @@ function machineOptions(material, matrixRows) {
 }
 
 function matrixSecondsPerUnit(row) {
+  const outputQty = Math.max(toNumber(row.output_qty), 1);
   const timeSeconds = toNumber(row.time_seconds || toNumber(row.time_minutes) * 60);
-  return timeSeconds / Math.max(toNumber(row.output_qty), 1);
+  return timeSeconds > 0 ? timeSeconds / outputQty : 1 / outputQty;
 }
 
-function resolveMatrix(material, matrixRows, requestedMachine, requestedPeople) {
+function matrixPriority(row) {
+  const priority = Number(row?.machine_priority || 1);
+  return Number.isFinite(priority) && priority > 0 ? priority : 1;
+}
+
+function rankMatrixRows(left, right) {
+  return matrixPriority(left) - matrixPriority(right)
+    || Number(right.people_count || 0) - Number(left.people_count || 0)
+    || matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right);
+}
+
+function materialSetupKey(operation = {}) {
+  return [
+    operation.materialId || '',
+    String(operation.materialCode || '').trim().toLowerCase(),
+    String(operation.materialName || '').trim().toLowerCase(),
+    operation.productionModelName || '',
+    operation.unit || ''
+  ].join('|');
+}
+
+function productivityDailyCapacity(row, calendar) {
+  const outputQty = toNumber(row?.output_qty);
+  const dailyMinutes = Math.max(toNumber(calendar?.dailyMinutes), 1);
+  const dailySeconds = dailyMinutes * 60;
+  const sourceTimeSeconds = toNumber(row?.time_seconds || toNumber(row?.time_minutes) * 60);
+  const usesCycleTime = sourceTimeSeconds > 0 && sourceTimeSeconds < dailySeconds;
+  const capacityPerDay = outputQty > 0
+    ? usesCycleTime
+      ? outputQty * (dailySeconds / sourceTimeSeconds)
+      : outputQty
+    : 0;
+  return {
+    capacityPerDay,
+    maxQtyPerMachineDay: capacityPerDay,
+    maxQtyPerTeamDay: capacityPerDay,
+    secondsPerUnit: outputQty > 0 ? dailySeconds / capacityPerDay : 0,
+    sourceTimeSeconds: usesCycleTime ? sourceTimeSeconds : dailySeconds,
+    sourceOutputQty: outputQty
+  };
+}
+
+function resolveMatrix(material, matrixRows, requestedMachine, requestedPeople, maxPeople = null) {
   const options = machineOptions(material, matrixRows);
-  if (requestedMachine || requestedPeople) {
-    const hasRequestedMachine = !requestedMachine || options.some(row => row.machine_name === requestedMachine);
-    const hasRequestedPeople = !requestedPeople || options.some(row => Number(row.people_count) === Number(requestedPeople));
-    if (!hasRequestedMachine || !hasRequestedPeople) {
-      return options.sort((left, right) => matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right))[0] || null;
+  const peopleLimit = Number(maxPeople || 0);
+  const hasRequestedPeople = requestedPeople !== null && requestedPeople !== undefined && requestedPeople !== '';
+  const fitOptions = peopleLimit > 0
+    ? options.filter(row => Number(row.people_count || 0) <= peopleLimit)
+    : options;
+  const candidates = fitOptions.length ? fitOptions : options;
+  const rankedCandidates = () => [...candidates].sort(rankMatrixRows);
+  const bestAvailable = () => rankedCandidates()[0] || null;
+  if (requestedMachine || hasRequestedPeople) {
+    const hasRequestedMachine = !requestedMachine || candidates.some(row => row.machine_name === requestedMachine);
+    const requestedPeopleAvailable = !hasRequestedPeople || candidates.some(row => Number(row.people_count) === Number(requestedPeople));
+    if (!hasRequestedMachine || !requestedPeopleAvailable) {
+      return bestAvailable();
     }
-    const requested = options.find(row =>
+    const requested = rankedCandidates().find(row =>
       (!requestedMachine || row.machine_name === requestedMachine)
-      && (!requestedPeople || Number(row.people_count) === Number(requestedPeople))
+      && (!hasRequestedPeople || Number(row.people_count) === Number(requestedPeople))
     );
     if (requested) return requested;
     return null;
   }
-  return options.sort((left, right) => matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right))[0] || null;
+  return bestAvailable();
+}
+
+function resolveMatrixCandidates(material, matrixRows, requestedMachine, requestedPeople, maxPeople = null) {
+  const options = machineOptions(material, matrixRows);
+  const peopleLimit = Number(maxPeople || 0);
+  const hasRequestedPeople = requestedPeople !== null && requestedPeople !== undefined && requestedPeople !== '';
+  let candidates = peopleLimit > 0
+    ? options.filter(row => Number(row.people_count || 0) <= peopleLimit)
+    : options;
+  if (!candidates.length) candidates = options;
+  if (requestedMachine || hasRequestedPeople) {
+    const requested = candidates.filter(row =>
+      (!requestedMachine || row.machine_name === requestedMachine)
+      && (!hasRequestedPeople || Number(row.people_count) === Number(requestedPeople))
+    );
+    if (requested.length) return requested.sort(rankMatrixRows);
+  }
+  return candidates.sort(rankMatrixRows);
+}
+
+function applyMatrixToOperation(operation, matrix, calendar) {
+  const outputQty = toNumber(matrix.output_qty);
+  const dailyMinutes = Math.max(toNumber(calendar?.dailyMinutes), 1);
+  const dailySeconds = dailyMinutes * 60;
+  const sourceTimeSeconds = toNumber(matrix.time_seconds || toNumber(matrix.time_minutes) * 60);
+  const usesCycleTime = sourceTimeSeconds > 0 && sourceTimeSeconds < dailySeconds;
+  const timeSeconds = usesCycleTime ? sourceTimeSeconds : dailySeconds;
+  const minutesPerUnit = usesCycleTime
+    ? (sourceTimeSeconds / 60) / Math.max(outputQty, 1)
+    : dailyMinutes / Math.max(outputQty, 1);
+  const totalMinutes = Math.ceil(operation.produceQty * minutesPerUnit);
+  return {
+    ...operation,
+    machineName: matrix.machine_name,
+    machinePriority: matrixPriority(matrix),
+    peopleCount: Number(matrix.people_count),
+    outputQty,
+    outputUnit: matrix.output_unit || operation.unit || 'un',
+    timeSeconds,
+    dailyCapacity: productivityDailyCapacity(matrix, calendar),
+    minutesPerUnit,
+    totalMinutes
+  };
 }
 
 function productivityOptions(material, matrixRows) {
   return machineOptions(material, matrixRows)
+    .sort(rankMatrixRows)
     .map(row => ({
       machineName: row.machine_name,
+      machinePriority: matrixPriority(row),
       peopleCount: Number(row.people_count),
       outputQty: toNumber(row.output_qty),
       outputUnit: row.output_unit || material.primary_unit || 'un',
       timeSeconds: toNumber(row.time_seconds || toNumber(row.time_minutes) * 60),
       secondsPerUnit: matrixSecondsPerUnit(row)
-    }))
-    .sort((left, right) => left.secondsPerUnit - right.secondsPerUnit);
+    }));
 }
 
 function overrideForMaterial(overrides = {}, material, productionIndex = null) {
@@ -289,7 +391,7 @@ function operationForMaterial(material, state, productionOrder, context, request
   const produceQty = toNumber(state.produceQty);
   const operationScopedMaterial = productionIndex == null ? material : { ...material, operationId: `${productionIndex}:${material.id}`, productionIndex };
   const override = overrideForMaterial(operationOverrides, operationScopedMaterial, productionIndex);
-  const matrix = resolveMatrix(material, context.matrixRows, override?.machineName || requestedMachine, override?.peopleCount || requestedPeople);
+  const matrix = resolveMatrix(material, context.matrixRows, override?.machineName || requestedMachine, override?.peopleCount ?? requestedPeople);
   const inputs = selectedInputs(operationScopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex);
   const modelOptions = productionModelOptions(material, context.inputsByMaterialId, context.materialsById);
   const productionModelName = inputs[0]?.production_model_name || modelOptions[0]?.modelName || null;
@@ -308,7 +410,7 @@ function operationForMaterial(material, state, productionOrder, context, request
     productionModelName,
     productionModelOptions: modelOptions,
     machineName: matrix?.machine_name || null,
-    peopleCount: matrix?.people_count || null,
+    peopleCount: matrix?.people_count ?? null,
     productivityOptions: productivityOptions(material, context.matrixRows),
     productionOrder,
     children: []
@@ -321,7 +423,7 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
   const produceQty = toNumber(state.produceQty);
   const operationScopedMaterial = { ...material, operationId: `${productionIndex}:${material.id}`, productionIndex };
   const override = overrideForMaterial(operationOverrides, operationScopedMaterial, productionIndex);
-  const matrix = resolveMatrix(material, matrixRows, override?.machineName || requestedMachine, override?.peopleCount || requestedPeople);
+  const matrix = resolveMatrix(material, matrixRows, override?.machineName || requestedMachine, override?.peopleCount ?? requestedPeople);
   const node = {
     productionIndex,
     productionKey: `production-${productionIndex}`,
@@ -339,7 +441,7 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
     status: produceQty <= 0 ? 'Estoque suficiente' : 'Produzir diferença',
     isInitialRawMaterial: material.is_initial_raw_material === true,
     machineName: matrix?.machine_name || null,
-    peopleCount: matrix?.people_count || null,
+    peopleCount: matrix?.people_count ?? null,
     productivityOptions: productivityOptions(material, matrixRows),
     children: []
   };
@@ -765,7 +867,7 @@ function applyOperationSplits(operations, payload = {}) {
       stockQty: 0,
       stockUsedQty: 0,
       machineName: part.machineName || operation.machineName,
-      peopleCount: Number(part.peopleCount || operation.peopleCount || 0),
+      peopleCount: Number(part.peopleCount ?? operation.peopleCount ?? 0),
       startDate: part.startDate || operation.startDate,
       startTime: part.startTime || operation.startTime,
       productionModelName: part.productionModelName || operation.productionModelName,
@@ -861,31 +963,33 @@ function workWindowsForShift(date, shiftStart, shiftEnd, lunchStart, lunchEnd, d
 function normalizeShift(shift = {}, index = 0) {
   const defaultStart = index === 0 ? '07:00' : '17:00';
   const shiftStart = parseTime(shift.shiftStartTime, defaultStart);
-  const pauseMinutes = Math.max(toOperationalHours(shift.pauseHours ?? shift.lunchHours ?? 0), 0) * 60;
   const dailyMinutes = Math.max(toOperationalHours(shift.hoursPerDay || 8), 1 / 60) * 60;
-  const calculatedEnd = shiftStart + dailyMinutes + pauseMinutes;
+  const calculatedEnd = shiftStart + dailyMinutes;
   let shiftEnd = parseTime(shift.shiftEndTime, minutesToTime(calculatedEnd));
   if (shiftEnd <= shiftStart) shiftEnd += 24 * 60;
   shiftEnd = Math.max(shiftEnd, shiftStart + 1);
-  const pauseStart = shift.pauseStartTime
-    ? parseTime(shift.pauseStartTime, minutesToTime(shiftStart + Math.floor((shiftEnd - shiftStart - pauseMinutes) / 2)))
-    : index === 0 ? 12 * 60 : shiftStart + Math.max(Math.floor((shiftEnd - shiftStart - pauseMinutes) / 2), 0);
-  const pauseEnd = pauseStart + pauseMinutes;
-  const pauseOverlap = Math.max(Math.min(shiftEnd, pauseEnd) - Math.max(shiftStart, pauseStart), 0);
-  const availableMinutes = Math.max(shiftEnd - shiftStart - pauseOverlap, 1);
+  const availableMinutes = Math.max(shiftEnd - shiftStart, 1);
   const label = shift.label || `Turno ${index + 1}`;
   return {
     shiftStart,
     shiftEnd,
-    lunchStart: pauseStart,
-    lunchEnd: pauseEnd,
+    lunchStart: shiftStart,
+    lunchEnd: shiftStart,
     dailyMinutes: Math.min(dailyMinutes, availableMinutes),
     label,
     teamAvailable: defaultTeamAvailableForShift({ ...shift, label }, index)
   };
 }
 
-function calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours }) {
+function normalizeManualWorkDates(value = []) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map(item => String(item || '').slice(0, 10))
+    .filter(item => /^\d{4}-\d{2}-\d{2}$/.test(item) && (isWeekend(item) || Boolean(holidayForDate(item))))
+  )].sort();
+}
+
+function calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, manualWorkDates = [] }) {
   const normalizedShifts = (Array.isArray(shifts) && shifts.length ? shifts : [{
     hoursPerDay,
     shiftStartTime,
@@ -897,7 +1001,7 @@ function calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime
   const shiftStart = Math.min(...normalizedShifts.map(shift => shift.shiftStart));
   const shiftEnd = Math.max(...normalizedShifts.map(shift => shift.shiftEnd));
   const dailyMinutes = normalizedShifts.reduce((sum, shift) => sum + shift.dailyMinutes, 0);
-  return { shifts: normalizedShifts, shiftStart, shiftEnd, dailyMinutes };
+  return { shifts: normalizedShifts, shiftStart, shiftEnd, dailyMinutes, forceWorkDates: new Set(normalizeManualWorkDates(manualWorkDates)) };
 }
 
 function normalizeDailyTeamOverrides(value = {}) {
@@ -914,6 +1018,14 @@ function teamAvailableForShift(shift, date, dailyTeamOverrides = {}) {
   const overrides = dailyTeamOverrides?.[date] || {};
   const override = overrides[shift.label] ?? overrides[String(shift.label || '').replace(/^Turno\s*/i, 'T')];
   return override == null ? shift.teamAvailable : Math.max(toNumber(override), 0);
+}
+
+function maxAvailableTeam(calendar, dailyTeamOverrides = {}) {
+  const base = (calendar.shifts || []).reduce((max, shift) => Math.max(max, toNumber(shift.teamAvailable)), 0);
+  return Object.values(dailyTeamOverrides || {}).reduce((max, shifts) => {
+    if (!shifts || typeof shifts !== 'object') return max;
+    return Math.max(max, ...Object.values(shifts).map(toNumber));
+  }, base);
 }
 
 function workWindowsForDate(date, calendar) {
@@ -933,7 +1045,7 @@ function firstWindow(date, calendar) {
 function nextWorkStart(cursor, calendar) {
   let date = cursor.date;
   let minutes = cursor.minutes;
-  for (let guard = 0; guard < 370; guard += 1) {
+  for (let guard = 0; guard < MAX_WORKDAY_SEARCH_DAYS; guard += 1) {
     const windows = workWindowsForDate(date, calendar);
     for (const window of windows) {
       if (minutes <= window.start) return { date, minutes: window.start };
@@ -942,13 +1054,13 @@ function nextWorkStart(cursor, calendar) {
     date = addDays(date, 1);
     minutes = 0;
   }
-  return cursor;
+  throw planningSimulationError('Falha ao simular planejamento. Não foi encontrada janela de trabalho disponível nos próximos dias. Verifique turnos, calendário e matriz de produtividade.');
 }
 
 function previousWorkEnd(cursor, calendar) {
   let date = cursor.date;
   let minutes = cursor.minutes;
-  for (let guard = 0; guard < 370; guard += 1) {
+  for (let guard = 0; guard < MAX_WORKDAY_SEARCH_DAYS; guard += 1) {
     const windows = workWindowsForDate(date, calendar);
     for (const window of [...windows].reverse()) {
       if (minutes >= window.end) return { date, minutes: window.end };
@@ -957,7 +1069,7 @@ function previousWorkEnd(cursor, calendar) {
     date = addDays(date, -1);
     minutes = 24 * 60;
   }
-  return cursor;
+  throw planningSimulationError('Falha ao simular planejamento. Não foi encontrada janela de trabalho disponível nos dias anteriores. Verifique turnos, calendário e matriz de produtividade.');
 }
 
 function windowForCursor(cursor, calendar) {
@@ -969,7 +1081,12 @@ function scheduleForward(cursor, durationMinutes, calendar) {
   const start = nextWorkStart(cursor, calendar);
   let current = { ...start };
   let remaining = durationMinutes;
+  let guard = 0;
   while (remaining > 0) {
+    guard += 1;
+    if (guard > MAX_SCHEDULE_ITERATIONS) {
+      throw planningSimulationError('Falha ao simular planejamento. O motor excedeu o limite de ciclos ao calcular a agenda. Causa provável: capacidade, turnos ou produtividade insuficientes.');
+    }
     current = nextWorkStart(current, calendar);
     const window = windowForCursor(current, calendar);
     if (!window) {
@@ -989,7 +1106,12 @@ function scheduleBackward(cursor, durationMinutes, calendar) {
   const end = previousWorkEnd(cursor, calendar);
   let current = { ...end };
   let remaining = durationMinutes;
+  let guard = 0;
   while (remaining > 0) {
+    guard += 1;
+    if (guard > MAX_SCHEDULE_ITERATIONS) {
+      throw planningSimulationError('Falha ao simular planejamento. O motor excedeu o limite de ciclos ao recalcular a agenda. Causa provável: capacidade, turnos ou produtividade insuficientes.');
+    }
     current = previousWorkEnd(current, calendar);
     const window = workWindowsForDate(current.date, calendar)
       .find(item => current.minutes > item.start && current.minutes <= item.end);
@@ -1040,7 +1162,7 @@ function normalizeExistingSchedule(existingOperations, calendar, shiftStart, shi
         : segmentsForOperation(operation, calendar);
       const machineName = String(operation.machineName || '').trim();
       const peopleCount = Number(operation.peopleCount || 0);
-      if (!machineName || !(peopleCount > 0) || !segments.length) return null;
+      if (!machineName || peopleCount < 0 || !segments.length) return null;
       return {
         ...operation,
         operationId: operation.operationId || `existing:${index}`,
@@ -1057,9 +1179,98 @@ function normalizeExistingSchedule(existingOperations, calendar, shiftStart, shi
     .filter(Boolean);
 }
 
-function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, shifts, dailyTeamOverrides = {}, operationOverrides = {}, operationSplits = [], existingOperations = [] }) {
-  const calendar = calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours });
+function operationDailyCalendarCards(operation, calendar) {
+  if (operation.operationType === 'transport' || operation._existingScheduleBlocker) return [operation];
+  const segments = Array.isArray(operation.segments) ? operation.segments : [];
+  const parentId = String(operation.calendarParentOperationId || operation.splitParentOperationId || operation.operationId || operation.materialId || '');
+  if (!segments.length || !(toNumber(operation.produceQty) > 0)) {
+    return [{
+      ...operation,
+      productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
+      capacityPercent: operation.dailyCapacity?.capacityPerDay ? Number(((toNumber(operation.produceQty) / operation.dailyCapacity.capacityPerDay) * 100).toFixed(2)) : null,
+      sequence: operation.productionOrder
+    }];
+  }
+  const capacity = productivityDailyCapacity({
+    output_qty: operation.outputQty,
+    time_seconds: operation.timeSeconds
+  }, calendar);
+  if (!(capacity.capacityPerDay > 0)) return [operation];
+
+  const byDate = new Map();
+  for (const segment of segments) {
+    const date = segment.date || operation.startDate;
+    if (!date) continue;
+    const minutes = toNumber(segment.minutes || (
+      parseTime(segment.endTime, minutesToTime(calendar.shiftEnd)) - parseTime(segment.startTime, minutesToTime(calendar.shiftStart))
+    ));
+    if (!(minutes > 0)) continue;
+    if (!byDate.has(date)) byDate.set(date, { date, segments: [], minutes: 0 });
+    const entry = byDate.get(date);
+    entry.segments.push(segment);
+    entry.minutes += minutes;
+  }
+  const days = [...byDate.values()].sort((left, right) => left.date.localeCompare(right.date));
+  if (days.length <= 1) {
+    return [{
+      ...operation,
+      productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
+      capacityPercent: capacity.capacityPerDay ? Number(((toNumber(operation.produceQty) / capacity.capacityPerDay) * 100).toFixed(2)) : null,
+      sequence: operation.productionOrder
+    }];
+  }
+
+  let remainingQty = toNumber(operation.produceQty);
+  return days.map((day, index) => {
+    const isLast = index === days.length - 1;
+    const rawQty = capacity.secondsPerUnit > 0
+      ? (day.minutes * 60) / capacity.secondsPerUnit
+      : remainingQty;
+    const produceQty = isLast
+      ? remainingQty
+      : Math.min(remainingQty, Number(rawQty.toFixed(6)));
+    remainingQty = Math.max(remainingQty - produceQty, 0);
+    const firstSegment = day.segments[0];
+    const lastSegment = day.segments[day.segments.length - 1];
+    const originalQty = Math.max(toNumber(operation.produceQty), 1);
+    const dailyRatio = produceQty / originalQty;
+    return {
+      ...operation,
+      operationId: `${operation.operationId || operation.materialId}:day-${index + 1}`,
+      productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
+      calendarParentOperationId: operation.operationId || operation.materialId,
+      calendarDayIndex: index + 1,
+      calendarDayCount: days.length,
+      calendarDailyCapacity: capacity,
+      capacityPercent: capacity.capacityPerDay ? Number(((produceQty / capacity.capacityPerDay) * 100).toFixed(2)) : null,
+      quantity: produceQty,
+      duration: day.minutes,
+      sequence: toNumber(operation.productionOrder) + (index / 100),
+      produceQty,
+      daysNeeded: 1,
+      startDate: day.date,
+      startTime: firstSegment.startTime,
+      endDate: day.date,
+      endTime: lastSegment.endTime,
+      segments: day.segments.map(segment => ({ ...segment, date: day.date })),
+      productionBreakdown: Array.isArray(operation.productionBreakdown)
+        ? operation.productionBreakdown.map(item => ({
+            ...item,
+            quantity: Number((toNumber(item.quantity) * dailyRatio).toFixed(6))
+          }))
+        : operation.productionBreakdown
+    };
+  });
+}
+
+function calendarOperationsForSchedule(operations, calendar) {
+  return (Array.isArray(operations) ? operations : []).flatMap(operation => operationDailyCalendarCards(operation, calendar));
+}
+
+function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, shifts, setupHours = 0, dailyTeamOverrides = {}, operationOverrides = {}, operationSplits = [], existingOperations = [], manualWorkDates = [] }) {
+  const calendar = calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, manualWorkDates });
   const { shiftStart, shiftEnd } = calendar;
+  const setupMinutes = Math.max(Math.ceil(toOperationalHours(setupHours) * 60), 0);
   const teamOverrides = normalizeDailyTeamOverrides(dailyTeamOverrides);
   const scheduled = normalizeExistingSchedule(existingOperations, calendar, shiftStart, shiftEnd);
   const source = applyOperationSplits(groupOperations(operations), { operationSplits });
@@ -1075,37 +1286,40 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
         minutesPerUnit: 0
       };
     }
-    const matrix = resolveMatrix(
-      { name: operation.materialName, codes: operation.materialCode ? [operation.materialCode] : [] },
+    const override = overrideForMaterial(operationOverrides, operation);
+    const requestedMachine = override?.machineName || operation.machineName || null;
+    const requestedPeople = override?.peopleCount ?? operation.peopleCount ?? null;
+    const materialRef = { name: operation.materialName, codes: operation.materialCode ? [operation.materialCode] : [] };
+    const matrixCandidates = resolveMatrixCandidates(
+      materialRef,
       matrixRows,
-      operation.machineName,
-      operation.peopleCount
+      requestedMachine,
+      requestedPeople,
+      maxAvailableTeam(calendar, teamOverrides)
+    );
+    const matrix = matrixCandidates[0] || resolveMatrix(
+      materialRef,
+      matrixRows,
+      requestedMachine,
+      requestedPeople,
+      maxAvailableTeam(calendar, teamOverrides)
     );
     if (!matrix) {
-      const requested = [operation.machineName, operation.peopleCount ? `${operation.peopleCount} pessoa(s)` : null].filter(Boolean).join(' / ');
+      const hasOperationPeople = operation.peopleCount !== null && operation.peopleCount !== undefined && operation.peopleCount !== '';
+      const requested = [operation.machineName, hasOperationPeople ? `${operation.peopleCount} pessoa(s)` : null].filter(Boolean).join(' / ');
       const suffix = requested ? ` para ${requested}` : '';
       const error = new Error(`Nenhuma produtividade ativa encontrada para ${operation.materialName}${suffix}. Cadastre a matriz de produtividade ou selecione uma maquina/equipe valida.`);
       error.status = 404;
       throw error;
     }
-    const timeSeconds = toNumber(matrix.time_seconds || toNumber(matrix.time_minutes) * 60);
-    const timeMinutes = timeSeconds / 60;
-    const minutesPerUnit = timeMinutes / Math.max(toNumber(matrix.output_qty), 1);
-    const totalMinutes = Math.ceil(operation.produceQty * minutesPerUnit);
-    if (!matrix.machine_name || !(Number(matrix.people_count) > 0) || !(timeSeconds > 0) || !(toNumber(matrix.output_qty) > 0)) {
-      const error = new Error(`Matriz de produtividade invalida para ${operation.materialName}. Informe maquina, pessoas, quantidade produzida e tempo maiores que zero.`);
+    if (!matrix.machine_name || !Number.isInteger(Number(matrix.people_count)) || Number(matrix.people_count) < 0 || !(toNumber(matrix.output_qty) > 0)) {
+      const error = new Error(`Matriz de produtividade invalida para ${operation.materialName}. Informe maquina, pessoas inteiras maiores ou iguais a zero e quantidade diaria maior que zero.`);
       error.status = 400;
       throw error;
     }
     return {
-      ...operation,
-      machineName: matrix.machine_name,
-      peopleCount: Number(matrix.people_count),
-      outputQty: toNumber(matrix.output_qty),
-      outputUnit: matrix.output_unit || operation.unit || 'un',
-      timeSeconds,
-      minutesPerUnit,
-      totalMinutes
+      ...applyMatrixToOperation(operation, matrix, calendar),
+      matrixCandidates
     };
   };
 
@@ -1233,6 +1447,40 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     ) || calendar.shifts[0];
   }
 
+  function sameShiftSegment(left, right) {
+    const shift = shiftForSegment(right);
+    return left.date === right.date
+      && left.end > shift.shiftStart
+      && left.start < shift.shiftEnd;
+  }
+
+  function setupConflict(operation, slot, scheduleCalendar) {
+    if (!setupMinutes || operation.operationType === 'transport') return null;
+    const machineName = String(operation.machineName || '').trim().toLowerCase();
+    const currentMaterialKey = materialSetupKey(operation);
+    for (const segment of segmentsForSlot(slot, operation, scheduleCalendar)) {
+      const previous = scheduled
+        .filter(item => item.operationType !== 'transport')
+        .flatMap(operationSegments)
+        .filter(item =>
+          String(item.operation.machineName || '').trim().toLowerCase() === machineName
+          && item.end <= segment.start
+          && sameShiftSegment(item, segment)
+        )
+        .sort((left, right) => left.end - right.end)
+        .at(-1);
+      if (!previous || materialSetupKey(previous.operation) === currentMaterialKey) continue;
+      const availableStart = previous.end + setupMinutes;
+      if (segment.start < availableStart) {
+        return {
+          date: segment.date,
+          minutes: availableStart
+        };
+      }
+    }
+    return null;
+  }
+
   function machineConflict(operation, slot, scheduleCalendar) {
     if (operation.operationType === 'transport') return null;
     const machineName = String(operation.machineName || '').trim().toLowerCase();
@@ -1259,11 +1507,12 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
   function capacityConflict(operation, slot, scheduleCalendar) {
     if (operation.operationType === 'transport') return null;
     const people = Number(operation.peopleCount || 0);
-    if (!(people > 0)) {
-      const error = new Error(`Quantidade de pessoas invalida para ${operation.materialName}. Selecione uma equipe maior que zero.`);
+    if (people < 0) {
+      const error = new Error(`Quantidade de pessoas invalida para ${operation.materialName}. Selecione uma equipe maior ou igual a zero.`);
       error.status = 400;
       throw error;
     }
+    if (people === 0) return null;
     for (const segment of segmentsForSlot(slot, operation, scheduleCalendar)) {
       const shift = shiftForSegment(segment);
       const available = teamAvailableForShift(shift, segment.date, teamOverrides);
@@ -1311,20 +1560,33 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
   function scheduleForwardWithCapacity(cursor, operation, scheduleCalendar) {
     let nextCursor = cursor;
     for (let guard = 0; guard < 1000; guard += 1) {
-      const slot = scheduleForward(nextCursor, operation.totalMinutes, scheduleCalendar);
-      const machineBlock = machineConflict(operation, slot, scheduleCalendar);
-      if (machineBlock) {
-        nextCursor = nextWorkStart(machineBlock, scheduleCalendar);
-        continue;
+      const candidates = Array.isArray(operation.matrixCandidates) && operation.matrixCandidates.length
+        ? operation.matrixCandidates
+        : [null];
+      const conflicts = [];
+      for (const matrix of candidates) {
+        const candidate = matrix ? applyMatrixToOperation(operation, matrix, scheduleCalendar) : operation;
+        const slot = scheduleForward(nextCursor, candidate.totalMinutes, scheduleCalendar);
+        const machineBlock = machineConflict(candidate, slot, scheduleCalendar);
+        if (machineBlock) {
+          conflicts.push(machineBlock);
+          continue;
+        }
+        const setupBlock = setupConflict(candidate, slot, scheduleCalendar);
+        if (setupBlock) {
+          conflicts.push(setupBlock);
+          continue;
+        }
+        const conflict = capacityConflict(candidate, slot, scheduleCalendar);
+        if (conflict) {
+          conflicts.push(conflict);
+          continue;
+        }
+        const dependencyConflict = dependencyFlowConflict(candidate, slot, scheduleCalendar);
+        if (!dependencyConflict) return { slot, operation: candidate };
+        conflicts.push(dependencyConflict);
       }
-      const conflict = capacityConflict(operation, slot, scheduleCalendar);
-      if (conflict) {
-        nextCursor = nextWorkStart(conflict, scheduleCalendar);
-        continue;
-      }
-      const dependencyConflict = dependencyFlowConflict(operation, slot, scheduleCalendar);
-      if (!dependencyConflict) return slot;
-      nextCursor = nextWorkStart(dependencyConflict, scheduleCalendar);
+      nextCursor = nextWorkStart(minCursor(...conflicts) || { date: nextCursor.date, minutes: nextCursor.minutes + 1 }, scheduleCalendar);
     }
     const error = new Error(`Nao foi possivel encaixar ${operation.materialName} respeitando a capacidade de pessoas.`);
     error.status = 400;
@@ -1352,11 +1614,14 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       const operationCursor = operation.startDate ? { date: operation.startDate, minutes: parseTime(operation.startTime, minutesToTime(shiftStart)) } : null;
       const overrideCursor = overrideStartCursor(override, startCursor.date, shiftStart) || operationCursor;
       const cursor = maxCursor(overrideCursor || startCursor, dependencyEnd);
-      const operationCalendar = withForcedWorkDate(calendar, overrideCursor?.date || operationCursor?.date);
-      const slot = scheduleForwardWithCapacity(cursor, operation, operationCalendar);
-      const item = scheduledItem(operation, slot, operationCalendar);
+      const operationCalendar = calendar;
+      const scheduledSlot = scheduleForwardWithCapacity(cursor, operation, operationCalendar);
+      const item = scheduledItem(scheduledSlot.operation, scheduledSlot.slot, operationCalendar);
       scheduledByMaterialId.set(String(operation.operationId || operation.materialId), item);
       scheduled.push(item);
+    }
+    if (pending.length) {
+      throw planningSimulationError('Falha ao simular planejamento. O motor excedeu o limite de ciclos ao ordenar as operações. Causa provável: dependências ou divisão de operações inconsistentes.');
     }
   }
 
@@ -1387,6 +1652,9 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       scheduledByMaterialId.set(String(operation.operationId || operation.materialId), item);
       if (operation.operationType !== 'transport') reverseMachine.set(operation.machineName || '', slot.start);
       scheduled.push(item);
+    }
+    if (pending.length) {
+      throw planningSimulationError('Falha ao simular planejamento. O motor excedeu o limite de ciclos ao replanejar operações. Causa provável: dependências ou divisão de operações inconsistentes.');
     }
   }
 
@@ -1487,7 +1755,7 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
     .sort(compareOperationsByStart);
   const requestedIndex = operations.findIndex(operation => operationMatchesChange(operation, change));
   if (requestedIndex < 0 && (change.operationId || change.materialId)) {
-    const error = new Error('OperaÃ§Ã£o do planejamento nÃ£o encontrada.');
+    const error = new Error('Operação do planejamento não encontrada.');
     error.status = 404;
     throw error;
   }
@@ -1502,6 +1770,7 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
     ...(meta.dailyTeamOverrides || {}),
     ...(change.dailyTeamOverrides || {})
   });
+  const manualWorkDates = normalizeManualWorkDates(change.manualWorkDates || meta.manualWorkDates || []);
   if (change.capacityDate && change.capacityOverrides) {
     dailyTeamOverrides[change.capacityDate] = {
       ...(dailyTeamOverrides[change.capacityDate] || {}),
@@ -1513,7 +1782,7 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
     if (change.capacityDate && change.capacityOverrides && operations.length) {
       const shifts = fallbackShiftsForSavedPlan(plan, operations);
       const scheduled = operations.map((operation, index) => index === 0
-        ? { ...operation, _planningMeta: { ...meta, shifts, dailyTeamOverrides } }
+        ? { ...operation, _planningMeta: { ...meta, shifts, setupHours: meta.setupHours || 0, dailyTeamOverrides, manualWorkDates } }
         : operation);
       return {
         operations: scheduled,
@@ -1523,11 +1792,12 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
           planningEndDate: plan.end_date,
           shifts,
           dailyTeamOverrides,
+          manualWorkDates,
           productions: meta.productions || []
         }
       };
     }
-    const error = new Error('OperaÃ§Ã£o do planejamento nÃ£o encontrada.');
+    const error = new Error('Operação do planejamento não encontrada.');
     error.status = 404;
     throw error;
   }
@@ -1535,7 +1805,7 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
   const today = new Date().toISOString().slice(0, 10);
   const targetDate = change.startDate || change.date || targetOperation.startDate;
   if (targetOperation.startDate < today || targetDate < today) {
-    const error = new Error('ProduÃ§Ãµes anteriores a hoje sÃ£o somente leitura.');
+    const error = new Error('Produções anteriores a hoje são somente leitura.');
     error.status = 400;
     throw error;
   }
@@ -1548,9 +1818,13 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
     startDate: change.startDate || targetOperation.startDate,
     startTime: change.startTime || targetOperation.startTime
   };
+  const movedBackward = compareCursor(
+    { date: changedOperation.startDate, minutes: parseTime(changedOperation.startTime, minutesToTime(calendarFromPayload({ shifts: meta.shifts || fallbackShiftsForSavedPlan(plan, operations) }).shiftStart)) },
+    { date: targetOperation.startDate, minutes: parseTime(targetOperation.startTime, '00:00') }
+  ) < 0;
 
   const source = operations.map((operation, index) => {
-    if (index < targetIndex) return { ...operation };
+    if (!movedBackward && index < targetIndex) return { ...operation };
     const base = index === targetIndex ? changedOperation : { ...operation };
     return {
       ...base,
@@ -1568,9 +1842,11 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
     selectedDate: changedOperation.startDate,
     hoursPerDay: plan.hours_per_day || 8,
     shifts,
-    dailyTeamOverrides
+    setupHours: meta.setupHours || 0,
+    dailyTeamOverrides,
+    manualWorkDates
   }).map((operation, index) => index === 0
-    ? { ...operation, _planningMeta: { shifts, dailyTeamOverrides } }
+      ? { ...operation, _planningMeta: { shifts, setupHours: meta.setupHours || 0, dailyTeamOverrides, manualWorkDates } }
     : operation);
   const days = buildDays(scheduled, plan.planned_unit);
   return {
@@ -1581,6 +1857,7 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
       planningEndDate: plan.end_date,
       shifts,
       dailyTeamOverrides,
+      manualWorkDates,
       productions: meta.productions || []
     }
   };
@@ -1639,11 +1916,23 @@ function buildSinglePlan(payload, context) {
     shiftStartTime: payload.shiftStartTime,
     shiftEndTime: payload.shiftEndTime,
     lunchHours: payload.lunchHours,
+    shifts: payload.shifts,
+    setupHours: payload.setupHours,
     dailyTeamOverrides: payload.dailyTeamOverrides,
+    manualWorkDates: payload.manualWorkDates,
     operationOverrides,
     operationSplits: payload.operationSplits,
     existingOperations: context.existingOperations
   });
+  const scheduleCalendar = calendarFromPayload({
+    shifts: payload.shifts,
+    hoursPerDay: payload.hoursPerDay,
+    shiftStartTime: payload.shiftStartTime,
+    shiftEndTime: payload.shiftEndTime,
+    lunchHours: payload.lunchHours,
+    manualWorkDates: payload.manualWorkDates
+  });
+  const manualWorkDates = normalizeManualWorkDates(payload.manualWorkDates);
   const days = buildDays(operations, material.primary_unit);
   const hoursPerDay = shiftAvailableHours({
     hoursPerDay: payload.hoursPerDay,
@@ -1665,20 +1954,33 @@ function buildSinglePlan(payload, context) {
       plannedQty: toNumber(payload.plannedQty),
       plannedUnit: material.primary_unit,
       machineName: finalOperation?.machineName || payload.machineName || null,
-      peopleCount: finalOperation?.peopleCount || Number(payload.peopleCount || 0) || null,
+      peopleCount: finalOperation?.peopleCount ?? (payload.peopleCount == null || payload.peopleCount === '' ? null : Number(payload.peopleCount)),
       dateMode: payload.dateMode || 'start',
       selectedDate: payload.selectedDate || payload.startDate,
       hoursPerDay,
       shiftStartTime: payload.shiftStartTime || '07:12',
       shiftEndTime: payload.shiftEndTime || '16:00',
-      lunchHours: toOperationalHours(payload.lunchHours || 0),
+      lunchHours: 0,
+      shifts: Array.isArray(payload.shifts) && payload.shifts.length ? payload.shifts : [{
+        hoursPerDay: payload.hoursPerDay,
+        shiftStartTime: payload.shiftStartTime,
+        shiftEndTime: payload.shiftEndTime,
+        pauseHours: 0
+      }],
+      dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides),
+      manualWorkDates,
+      manualConstraints: Array.isArray(payload.manualConstraints) ? payload.manualConstraints : [],
+      setupHours: toOperationalHours(payload.setupHours || 0),
       startDate,
       endDate,
       daysNeeded: uniqueDaysNeeded,
       hasPastStart: (payload.dateMode || 'start') === 'end' && new Date(`${startDate}T00:00:00`) < new Date(`${dateKey(new Date())}T00:00:00`)
     },
     tree,
-    operations,
+    operations: operations.map((operation, index) => index === 0
+      ? { ...operation, _planningMeta: { shifts: Array.isArray(payload.shifts) && payload.shifts.length ? payload.shifts : [{ hoursPerDay: payload.hoursPerDay, shiftStartTime: payload.shiftStartTime, shiftEndTime: payload.shiftEndTime, pauseHours: 0 }], setupHours: toOperationalHours(payload.setupHours || 0), dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides), manualWorkDates } }
+      : operation),
+    calendarOperations: calendarOperationsForSchedule(operations, scheduleCalendar),
     days
   };
 }
@@ -1733,7 +2035,7 @@ function expandRootSplitProductions(payload, productions) {
         ...production,
         plannedQty: toNumber(part.quantity),
         machineName: part.machineName || production.machineName,
-        peopleCount: Number(part.peopleCount || production.peopleCount || 0),
+        peopleCount: Number(part.peopleCount ?? production.peopleCount ?? 0),
         productionModelName: part.productionModelName || production.productionModelName,
         desiredDate: part.startDate || production.desiredDate || null,
         splitStartDate: part.startDate || null,
@@ -1846,7 +2148,9 @@ export function buildPlan(payload, context) {
     shiftEndTime: payload.shiftEndTime,
     lunchHours: payload.lunchHours,
     shifts: payload.shifts,
+    setupHours: payload.setupHours,
     dailyTeamOverrides: payload.dailyTeamOverrides,
+    manualWorkDates: payload.manualWorkDates,
     operationOverrides,
     operationSplits: expanded.operationSplits,
     existingOperations: context.existingOperations
@@ -1858,6 +2162,15 @@ export function buildPlan(payload, context) {
     ? payload.shifts
     : [{ hoursPerDay: payload.hoursPerDay, shiftStartTime: payload.shiftStartTime, shiftEndTime: payload.shiftEndTime, pauseHours: payload.lunchHours }];
   const hoursPerDay = shifts.reduce((sum, shift) => sum + shiftAvailableHours(shift), 0) || Math.max(toOperationalHours(payload.hoursPerDay || 8), 1 / 60);
+  const scheduleCalendar = calendarFromPayload({
+    shifts: payload.shifts,
+    hoursPerDay: payload.hoursPerDay,
+    shiftStartTime: payload.shiftStartTime,
+    shiftEndTime: payload.shiftEndTime,
+    lunchHours: payload.lunchHours,
+    manualWorkDates: payload.manualWorkDates
+  });
+  const manualWorkDates = normalizeManualWorkDates(payload.manualWorkDates);
   const selectedDate = payload.planningStartDate || payload.selectedDate || payload.startDate;
   const startDate = operations.length ? operations[0].startDate : selectedDate;
   const endDate = operations.length ? operations[operations.length - 1].endDate : payload.planningEndDate || selectedDate;
@@ -1874,7 +2187,7 @@ export function buildPlan(payload, context) {
       plannedQty,
       plannedUnit: productions.length === 1 ? firstMaterial.primary_unit : 'itens',
       machineName: finalOperation?.machineName || null,
-      peopleCount: finalOperation?.peopleCount ? Number(finalOperation.peopleCount) : null,
+      peopleCount: finalOperation?.peopleCount == null ? null : Number(finalOperation.peopleCount),
       dateMode: 'start',
       selectedDate,
       hoursPerDay,
@@ -1885,6 +2198,9 @@ export function buildPlan(payload, context) {
       planningEndDate: payload.planningEndDate || endDate,
       shifts,
       dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides),
+      manualWorkDates,
+      manualConstraints: Array.isArray(payload.manualConstraints) ? payload.manualConstraints : [],
+      setupHours: toOperationalHours(payload.setupHours || 0),
       existingOperations: existingScheduleBlockers,
       productions: productions.map(production => ({
         productionIndex: production.productionIndex,
@@ -1897,7 +2213,7 @@ export function buildPlan(payload, context) {
         plannedQty: production.plannedQty,
         plannedUnit: production.material.primary_unit,
         machineName: production.machineName || null,
-        peopleCount: Number(production.peopleCount || 0) || null,
+        peopleCount: production.peopleCount == null || production.peopleCount === '' ? null : Number(production.peopleCount),
         desiredDate: production.desiredDate || null,
         productionModelName: production.productionModelName || null
       })),
@@ -1907,7 +2223,10 @@ export function buildPlan(payload, context) {
       hasPastStart: false
     },
     tree,
-    operations,
+    operations: operations.map((operation, index) => index === 0
+      ? { ...operation, _planningMeta: { shifts, setupHours: toOperationalHours(payload.setupHours || 0), dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides), manualWorkDates, productions: productions.map(production => ({ productionIndex: production.productionIndex, productionKey: `production-${production.productionIndex}`, title: production.productionTitle || `ProduÃ§Ã£o ${production.productionIndex + 1}`, color: production.color || null, materialId: production.material.id, materialName: production.material.name, materialCode: materialCode(production.material), plannedQty: production.plannedQty, plannedUnit: production.material.primary_unit, machineName: production.machineName || null, peopleCount: production.peopleCount == null || production.peopleCount === '' ? null : Number(production.peopleCount), desiredDate: production.desiredDate || null, productionModelName: production.productionModelName || null })) } }
+      : operation),
+    calendarOperations: calendarOperationsForSchedule(operations, scheduleCalendar),
     days
   };
 }

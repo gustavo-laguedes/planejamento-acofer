@@ -9,6 +9,7 @@ import { SummaryCards } from '../shared/SummaryCard.js';
 import { PlanningStatusPill } from '../shared/StatusPill.js';
 
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
+const STOCK_MINIMUM_DAYS_KEY = 'acofer.stock.minimumDays';
 const PRODUCTION_THEMES = [
   { start: '#2F343B', end: '#6B7280', soft: '#F4F6F8', border: '#2F343B', text: '#1F2937', card: '#F4F6F8' },
   { start: '#376C8A', end: '#9BBBD0', soft: '#EEF6FA', border: '#4D86A6', text: '#18384A', card: '#EEF6FA' },
@@ -104,6 +105,46 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function normalizeText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function readStockMinimumDays() {
+  const value = String(localStorage.getItem(STOCK_MINIMUM_DAYS_KEY) || '').trim();
+  if (!/^\d+$/.test(value)) return null;
+  const days = Number(value);
+  return Number.isInteger(days) && days > 0 ? days : null;
+}
+
+function stockProjectionSalesPerDay(row = {}) {
+  const value = Number(row.sales_per_day ?? row.salesPerDayQty ?? row.salesPerDay);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function stockProjectionDurationDays(row = {}) {
+  const salesPerDay = stockProjectionSalesPerDay(row);
+  const estimatedStock = Number(row.estimated_stock ?? row.estimatedStock);
+  if (!salesPerDay || !Number.isFinite(estimatedStock)) return null;
+  return Math.max(estimatedStock, 0) / salesPerDay;
+}
+
+function materialLookupKeys(row = {}) {
+  return [
+    row.material_id,
+    row.materialId,
+    row.material_name,
+    row.materialName,
+    row.material_code,
+    row.materialCode,
+    ...(Array.isArray(row.material_codes) ? row.material_codes : []),
+    ...(Array.isArray(row.codes) ? row.codes : [])
+  ].map(normalizeText).filter(Boolean);
 }
 
 function isHexColor(value) {
@@ -296,8 +337,14 @@ function generatePlanningCode(productionCount = 1, date = new Date()) {
 }
 
 function matrixSecondsPerUnit(row) {
+  const outputQty = Math.max(Number(row.output_qty || 1), 1);
   const timeSeconds = Number(row.time_seconds || Number(row.time_minutes || 0) * 60);
-  return timeSeconds / Math.max(Number(row.output_qty || 1), 1);
+  return timeSeconds > 0 ? timeSeconds / outputQty : 1 / outputQty;
+}
+
+function matrixPriority(row) {
+  const priority = Number(row?.machine_priority || 1);
+  return Number.isFinite(priority) && priority > 0 ? priority : 1;
 }
 
 function chips(values = [], emptyText = 'Sem informa&ccedil;&atilde;o') {
@@ -322,6 +369,17 @@ function minutesToTime(minutes) {
   return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
 }
 
+function productiveMinutes(value, fallback = 8.8) {
+  return Math.max(Math.round(parsePtBrDecimal(value, fallback) * 60), 1);
+}
+
+function formatProductiveMinutes(minutes) {
+  const safeMinutes = Math.max(Math.round(Number(minutes) || 0), 0);
+  const hours = Math.floor(safeMinutes / 60);
+  const mins = safeMinutes % 60;
+  return mins ? `${hours}h${String(mins).padStart(2, '0')}` : `${hours}h`;
+}
+
 function timeToMinutes(value) {
   const [hours, minutes] = String(value || '00:00').split(':').map(Number);
   return (Number(hours) || 0) * 60 + (Number(minutes) || 0);
@@ -329,21 +387,38 @@ function timeToMinutes(value) {
 
 function defaultShift(index = 0, startTime = null) {
   const shiftStartTime = startTime || (index === 0 ? '07:00' : '17:00');
-  const hoursPerDay = '8,48';
-  const pauseHours = '1,12';
+  const hoursPerDay = index === 0 ? '8,48' : '6';
+  const pauseHours = '0';
   const shiftEndMinutes = timeToMinutes(shiftStartTime)
-    + (parsePtBrDecimal(hoursPerDay, 8.8) * 60)
-    + (parsePtBrDecimal(pauseHours, 1.2) * 60);
+    + productiveMinutes(hoursPerDay, index === 0 ? 8.8 : 6);
   return {
     id: `shift-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     label: `Turno ${index + 1}`,
     hoursPerDay,
     shiftStartTime,
-    pauseLabel: index === 0 ? 'Horas de almo&ccedil;o' : 'Horas de janta',
+    pauseLabel: 'Horas de pausa',
     pauseHours,
     shiftEndTime: minutesToTime(shiftEndMinutes),
     teamAvailable: DEFAULT_TEAM_AVAILABLE
   };
+}
+
+function normalizeShiftTimes(shifts = []) {
+  let cursor = timeToMinutes('07:00');
+  return shifts.map((shift, index) => {
+    const dailyMinutes = productiveMinutes(shift.hoursPerDay, index === 0 ? 8.8 : 6);
+    const start = index === 0 ? timeToMinutes(shift.shiftStartTime || '07:00') : cursor;
+    const normalized = {
+      ...shift,
+      label: `Turno ${index + 1}`,
+      shiftStartTime: minutesToTime(start),
+      pauseLabel: 'Horas de pausa',
+      pauseHours: '0',
+      shiftEndTime: minutesToTime(start + dailyMinutes)
+    };
+    cursor = start + dailyMinutes;
+    return normalized;
+  });
 }
 
 function defaultTeamAvailableForShift(value, index = 0) {
@@ -389,7 +464,7 @@ function productionTheme(index = 0, color = null) {
     const border = String(color).toUpperCase();
     return {
       start: border,
-      end: mixHex(border, '#FFFFFF', 0.46),
+      end: border,
       soft: mixHex(border, '#FFFFFF', 0.9),
       border,
       text: '#1F2937',
@@ -445,6 +520,7 @@ function defaultDraft() {
     operationOverrides: {},
     operationSplits: [],
     dailyTeamOverrides: {},
+    setupHours: '',
     lastPayload: null,
     currentSimulation: null
   };
@@ -462,17 +538,19 @@ function normalizeDraft(rawDraft) {
     operationOverrides: draft.operationOverrides && typeof draft.operationOverrides === 'object' ? draft.operationOverrides : {},
     operationSplits: Array.isArray(draft.operationSplits) ? draft.operationSplits : [],
     dailyTeamOverrides: draft.dailyTeamOverrides && typeof draft.dailyTeamOverrides === 'object' ? draft.dailyTeamOverrides : {},
+    setupHours: draft.setupHours ?? '',
     lastPayload: draft.lastPayload && typeof draft.lastPayload === 'object' ? draft.lastPayload : null,
     currentSimulation: draft.currentSimulation && typeof draft.currentSimulation === 'object' ? draft.currentSimulation : null
   };
-  normalized.shifts = normalized.shifts.map((shift, index) => ({
+  normalized.shifts = normalizeShiftTimes(normalized.shifts.map((shift, index) => ({
     ...defaultShift(index, shift.shiftStartTime),
     ...shift,
     id: shift.id || `shift-${index}-${Date.now()}`,
     label: `Turno ${index + 1}`,
-    pauseLabel: shift.pauseLabel || (index === 0 ? 'Horas de almo&ccedil;o' : 'Horas de janta'),
+    pauseLabel: 'Horas de pausa',
+    pauseHours: '0',
     teamAvailable: defaultTeamAvailableForShift(shift.teamAvailable, index)
-  }));
+  })));
   normalized.productions = normalized.productions.map((production, index) => ({
     ...emptyProduction(index),
     ...production,
@@ -522,6 +600,8 @@ export function PlanningPage() {
   let draft = loadDraft();
   let lastPayload = draft.lastPayload || null;
   let currentSimulation = draft.currentSimulation || null;
+  let currentPlanningStockAlerts = new Map();
+  let planningStockAlertRequestId = 0;
   let hasPendingSimulationChanges = false;
   let autosaveTimer = null;
   let recalculationTimer = null;
@@ -532,7 +612,7 @@ export function PlanningPage() {
     window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message || error }));
   }
 
-  function setOperationLoading(active, text = 'Atualizando calendario...') {
+  function setOperationLoading(active, text = 'Organizando produção...') {
     const resultsTarget = target.querySelector('.planning-results:not([hidden])');
     const loadingHost = resultsTarget || target.querySelector('.planning-builder-panel') || target;
     if (!loadingHost) return;
@@ -560,6 +640,25 @@ export function PlanningPage() {
       return await action();
     } finally {
       setOperationLoading(false);
+    }
+  }
+
+  async function simulatePlanningRequest(body) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 30000);
+    try {
+      return await api('/planning/simulate', { method: 'POST', body, signal: controller.signal });
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error('Falha ao simular planejamento. A simulação excedeu o tempo limite. Verifique a matriz de produtividade e tente novamente.');
+      }
+      const message = String(error?.message || '').trim();
+      if (/failed to fetch|networkerror|abort/i.test(message)) {
+        throw new Error('Falha ao simular planejamento. Verifique a matriz de produtividade e tente novamente.');
+      }
+      throw new Error(message || 'Falha ao simular planejamento. Verifique a matriz de produtividade e tente novamente.');
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }
 
@@ -604,8 +703,12 @@ export function PlanningPage() {
   function matchingMatrix(material) {
     const codes = new Set((material?.codes || []).map(code => String(code).toLowerCase()));
     return matrix
+      .filter(row => row.active !== false)
       .filter(row => row.material_name === material?.name || (row.material_codes || []).some(code => codes.has(String(code).toLowerCase())))
-      .sort((left, right) => matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right));
+      .sort((left, right) =>
+        matrixPriority(left) - matrixPriority(right)
+        || matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right)
+      );
   }
 
   function hydrateProductionDefaults(production) {
@@ -619,8 +722,8 @@ export function PlanningPage() {
     const people = [...new Set(rows
       .filter(row => !production.machineName || row.machine_name === production.machineName)
       .map(row => row.people_count)
-      .filter(Boolean))];
-    if (!production.peopleCount && people[0]) production.peopleCount = String(people[0]);
+      .filter(value => value !== null && value !== undefined && value !== ''))];
+    if ((production.peopleCount === null || production.peopleCount === undefined || production.peopleCount === '') && people.length) production.peopleCount = String(people[0]);
   }
 
   async function loadLookups() {
@@ -698,15 +801,16 @@ export function PlanningPage() {
       machineName: firstProduction.machineName,
       peopleCount: Number(firstProduction.peopleCount),
       productionModelName: firstProduction.productionModelName,
-      shifts: draft.shifts.map((shift, index) => ({
+      shifts: normalizeShiftTimes(draft.shifts).map((shift, index) => ({
         label: shift.label,
         hoursPerDay: String(shift.hoursPerDay || '').trim() || '8,48',
         shiftStartTime: shift.shiftStartTime,
         pauseLabel: shift.pauseLabel,
-        pauseHours: String(shift.pauseHours || '').trim() || '0',
+        pauseHours: '0',
         shiftEndTime: shift.shiftEndTime,
         teamAvailable: defaultTeamAvailableForShift(shift.teamAvailable, index)
       })),
+      setupHours: parsePtBrDecimal(draft.setupHours, 0),
       productions: productionPayload(),
       stockOnlyMaterials: stockOnlyMaterialsForPayload(),
       operationOverrides: draft.operationOverrides || {},
@@ -753,6 +857,16 @@ export function PlanningPage() {
               productionColor: isHexColor(item.productionColor) ? item.productionColor : colorForIndex(item.productionIndex)
             }))
           : operation.productionBreakdown
+      })),
+      calendarOperations: (result.calendarOperations || []).map(operation => ({
+        ...operation,
+        productionColor: isHexColor(operation.productionColor) ? operation.productionColor : colorForIndex(operation.productionIndex),
+        productionBreakdown: Array.isArray(operation.productionBreakdown)
+          ? operation.productionBreakdown.map(item => ({
+              ...item,
+              productionColor: isHexColor(item.productionColor) ? item.productionColor : colorForIndex(item.productionIndex)
+            }))
+          : operation.productionBreakdown
       }))
     };
   }
@@ -767,6 +881,102 @@ export function PlanningPage() {
       if (key && !keys.includes(key)) keys.push(key);
     });
     return keys;
+  }
+
+  function cloneDraftPlanningState() {
+    return {
+      operationOverrides: JSON.parse(JSON.stringify(draft.operationOverrides || {})),
+      operationSplits: JSON.parse(JSON.stringify(draft.operationSplits || [])),
+      lastPayload,
+      currentSimulation
+    };
+  }
+
+  function restoreDraftPlanningState(snapshot) {
+    draft.operationOverrides = snapshot.operationOverrides;
+    draft.operationSplits = snapshot.operationSplits;
+    lastPayload = snapshot.lastPayload;
+    currentSimulation = snapshot.currentSimulation;
+    draft.lastPayload = lastPayload;
+    draft.currentSimulation = currentSimulation;
+    saveDraftNow();
+    refreshTimelineOnly();
+  }
+
+  function findSimulationOperation(detail = {}) {
+    const candidates = [detail.operationId, detail.sourceOperationId]
+      .filter(Boolean)
+      .map(String);
+    const operations = Array.isArray(currentSimulation?.operations) ? currentSimulation.operations : [];
+    return operations.find(operation => {
+      const operationId = String(operation.operationId || operation.materialId);
+      return candidates.includes(operationId);
+    }) || operations.find(operation =>
+      String(operation.materialId || '') === String(detail.materialId || '')
+      && Number(operation.productionIndex || 0) === Number(detail.productionIndex || 0)
+    ) || null;
+  }
+
+  function treeForProductionIndex(tree, productionIndex) {
+    const index = Number(productionIndex || 0);
+    const roots = tree?.children?.length && isPlanningRootName(tree.materialName) ? tree.children : tree ? [tree] : [];
+    return roots.find(node => Number(node.productionIndex || 0) === index) || roots[0] || null;
+  }
+
+  function hasMinimumRawMaterialForStart(tree, productionIndex) {
+    const root = treeForProductionIndex(tree, productionIndex);
+    let hasEnough = true;
+    function visit(node) {
+      if (!node || !hasEnough) return;
+      const requiredQty = Number(node.requiredQty || 0);
+      const stockQty = Number(node.stockQty || 0);
+      if (node.isInitialRawMaterial && requiredQty > 0 && stockQty < requiredQty * 0.3) {
+        hasEnough = false;
+        return;
+      }
+      (node.children || []).forEach(visit);
+    }
+    visit(root);
+    return hasEnough;
+  }
+
+  function matchingDropOption(operation = {}, machineName = '') {
+    const options = Array.isArray(operation.productivityOptions) ? operation.productivityOptions : [];
+    return options.find(option =>
+      String(option.machineName || '') === String(machineName || '')
+      && Number(option.peopleCount || 0) === Number(operation.peopleCount || 0)
+    ) || options.find(option => String(option.machineName || '') === String(machineName || '')) || null;
+  }
+
+  function splitKeyForOperation(operation = {}, detail = {}) {
+    return String(operation.splitParentOperationId || detail.operationId || operation.operationId || operation.materialId);
+  }
+
+  function applyDropPlanningChange(detail = {}) {
+    const operation = findSimulationOperation(detail);
+    if (!operation && !detail.materialId) throw new Error('Segmento inexistente.');
+    const baseOperation = operation || detail;
+    const option = matchingDropOption(baseOperation, detail.machineName);
+    const machineName = option?.machineName || detail.machineName || baseOperation.machineName;
+    const peopleCount = Number(option?.peopleCount ?? detail.peopleCount ?? baseOperation.peopleCount ?? 0);
+    const override = {
+      startDate: detail.startDate,
+      startTime: detail.startTime || baseOperation.startTime || '07:00',
+      machineName,
+      peopleCount,
+      productionModelName: detail.productionModelName || baseOperation.productionModelName || null
+    };
+    draft.operationOverrides = draft.operationOverrides && typeof draft.operationOverrides === 'object' ? draft.operationOverrides : {};
+    operationOverrideKeys({
+      operationId: splitKeyForOperation(baseOperation, detail),
+      materialId: detail.materialId || baseOperation.materialId,
+      productionIndex: detail.productionIndex ?? baseOperation.productionIndex
+    }).forEach(key => {
+      draft.operationOverrides[key] = {
+        ...(draft.operationOverrides[key] || {}),
+        ...override
+      };
+    });
   }
 
   function validateDraft(form) {
@@ -789,15 +999,16 @@ export function PlanningPage() {
     }
     const invalidShift = draft.shifts.find(shift =>
       !(parsePtBrDecimal(shift.hoursPerDay, 0) > 0)
-      || !(parsePtBrDecimal(shift.pauseHours, -1) >= 0)
       || !(Number(shift.teamAvailable) > 0)
-      || !shift.shiftStartTime
-      || !shift.shiftEndTime
     );
     if (invalidShift) {
       toast(!(Number(invalidShift.teamAvailable) > 0)
         ? 'Informe a equipe disponível do turno.'
         : 'Revise os horários e pausas dos turnos.');
+      return false;
+    }
+    if (String(draft.setupHours || '').trim() && parsePtBrDecimal(draft.setupHours, -1) < 0) {
+      toast('Informe o tempo de setup com valor maior ou igual a zero.');
       return false;
     }
     const invalidTransport = draft.productions.some(production => {
@@ -838,12 +1049,34 @@ export function PlanningPage() {
         </div>
         <div class="grid-form planning-inner-grid">
           <label>Horas/dia<input name="hoursPerDay" type="text" inputmode="decimal" value="${escapeHtml(shift.hoursPerDay)}" /></label>
-          <label>Come&ccedil;o do turno<input name="shiftStartTime" type="time" value="${escapeHtml(shift.shiftStartTime)}" required /></label>
-          <label>${shift.pauseLabel || 'Horas de pausa'}<input name="pauseHours" type="text" inputmode="decimal" value="${escapeHtml(shift.pauseHours)}" /></label>
-          <label>Final do turno<input name="shiftEndTime" type="time" value="${escapeHtml(shift.shiftEndTime)}" required /></label>
           <label>Equipe dispon&iacute;vel<input name="teamAvailable" type="number" min="1" step="1" inputmode="numeric" value="${escapeHtml(shift.teamAvailable)}" required /></label>
         </div>
       </article>
+    `;
+  }
+
+  function renderShiftSummary() {
+    const rows = normalizeShiftTimes(draft.shifts).map((shift, index) => {
+      const minutes = productiveMinutes(shift.hoursPerDay, index === 0 ? 8.8 : 6);
+      return `<p><strong>Turno ${index + 1}:</strong> ${formatProductiveMinutes(minutes)}</p>`;
+    });
+    const totalMinutes = normalizeShiftTimes(draft.shifts)
+      .reduce((sum, shift, index) => sum + productiveMinutes(shift.hoursPerDay, index === 0 ? 8.8 : 6), 0);
+    return `
+      <aside class="shift-productive-summary" aria-label="Resumo de horas produtivas">
+        ${rows.join('')}
+        <p class="shift-productive-total"><strong>Total produtivo di&aacute;rio:</strong> ${formatProductiveMinutes(totalMinutes)}</p>
+      </aside>
+    `;
+  }
+
+  function renderSetupField() {
+    return `
+      <div class="grid-form planning-inner-grid planning-compact-field-grid planning-setup-grid">
+        <label>Tempo de setup por troca de material (horas)
+          <input name="setupHours" type="text" inputmode="decimal" placeholder="1,5" value="${escapeHtml(draft.setupHours)}" />
+        </label>
+      </div>
     `;
   }
 
@@ -853,7 +1086,7 @@ export function PlanningPage() {
     if (!(Number(production.plannedQty) > 0)) return 'Quantidade sugerida não estimada.';
     if (!rows.length) return 'Sem matriz de produtividade.';
     if (production.machineName && !rows.some(row => String(row.machine_name) === String(production.machineName))) return 'Máquina sugerida indisponível para este material.';
-    if (production.peopleCount && !rows.some(row => String(row.people_count) === String(production.peopleCount))) return 'Pessoas sugeridas indisponíveis para este material.';
+    if (production.peopleCount !== null && production.peopleCount !== undefined && production.peopleCount !== '' && !rows.some(row => String(row.people_count) === String(production.peopleCount))) return 'Pessoas sugeridas indisponíveis para este material.';
     if (production.sourceObservation && !/pronto para/i.test(String(production.sourceObservation))) return production.sourceObservation;
     return '';
   }
@@ -866,7 +1099,7 @@ export function PlanningPage() {
     const people = [...new Set(rows
       .filter(row => !production.machineName || row.machine_name === production.machineName)
       .map(row => row.people_count)
-      .filter(Boolean))];
+      .filter(value => value !== null && value !== undefined && value !== ''))];
     const models = productionModelsFor(material);
     const transportMaterials = productionMaterialOptions(production);
     const selectedColor = isHexColor(production.color) ? production.color : automaticProductionColor(index);
@@ -1266,7 +1499,7 @@ export function PlanningPage() {
     const status = flowNodeStatus(node, effectiveChecked, produceQty, stockUsedQty, stockQty, requiredQty);
     const rawMaterialWarning = node.isInitialRawMaterial && stockQty < requiredQty;
     return `
-        <div class="production-flow-node${produceQty > 0 ? ' needs-production' : ' stock-covered'}${rawMaterialWarning ? ' raw-material-warning' : ''}" data-flow-node-key="${escapeHtml(node.flowKey || flowNodeKey(node))}" style="${productionThemeStyle(productionIndex, productions[0]?.color || node.productionColor)}">
+        <div class="production-flow-node${produceQty > 0 ? ' needs-production' : ' stock-covered'}${rawMaterialWarning ? ' raw-material-warning' : ''}" role="button" tabindex="0" data-flow-node-key="${escapeHtml(node.flowKey || flowNodeKey(node))}" data-flow-material-id="${escapeHtml(node.materialId || '')}" data-flow-production-indexes="${escapeHtml(productions.map(production => Number(production.index || 0)).join(','))}" style="${productionThemeStyle(productionIndex, productions[0]?.color || node.productionColor)}">
           <div class="production-flow-node-header">
             <div>
               <strong>${escapeHtml(node.materialName)}</strong>
@@ -1330,8 +1563,8 @@ export function PlanningPage() {
         const startY = fromRect.top - rect.top + (fromRect.height / 2);
         const endX = toRect.left - rect.left;
         const endY = toRect.top - rect.top + (toRect.height / 2);
-        const middle = Math.max(28, (endX - startX) / 2);
-        return `<path class="production-flow-connector" marker-end="url(#production-flow-arrow)" d="M ${startX} ${startY} C ${startX + middle} ${startY}, ${endX - middle} ${endY}, ${endX} ${endY}" />`;
+        const middleX = startX + Math.max(32, (endX - startX) / 2);
+        return `<path class="production-flow-connector" marker-end="url(#production-flow-arrow)" d="M ${startX} ${startY} H ${middleX} V ${endY} H ${endX}" />`;
       }).join('');
       svg.innerHTML = `
         <defs>
@@ -1363,7 +1596,9 @@ export function PlanningPage() {
   }
 
   function timelineOperations(result) {
-    const current = Array.isArray(result?.operations) ? result.operations : [];
+    const current = Array.isArray(result?.calendarOperations)
+      ? result.calendarOperations
+      : Array.isArray(result?.operations) ? result.operations : [];
     const existing = Array.isArray(result?.summary?.existingOperations)
       ? result.summary.existingOperations.map(operation => ({
           ...operation,
@@ -1371,6 +1606,90 @@ export function PlanningPage() {
         }))
       : [];
     return [...existing, ...current];
+  }
+
+  function simulatedProductionByDate(result) {
+    const productionByDate = new Map();
+    timelineOperations(result)
+      .filter(operation => operation.operationType !== 'transport' && operation._existingScheduleBlocker !== true)
+      .forEach(operation => {
+        const date = String(operation.startDate || '').slice(0, 10);
+        if (!isValidDateOnly(date)) return;
+        const quantity = Number(operation.produceQty || 0);
+        if (!(quantity > 0)) return;
+        materialLookupKeys(operation).forEach(key => {
+          const mapKey = `${date}|${key}`;
+          productionByDate.set(mapKey, Number((Number(productionByDate.get(mapKey) || 0) + quantity).toFixed(6)));
+        });
+      });
+    return productionByDate;
+  }
+
+  function simulatedProductionQtyThrough(productionByDate, targetDate, materialKey) {
+    let total = 0;
+    for (const [entryKey, quantity] of productionByDate.entries()) {
+      const [date, key] = entryKey.split('|');
+      if (key === materialKey && date <= targetDate) total += Number(quantity || 0);
+    }
+    return total;
+  }
+
+  function projectedRowsWithSimulation(rows = [], date, productionByDate) {
+    return rows.map(row => {
+      const producedQty = materialLookupKeys(row).reduce((sum, key) => (
+        Math.max(sum, simulatedProductionQtyThrough(productionByDate, date, key))
+      ), 0);
+      if (!(producedQty > 0)) return row;
+      const estimatedStock = Number(row.estimated_stock);
+      return {
+        ...row,
+        estimated_stock: Number.isFinite(estimatedStock) ? estimatedStock + producedQty : estimatedStock
+      };
+    });
+  }
+
+  function criticalPlanningStockRows(rows = [], minimumDays = null) {
+    if (!Number.isFinite(Number(minimumDays)) || Number(minimumDays) <= 0) return [];
+    return rows.filter(row => {
+      const estimatedStock = Number(row.estimated_stock ?? row.estimatedStock);
+      const salesPerDay = stockProjectionSalesPerDay(row);
+      if (salesPerDay) {
+        const durationDays = stockProjectionDurationDays(row);
+        return Number.isFinite(durationDays) && durationDays <= Number(minimumDays);
+      }
+      return Number.isFinite(estimatedStock) && estimatedStock <= 0;
+    });
+  }
+
+  async function loadPlanningStockAlerts(result) {
+    const minimumDays = readStockMinimumDays();
+    if (!minimumDays) return new Map();
+    const days = [...new Set((Array.isArray(result?.days) ? result.days : [])
+      .map(date => String(date || '').slice(0, 10))
+      .filter(isValidDateOnly))];
+    if (!days.length) return new Map();
+    const productionByDate = simulatedProductionByDate(result);
+    const entries = await Promise.all(days.map(async date => {
+      const projection = await api(`/planning/analysis/stock-projection?date=${date}`);
+      const criticalRows = criticalPlanningStockRows(projectedRowsWithSimulation(projection.rows || [], date, productionByDate), minimumDays);
+      return criticalRows.length ? [date, { criticalCount: criticalRows.length, materials: criticalRows }] : null;
+    }));
+    return new Map(entries.filter(Boolean));
+  }
+
+  function schedulePlanningStockAlerts(result) {
+    const requestId = ++planningStockAlertRequestId;
+    currentPlanningStockAlerts = new Map();
+    loadPlanningStockAlerts(result)
+      .then(alerts => {
+        if (requestId !== planningStockAlertRequestId) return;
+        currentPlanningStockAlerts = alerts;
+        if (currentSimulation === result) refreshTimelineOnly();
+      })
+      .catch(error => {
+        if (requestId !== planningStockAlertRequestId) return;
+        console.warn('Não foi possível carregar alertas de estoque do planejamento.', error);
+      });
   }
 
   function renderSimulation(result, form) {
@@ -1386,11 +1705,14 @@ export function PlanningPage() {
     const notice = target.querySelector('.unsimulated-notice');
     const oldSummaryPanel = target.querySelector('.final-summary-panel');
     if (oldSummaryPanel) oldSummaryPanel.hidden = true;
+    currentPlanningStockAlerts = new Map();
     timelineTarget.innerHTML = '';
     timelineTarget.appendChild(CalendarTimeline(coloredResult.days, timelineOperations(coloredResult), {
       mode: 'planning',
-      ...(coloredResult.summary || {})
+      ...(coloredResult.summary || {}),
+      stockAlerts: currentPlanningStockAlerts
     }));
+    schedulePlanningStockAlerts(coloredResult);
     flowsTarget.innerHTML = renderProductionFlows(coloredResult);
     requestAnimationFrame(drawProductionFlowConnectors);
     if (notice) notice.hidden = true;
@@ -1410,7 +1732,8 @@ export function PlanningPage() {
     timelineTarget.innerHTML = '';
     timelineTarget.appendChild(CalendarTimeline(currentSimulation.days, timelineOperations(currentSimulation), {
       mode: 'planning',
-      ...(currentSimulation.summary || {})
+      ...(currentSimulation.summary || {}),
+      stockAlerts: currentPlanningStockAlerts
     }));
   }
 
@@ -1769,7 +2092,7 @@ export function PlanningPage() {
             <h2>Range do planejamento</h2>
             <button class="secondary-button clear-planning" type="button">Limpar planejamento</button>
           </div>
-          <div class="grid-form planning-inner-grid">
+          <div class="grid-form planning-inner-grid planning-compact-field-grid">
             <label>Data inicial do planejamento<input name="planningStartDate" type="date" value="${escapeHtml(draft.planningStartDate)}" required /></label>
           </div>
 
@@ -1777,7 +2100,11 @@ export function PlanningPage() {
             <h2>Turnos</h2>
             <button class="secondary-button add-shift" type="button">+ Adicionar turno</button>
           </div>
-          <div class="shifts-target">${draft.shifts.map(renderShift).join('')}</div>
+          <div class="planning-shifts-layout">
+            <div class="shifts-target">${draft.shifts.map(renderShift).join('')}</div>
+            <div class="shift-summary-target">${renderShiftSummary()}</div>
+          </div>
+          ${renderSetupField()}
 
           <div class="section-heading planning-section-heading">
             <h2>Produ&ccedil;&otilde;es</h2>
@@ -1853,15 +2180,20 @@ export function PlanningPage() {
         return;
       }
       clearTimeout(recalculationTimer);
-      recalculationTimer = setTimeout(() => withOperationLoading('Atualizando calendario...', simulateCurrent).catch(toast), 250);
+      recalculationTimer = setTimeout(() => withOperationLoading('Organizando produção...', simulateCurrent).catch(toast), 250);
     }
 
     function updateDraftFromGeneral() {
       draft.planningStartDate = form.elements.planningStartDate.value;
+      draft.setupHours = form.elements.setupHours?.value || '';
       queueAutosave();
     }
 
     form.elements.planningStartDate.addEventListener('input', updateDraftFromGeneral);
+    form.elements.setupHours?.addEventListener('input', () => {
+      updateDraftFromGeneral();
+      queueSimulationRefresh();
+    });
 
     shiftsTarget.addEventListener('input', event => {
       const card = event.target.closest('[data-shift-id]');
@@ -1869,6 +2201,9 @@ export function PlanningPage() {
       const shift = draft.shifts.find(item => item.id === card.dataset.shiftId);
       if (!shift || !event.target.name) return;
       shift[event.target.name] = event.target.value;
+      draft.shifts = normalizeShiftTimes(draft.shifts);
+      const summaryTarget = target.querySelector('.shift-summary-target');
+      if (summaryTarget) summaryTarget.innerHTML = renderShiftSummary();
       queueAutosave();
       queueSimulationRefresh();
     });
@@ -1876,7 +2211,7 @@ export function PlanningPage() {
     shiftsTarget.addEventListener('click', event => {
       const card = event.target.closest('[data-shift-id]');
       if (!card || !event.target.classList.contains('remove-shift')) return;
-      draft.shifts = draft.shifts.filter(shift => shift.id !== card.dataset.shiftId);
+      draft.shifts = normalizeShiftTimes(draft.shifts.filter(shift => shift.id !== card.dataset.shiftId));
       rerenderBuilder();
     });
 
@@ -2051,6 +2386,7 @@ export function PlanningPage() {
     target.querySelector('.add-shift').addEventListener('click', () => {
       const previous = draft.shifts.at(-1);
       draft.shifts.push(defaultShift(draft.shifts.length, previous?.shiftEndTime || '17:00'));
+      draft.shifts = normalizeShiftTimes(draft.shifts);
       hasPendingSimulationChanges = true;
       rerenderBuilder();
     });
@@ -2080,14 +2416,48 @@ export function PlanningPage() {
       if (!validateDraft(form)) return null;
       lastPayload = payload();
       draft.lastPayload = lastPayload;
-      let result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
+      let result = await simulatePlanningRequest(lastPayload);
       if (syncStockOnlyMaterialsFromSimulation(result)) {
         lastPayload = payload();
         draft.lastPayload = lastPayload;
-        result = await api('/planning/simulate', { method: 'POST', body: lastPayload });
+        result = await simulatePlanningRequest(lastPayload);
       }
       renderSimulation(result, form);
       return result;
+    }
+
+    function focusCalendarCardFromFlow(node) {
+      const materialId = String(node?.dataset.flowMaterialId || '');
+      if (!materialId) return;
+      const safeSelectorValue = value => (window.CSS?.escape ? window.CSS.escape(String(value)) : String(value).replaceAll('"', '\\"'));
+      const productionIndexes = String(node.dataset.flowProductionIndexes || '')
+        .split(',')
+        .map(value => String(Number(value)))
+        .filter(value => value !== 'NaN');
+      const selector = productionIndexes.length
+        ? productionIndexes.map(index => `.machine-production-card[data-material-id="${safeSelectorValue(materialId)}"][data-production-index="${safeSelectorValue(index)}"]`).join(',')
+        : `.machine-production-card[data-material-id="${safeSelectorValue(materialId)}"]`;
+      const card = target.querySelector(`.timeline-target ${selector}`)
+        || target.querySelector(`.timeline-target .machine-production-card[data-material-id="${safeSelectorValue(materialId)}"]`);
+      if (!card) {
+        toast('Card correspondente não encontrado no calendário.');
+        return;
+      }
+      target.querySelectorAll('.machine-production-card.is-flow-focused').forEach(item => item.classList.remove('is-flow-focused'));
+      card.classList.add('is-flow-focused');
+      const board = card.closest('.gantt-board');
+      if (board) {
+        const boardRect = board.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        board.scrollTo({
+          left: Math.max(0, board.scrollLeft + cardRect.left - boardRect.left - (board.clientWidth / 2) + (cardRect.width / 2)),
+          top: Math.max(0, board.scrollTop + cardRect.top - boardRect.top - (board.clientHeight / 2) + (cardRect.height / 2)),
+          behavior: 'smooth'
+        });
+      }
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+      card.focus({ preventScroll: true });
+      window.setTimeout(() => card.classList.remove('is-flow-focused'), 2200);
     }
 
     form.addEventListener('submit', async event => {
@@ -2097,6 +2467,21 @@ export function PlanningPage() {
       } catch (error) {
         toast(error);
       }
+    });
+
+    target.addEventListener('click', event => {
+      if (event.target.closest('[data-stock-only], .stock-only-toggle')) return;
+      const flowNode = event.target.closest('.production-flow-node[data-flow-material-id]');
+      if (!flowNode) return;
+      focusCalendarCardFromFlow(flowNode);
+    });
+
+    target.addEventListener('keydown', event => {
+      if (!['Enter', ' '].includes(event.key)) return;
+      const flowNode = event.target.closest('.production-flow-node[data-flow-material-id]');
+      if (!flowNode) return;
+      event.preventDefault();
+      focusCalendarCardFromFlow(flowNode);
     });
 
     target.addEventListener('change', async event => {
@@ -2116,8 +2501,20 @@ export function PlanningPage() {
       }
       saveDraftNow();
       try {
-        await withOperationLoading('Recalculando producao...', simulateCurrent);
+        await withOperationLoading('Recalculando produção...', simulateCurrent);
       } catch (error) {
+        toast(error);
+      }
+    });
+
+    target.addEventListener('operation-card-drop', async event => {
+      const detail = event.detail || {};
+      const snapshot = cloneDraftPlanningState();
+      try {
+        applyDropPlanningChange(detail);
+        await withOperationLoading('Replanejando produção...', simulateCurrent);
+      } catch (error) {
+        restoreDraftPlanningState(snapshot);
         toast(error);
       }
     });
@@ -2139,7 +2536,7 @@ export function PlanningPage() {
       }
       saveDraftNow();
       try {
-        await withOperationLoading('Atualizando calendario...', simulateCurrent);
+        await withOperationLoading('Organizando produção...', simulateCurrent);
       } catch (error) {
         toast(error);
       }
@@ -2163,7 +2560,7 @@ export function PlanningPage() {
       });
       saveDraftNow();
       try {
-        await withOperationLoading('Aplicando alteracao...', simulateCurrent);
+        await withOperationLoading('Aplicando alteração...', simulateCurrent);
       } catch (error) {
         toast(error);
       }
@@ -2184,7 +2581,7 @@ export function PlanningPage() {
       });
       saveDraftNow();
       try {
-        await withOperationLoading('Recalculando producao...', simulateCurrent);
+        await withOperationLoading('Recalculando produção...', simulateCurrent);
       } catch (error) {
         toast(error);
       }
@@ -2214,7 +2611,7 @@ export function PlanningPage() {
       };
       saveDraftNow();
       try {
-        await withOperationLoading('Recalculando producao...', simulateCurrent);
+        await withOperationLoading('Recalculando produção...', simulateCurrent);
       } catch (error) {
         refreshTimelineOnly();
         markPlanningInconsistent();
@@ -2224,7 +2621,7 @@ export function PlanningPage() {
 
     target.querySelector('.recalculate-planning')?.addEventListener('click', async () => {
       try {
-        await withOperationLoading('Recalculando producao...', simulateCurrent);
+        await withOperationLoading('Recalculando produção...', simulateCurrent);
       } catch (error) {
         toast(error);
       }
@@ -2233,7 +2630,7 @@ export function PlanningPage() {
     form.elements.save?.addEventListener('click', async () => {
       if (!canWritePlanning) return;
       try {
-        const simulation = await withOperationLoading('Recalculando producao...', simulateCurrent);
+        const simulation = await withOperationLoading('Recalculando produção...', simulateCurrent);
         if (!simulation) return;
         draft.planningCode = draft.planningCode || generatePlanningCode(draft.productions.length);
         lastPayload = normalizePlanningPayload(lastPayload || payload(), draft.planningCode);
@@ -2321,7 +2718,7 @@ export function PlanningPage() {
       if (activeTab === 'history') return await renderHistoryTab();
       return await renderSimulationTab();
     } catch (error) {
-      setInternalError(target, error.message || 'Nao foi possivel carregar o planejamento.');
+      setInternalError(target, error.message || 'Não foi possível carregar o planejamento.');
       throw error;
     }
   }
