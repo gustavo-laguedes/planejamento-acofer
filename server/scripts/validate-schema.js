@@ -25,7 +25,14 @@ const expectedColumns = {
   app_users: ['active_browser_session_id', 'active_session_started_at', 'active_session_last_seen_at'],
   import_history: ['period_start', 'period_end', 'business_days'],
   inventory_counts: ['edited_at', 'edited_by_user_id', 'edited_by_user_name'],
-  productivity_matrix: ['machine_priority']
+  productivity_matrix: ['machine_priority'],
+  production_plans: [
+    'manual_schedule_draft', 'manual_schedule_version', 'manual_schedule_base_hash',
+    'manual_schedule_updated_at', 'manual_schedule_validation_version',
+    'manual_schedule_validation_fingerprint', 'manual_schedule_validated_at',
+    'manual_schedule_is_dirty', 'manual_schedule_revision', 'updated_at'
+  ],
+  production_plan_days: ['allocation_id', 'start_time', 'end_time']
 };
 
 const expectedAppUserRoles = [
@@ -64,7 +71,7 @@ try {
     SELECT table_name, column_name
     FROM information_schema.columns
     WHERE table_schema = 'public'
-      AND table_name IN ('app_users', 'import_history', 'inventory_counts', 'productivity_matrix')
+      AND table_name IN ('app_users', 'import_history', 'inventory_counts', 'productivity_matrix', 'production_plans', 'production_plan_days')
   `);
   const columnsByTable = new Map();
   for (const row of columnRows) {

@@ -25,6 +25,7 @@ const files = [
   '017_inventory_edit_metadata.sql',
   '018_productivity_machine_priority.sql',
   '019_productivity_people_zero.sql',
+  '020_manual_schedule_persistence.sql',
   '002_indexes.sql',
   '003_seed_optional.sql'
 ];

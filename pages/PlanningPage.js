@@ -16,6 +16,7 @@ import {
   isManualScheduleValidationCompatible,
   MANUAL_SCHEDULE_VALIDATION_VERSION
 } from '../services/manualScheduleTransaction.service.js';
+import { normalizePersistedManualScheduleDraft } from '../services/manualSchedulePersistence.service.js';
 
 const USE_PRODUCTION_CALENDAR_V2 = true;
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
@@ -2354,23 +2355,50 @@ export function PlanningPage() {
     async function launchPlanning(button) {
       button.disabled = true;
       try {
-        let body = lastPayload;
+        let body = {
+          ...(lastPayload || {}),
+          manualScheduleDraft,
+          manualScheduleValidation: manualScheduleDraft?.validation || null,
+          manualWorkDates: currentSimulation?.manualWorkDates || [],
+          dailyTeamOverrides: draft.dailyTeamOverrides || {},
+          setupMinutes: Number(draft.setupHours || 0) * 60,
+          minimumStartRatio: Number(currentSimulation?.minimumStartRatio ?? 0.30),
+          dependencyCompletionBufferMinutes: Number(currentSimulation?.dependencyCompletionBufferMinutes ?? 60),
+          shifts: draft.shifts || []
+        };
         if (stockShortages.length) {
           const authorization = await requestStockAuthorization(stockShortages);
           if (!authorization) {
             button.disabled = false;
             return;
           }
-          body = { ...lastPayload, stockAuthorization: authorization };
+          body = { ...body, stockAuthorization: authorization };
         }
-        const saved = await api('/planning/plans', { method: 'POST', body });
+        const saved = draft.savedPlanningId
+          ? await api(`/planning/plans/${draft.savedPlanningId}/manual-schedule`, {
+              method: 'PUT',
+              body: {
+                manualScheduleDraft,
+                manualScheduleValidation: manualScheduleDraft?.validation || null,
+                expectedRevision: Number(draft.savedPlanningRevision || 0),
+                shifts: draft.shifts || [],
+                settings: {
+                  manualWorkDates: currentSimulation?.manualWorkDates || [],
+                  dailyTeamOverrides: draft.dailyTeamOverrides || {},
+                  setupMinutes: Number(draft.setupHours || 0) * 60,
+                  minimumStartRatio: Number(currentSimulation?.minimumStartRatio ?? 0.30),
+                  dependencyCompletionBufferMinutes: Number(currentSimulation?.dependencyCompletionBufferMinutes ?? 60)
+                }
+              }
+            })
+          : await api('/planning/plans', { method: 'POST', body });
         localStorage.removeItem(DRAFT_KEY);
         draft = defaultDraft();
         lastPayload = null;
         currentSimulation = null;
         manualScheduleDraft = null;
         backdrop.remove();
-        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Planejamento ${saved.plan.code || saved.plan.id} lancado.` }));
+        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Calendário manual do planejamento ${saved.plan.code || saved.plan.id} salvo.` }));
         activeTab = 'history';
         sessionStorage.setItem('planejamento_planning_tab', activeTab);
         await render();
@@ -2575,6 +2603,56 @@ export function PlanningPage() {
     page.appendChild(backdrop);
     requestAnimationFrame(drawProductionFlowConnectors);
     setTimeout(drawProductionFlowConnectors, 80);
+  }
+
+  async function reopenSavedPlan(detail) {
+    const plan = detail.plan || {};
+    const persisted = normalizePersistedManualScheduleDraft(detail.manualScheduleDraft ?? plan.manual_schedule_draft);
+    if (persisted.status === 'incompatible' || persisted.status === 'invalid') throw new Error(persisted.diagnostics[0]);
+    localStorage.removeItem(DRAFT_KEY);
+    draft = normalizeDraft({
+      planningStartDate: detail.summary?.planningStartDate || plan.start_date,
+      shifts: detail.summary?.shifts || [defaultShift(0)],
+      dailyTeamOverrides: detail.summary?.dailyTeamOverrides || {},
+      setupHours: Number(detail.summary?.setupHours || 0),
+      savedPlanningId: String(plan.id),
+      savedPlanningRevision: Number(plan.manual_schedule_revision || 0),
+      planningCode: plan.code || String(plan.id)
+    });
+    lastPayload = {
+      planningCode: plan.code || String(plan.id),
+      planningStartDate: detail.summary?.planningStartDate || plan.start_date,
+      planningEndDate: detail.summary?.planningEndDate || plan.end_date,
+      manualWorkDates: detail.summary?.manualWorkDates || []
+    };
+    currentSimulation = {
+      id: plan.id,
+      planningId: plan.id,
+      code: plan.code,
+      tree: detail.tree || plan.schedule_tree,
+      operations: detail.operations || plan.operations || [],
+      days: detail.days || [],
+      summary: {
+        ...(detail.summary || {}),
+        planningId: plan.id,
+        planningStartDate: detail.summary?.planningStartDate || plan.start_date,
+        planningEndDate: detail.summary?.planningEndDate || plan.end_date,
+        status: plan.status
+      }
+    };
+    manualScheduleDraft = persisted.draft;
+    draft.lastPayload = lastPayload;
+    draft.currentSimulation = currentSimulation;
+    draft.manualScheduleDraft = manualScheduleDraft;
+    saveDraftNow();
+    activeTab = 'simulation';
+    sessionStorage.setItem('planejamento_planning_tab', activeTab);
+    await render();
+    const blocking = manualScheduleDraft?.validation?.errors?.filter(issue => issue.blocking !== false) || [];
+    if (blocking.length) {
+      markPlanningInconsistent();
+      toast(new Error(`O calendário salvo foi aberto com inconsistências: ${blocking[0].message}`));
+    }
   }
 
   async function renderSimulationTab() {
@@ -3303,7 +3381,24 @@ export function PlanningPage() {
     form.elements.save?.addEventListener('click', async () => {
       if (!canWritePlanning) return;
       try {
-        const simulation = await withOperationLoading('Recalculando produção...', simulateCurrent);
+        let simulation = currentSimulation;
+        if (manualScheduleDraft?.allocations?.length && currentSimulation) {
+          const snapshot = buildProductionCalendarSnapshot(currentSimulation, { ignoreManualDraft: true });
+          const validationTransaction = applyManualScheduleTransaction({
+            currentDraft: manualScheduleDraft,
+            intent: { type: 'VALIDATE_DRAFT' },
+            draftContext: { validatedAt: new Date().toISOString() },
+            validationContext: currentManualScheduleValidationContext(snapshot)
+          });
+          manualScheduleDraft = validationTransaction.draft;
+          draft.manualScheduleDraft = manualScheduleDraft;
+          if (!validationTransaction.accepted) {
+            throw new Error(validationTransaction.blockingIssues?.[0]?.message || 'O calendário manual possui erros bloqueantes.');
+          }
+          refreshTimelineOnly();
+        } else {
+          simulation = await withOperationLoading('Recalculando produção...', simulateCurrent);
+        }
         if (!simulation) return;
         draft.planningCode = draft.planningCode || generatePlanningCode(draft.productions.length);
         lastPayload = normalizePlanningPayload(lastPayload || payload(), draft.planningCode);
@@ -3344,6 +3439,7 @@ export function PlanningPage() {
           { label: 'A&ccedil;&otilde;es', render: row => `
             <div class="history-actions">
               <button class="small-action-button" data-view="${row.id}" type="button">Visualizar</button>
+              ${!isCanceledStatus(row.status) ? `<button class="small-action-button" data-open="${row.id}" type="button">Abrir calendário</button>` : ''}
               <button class="small-action-button" data-pdf="${row.id}" type="button">Gerar PDF</button>
               ${canWritePlanning && !isCanceledStatus(row.status) ? `<button class="small-action-button danger" data-cancel="${row.id}" type="button">Cancelar</button>` : ''}
             </div>
@@ -3375,10 +3471,16 @@ export function PlanningPage() {
       openPlanDetailModal(detail);
     }
 
+    async function openPlan(id) {
+      const detail = await api(`/planning/plans/${id}`);
+      await reopenSavedPlan(detail);
+    }
+
     target.querySelector('.refresh-history').addEventListener('click', () => loadHistory().catch(toast));
     historyTarget.addEventListener('click', async event => {
       if (event.target.dataset.pdf) return downloadPdf(event.target.dataset.pdf);
       if (event.target.dataset.cancel) return cancelPlan(event.target.dataset.cancel);
+      if (event.target.dataset.open) return openPlan(event.target.dataset.open);
       if (event.target.dataset.view) return viewPlan(event.target.dataset.view);
     });
     await loadHistory();

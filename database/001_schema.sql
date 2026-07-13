@@ -149,7 +149,17 @@ CREATE TABLE IF NOT EXISTS production_plans (
   start_date DATE NOT NULL,
   end_date DATE NOT NULL,
   status TEXT NOT NULL DEFAULT 'planned',
-  created_at TIMESTAMPTZ DEFAULT now()
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  manual_schedule_draft JSONB,
+  manual_schedule_version INTEGER,
+  manual_schedule_base_hash TEXT,
+  manual_schedule_updated_at TIMESTAMPTZ,
+  manual_schedule_validation_version TEXT,
+  manual_schedule_validation_fingerprint TEXT,
+  manual_schedule_validated_at TIMESTAMPTZ,
+  manual_schedule_is_dirty BOOLEAN NOT NULL DEFAULT false,
+  manual_schedule_revision INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS production_plan_days (
@@ -161,7 +171,10 @@ CREATE TABLE IF NOT EXISTS production_plan_days (
   machine_name TEXT NOT NULL,
   people_count INTEGER NOT NULL,
   planned_qty NUMERIC NOT NULL,
-  planned_unit TEXT NOT NULL DEFAULT 'un'
+  planned_unit TEXT NOT NULL DEFAULT 'un',
+  allocation_id TEXT,
+  start_time TIME,
+  end_time TIME
 );
 
 CREATE TABLE IF NOT EXISTS production_actuals (
