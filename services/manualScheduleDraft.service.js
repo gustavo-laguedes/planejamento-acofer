@@ -477,7 +477,8 @@ export function applyDraftMove(draft, {
   dailyMinutes = DEFAULT_DAILY_MINUTES,
   confirmMerge = false,
   confirmReplace = false,
-  capacityDecision = 'cancel'
+  capacityDecision = 'cancel',
+  now
 } = {}) {
   const previous = clone(draft);
   const context = { machines, matrixRows, days, dailyMinutes };
@@ -500,7 +501,46 @@ export function applyDraftMove(draft, {
   let action = 'move';
 
   if (!occupants.length) {
-    nextAllocations = [...others, moved];
+    if (toNumber(moved.capacityPercent) > 100 + EPSILON && capacityDecision === 'cancel') {
+      throw makeMoveError('Capacidade do dia excedida', 'CAPACITY_EXCEEDED', previous, { proposedAllocation: moved });
+    }
+    if (toNumber(moved.capacityPercent) > 100 + EPSILON && capacityDecision === 'split') {
+      const availableQty = toNumber(moved.maxDailyCapacity ?? moved.capacityMaxPerDay);
+      if (!(availableQty > 0) || availableQty >= toNumber(moved.quantity)) {
+        throw makeMoveError('Nao ha capacidade normal disponivel para dividir o excedente.', 'CAPACITY_SPLIT_INVALID', previous);
+      }
+      const filled = withRollbackSnapshot(() => recalculateWithProductivity({
+        ...moved,
+        quantity: Number(availableQty.toFixed(6)),
+        components: splitComponentsByQuantity(normalizeComponents(moved), availableQty)
+      }, moved.machineId, context), previous);
+      const remainderQty = Number((toNumber(moved.quantity) - availableQty).toFixed(6));
+      const remainder = {
+        ...moved,
+        allocationId: createId(`${moved.allocationId}:excedente`),
+        quantity: remainderQty,
+        components: splitComponentsByQuantity(normalizeComponents(moved), remainderQty),
+        sourceAllocationIds: allocationTraceIds(moved),
+        sourceParentOperationIds: allocationParentIds(moved)
+      };
+      const placement = findNextPlacement(remainder, [...others, filled], context, {
+        startDate: moved.date,
+        preferredMachineId: moved.machineId
+      });
+      if (!placement) throw makeMoveError('Nao foi encontrado proximo periodo valido para o excedente.', 'NO_NEXT_SLOT', previous);
+      nextAllocations = [...others, filled];
+      if (placement.mergeIntoAllocationId) {
+        nextAllocations = nextAllocations.filter(allocation => String(allocation.allocationId) !== String(placement.mergeIntoAllocationId));
+      }
+      nextAllocations.push(placement.allocation);
+      action = 'split_over_capacity';
+    } else {
+      nextAllocations = [...others, {
+        ...moved,
+        isCapacityOverride: toNumber(moved.capacityPercent) > 100 + EPSILON && capacityDecision === 'override'
+      }];
+      action = toNumber(moved.capacityPercent) > 100 + EPSILON ? 'override_capacity' : 'move';
+    }
   } else {
     const compatible = occupants.find(item => sameMaterialCompatible(item, moved));
     if (compatible) {
@@ -578,8 +618,10 @@ export function applyDraftMove(draft, {
 
   const next = {
     ...previous,
-    allocations: nextAllocations.map(normalizeAllocation).map((allocation, index) => ({ ...allocation, sequence: index + 1 })),
-    updatedAt: new Date().toISOString(),
+    allocations: nextAllocations.map(normalizeAllocation),
+    updatedAt: now === undefined
+      ? new Date().toISOString()
+      : (now instanceof Date ? now.toISOString() : String(now)),
     dirty: true,
     lastManualAction: action
   };

@@ -9,10 +9,13 @@ import { canAccess } from '../shared/rbac.js';
 import { SummaryCards } from '../shared/SummaryCard.js';
 import { PlanningStatusPill } from '../shared/StatusPill.js';
 import {
-  applyDraftMove,
-  createManualScheduleDraft,
-  restoreManualScheduleDraftSnapshot
+  createManualScheduleDraft
 } from '../services/manualScheduleDraft.service.js';
+import {
+  applyManualScheduleTransaction,
+  isManualScheduleValidationCompatible,
+  MANUAL_SCHEDULE_VALIDATION_VERSION
+} from '../services/manualScheduleTransaction.service.js';
 
 const USE_PRODUCTION_CALENDAR_V2 = true;
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
@@ -583,6 +586,168 @@ function loadDraft() {
   } catch {
     return defaultDraft();
   }
+}
+
+function collectScheduleTreeNodes(tree) {
+  const nodes = [];
+  const visit = node => {
+    if (!node || typeof node !== 'object') return;
+    nodes.push(node);
+    (Array.isArray(node.children) ? node.children : []).forEach(visit);
+  };
+  if (Array.isArray(tree)) tree.forEach(visit);
+  else visit(tree);
+  return nodes;
+}
+
+function stockFromSchedule(result) {
+  const byMaterial = new Map();
+  collectScheduleTreeNodes(result?.tree).forEach(node => {
+    const materialId = String(node?.materialId ?? node?.material_id ?? '');
+    const quantity = Number(node?.stockQty);
+    if (!materialId || !Number.isFinite(quantity)) return;
+    const current = byMaterial.get(materialId);
+    if (!current || quantity > current.quantity) {
+      byMaterial.set(materialId, {
+        materialId,
+        quantity,
+        unit: String(node?.unit || '')
+      });
+    }
+  });
+  return [...byMaterial.values()];
+}
+
+function stockMinimumsFromMaterials(sourceMaterials) {
+  return (Array.isArray(sourceMaterials) ? sourceMaterials : []).flatMap(material => {
+    const value = material?.minimumQuantity ?? material?.minimum_quantity ?? material?.minimumStock ?? material?.minimum_stock;
+    const minimumQuantity = Number(value);
+    if (value === null || value === undefined || value === '' || !Number.isFinite(minimumQuantity)) return [];
+    return [{ materialId: String(material.id), minimumQuantity }];
+  });
+}
+
+function transportsFromOperations(operations) {
+  return (Array.isArray(operations) ? operations : [])
+    .filter(operation => operation?.operationType === 'transport')
+    .map(operation => ({
+      ...operation,
+      transportId: operation.transportId || operation.operationId,
+      quantity: operation.quantity ?? operation.produceQty,
+      durationMinutes: operation.durationMinutes ?? operation.totalMinutes,
+      sourceLocation: operation.sourceLocation ?? operation.originLocationId,
+      targetLocation: operation.targetLocation ?? operation.destinationLocationId
+    }));
+}
+
+export function buildManualScheduleValidationContext({
+  simulation,
+  materials = [],
+  machines = [],
+  productivityMatrix = [],
+  stock,
+  stockMinimums,
+  stockLocations,
+  dependencies,
+  transports,
+  shifts = [],
+  dailyTeamOverrides = {},
+  manualWorkDates = [],
+  setupMinutes = 0,
+  minimumStartRatio = 0.30,
+  dependencyCompletionBufferMinutes = 60,
+  holidays = [],
+  timezone
+} = {}) {
+  const operations = Array.isArray(simulation?.operations) ? simulation.operations : [];
+  return {
+    operations,
+    materials,
+    machines,
+    productivityMatrix,
+    stock: stock === undefined ? stockFromSchedule(simulation) : stock,
+    stockMinimums: stockMinimums === undefined ? stockMinimumsFromMaterials(materials) : stockMinimums,
+    stockLocations: stockLocations === undefined ? [] : stockLocations,
+    dependencies: dependencies === undefined ? [] : dependencies,
+    transports: transports === undefined ? transportsFromOperations(operations) : transports,
+    shifts,
+    dailyTeamOverrides,
+    manualWorkDates,
+    setupMinutes,
+    minimumStartRatio,
+    dependencyCompletionBufferMinutes,
+    holidays,
+    timezone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone
+  };
+}
+
+function manualScheduleIssueMessages(issueIds, validation) {
+  const byId = new Map([...(validation?.errors || []), ...(validation?.warnings || [])]
+    .map(item => [String(item.issueId), item]));
+  return (Array.isArray(issueIds) ? issueIds : []).map(issueId => byId.get(String(issueId)))
+    .filter(Boolean)
+    .map(item => item.message);
+}
+
+export function buildProductionCalendarValidationSnapshot(validation, allocations = [], days = []) {
+  if (!validation || validation.validationVersion !== MANUAL_SCHEDULE_VALIDATION_VERSION) return null;
+  const affected = validation.affectedAllocations || { byAllocationId: {}, byDate: {} };
+  const dependencyByAllocation = validation.dependencyStatus?.byAllocationId || {};
+  const resourceByDate = validation.resourceProjection?.byDate || {};
+  const stockTimeline = validation.stockProjection?.timeline || [];
+  const issuesByAllocationId = {};
+  const decoratedAllocations = allocations.map(allocation => {
+    const allocationId = String(allocation.allocationId);
+    const allocationIssues = affected.byAllocationId?.[allocationId] || { errors: [], warnings: [] };
+    const errors = manualScheduleIssueMessages(allocationIssues.errors, validation);
+    const warnings = manualScheduleIssueMessages(allocationIssues.warnings, validation);
+    const stockEvents = stockTimeline.filter(item => (item.allocationIds || []).map(String).includes(allocationId));
+    const stockState = stockEvents.some(item => Number(item.availableBalance) < 0) ? 'shortage' : (stockEvents.length ? 'ok' : 'unknown');
+    issuesByAllocationId[allocationId] = { errors, warnings };
+    return {
+      ...allocation,
+      errors,
+      warnings,
+      stockState,
+      dependencyState: dependencyByAllocation[allocationId]?.state || 'ok',
+      hasCapacityOverride: Boolean(allocation.isCapacityOverride)
+    };
+  });
+  const issuesByDate = {};
+  const decoratedDays = days.map(day => {
+    const date = String(day.date || '');
+    const dateIssues = affected.byDate?.[date] || { errors: [], warnings: [] };
+    const errors = manualScheduleIssueMessages(dateIssues.errors, validation);
+    const warnings = manualScheduleIssueMessages(dateIssues.warnings, validation);
+    const resource = resourceByDate[date] || {};
+    const materialShortages = (validation.errors || [])
+      .filter(item => item.date === date && item.code?.startsWith('STOCK_'))
+      .flatMap(item => item.materialIds || []);
+    const daily = {
+      errorCount: errors.length,
+      warningCount: warnings.length,
+      materialShortages: [...new Set(materialShortages)],
+      teamPeak: resource.peakPeople ?? null,
+      teamAvailable: resource.availablePeople ?? null,
+      extraordinaryCapacity: decoratedAllocations.some(allocation => allocation.date === date && allocation.hasCapacityOverride),
+      errors,
+      warnings
+    };
+    issuesByDate[date] = daily;
+    return { ...day, ...daily };
+  });
+  return {
+    allocations: decoratedAllocations,
+    days: decoratedDays,
+    validation: {
+      valid: validation.valid,
+      issuesByAllocationId,
+      issuesByDate,
+      stockProjection: validation.stockProjection,
+      dependencyStatus: validation.dependencyStatus,
+      summary: validation.summary
+    }
+  };
 }
 
 export function PlanningPage() {
@@ -1762,6 +1927,29 @@ export function PlanningPage() {
     return buildProductionCalendarSnapshot(currentSimulation, { stockAlerts: currentPlanningStockAlerts });
   }
 
+  function currentManualScheduleValidationContext(snapshot = currentProductionCalendarSnapshot()) {
+    const summary = currentSimulation?.summary || {};
+    return buildManualScheduleValidationContext({
+      simulation: currentSimulation,
+      materials,
+      machines: snapshot?.machines || [],
+      productivityMatrix: matrix,
+      stock: currentSimulation?.stock,
+      stockMinimums: currentSimulation?.stockMinimums,
+      stockLocations: currentSimulation?.stockLocations || locations,
+      dependencies: currentSimulation?.dependencies,
+      transports: currentSimulation?.transports,
+      shifts: Array.isArray(summary.shifts) && summary.shifts.length ? summary.shifts : draft.shifts,
+      dailyTeamOverrides: draft.dailyTeamOverrides || summary.dailyTeamOverrides || {},
+      manualWorkDates: summary.manualWorkDates || lastPayload?.manualWorkDates || [],
+      setupMinutes: Number(summary.setupHours ?? lastPayload?.setupHours ?? 0) * 60,
+      minimumStartRatio: Number(currentSimulation?.minimumStartRatio ?? 0.30),
+      dependencyCompletionBufferMinutes: Number(currentSimulation?.dependencyCompletionBufferMinutes ?? 60),
+      holidays: currentSimulation?.holidays || [],
+      timezone: currentSimulation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone
+    });
+  }
+
   function findProductionCalendarMachine(snapshot, machineId) {
     return (snapshot?.machines || []).find(machine => String(machine?.machineId) === String(machineId)) || null;
   }
@@ -1832,10 +2020,13 @@ export function PlanningPage() {
       ? manualScheduleDraft
       : null;
     const allocations = activeManualDraft ? activeManualDraft.allocations : adapted.allocations;
+    const baseDays = daysWithDraftAllocations(adapted.days, allocations);
+    const validationSnapshot = buildProductionCalendarValidationSnapshot(activeManualDraft?.validation, allocations, baseDays);
     const snapshot = {
-      days: daysWithDraftAllocations(adapted.days, allocations),
+      days: validationSnapshot?.days || baseDays,
       machines: adapted.machines,
-      allocations,
+      allocations: validationSnapshot?.allocations || allocations,
+      validation: validationSnapshot?.validation || null,
       permissions: { readOnly: true },
       errors: adapted.errors,
       warnings: [],
@@ -1854,6 +2045,7 @@ export function PlanningPage() {
       days: Array.isArray(snapshot?.days) ? snapshot.days : [],
       machines: Array.isArray(snapshot?.machines) ? snapshot.machines : [],
       allocations: Array.isArray(snapshot?.allocations) ? snapshot.allocations : [],
+      validation: snapshot?.validation || null,
       permissions: snapshot?.permissions || { readOnly: true },
       visualState: snapshot?.visualState || {},
       onOpenDetails: noopProductionCalendarDetails,
@@ -1867,6 +2059,16 @@ export function PlanningPage() {
     });
     targetElement.appendChild(calendar);
     renderProductionCalendarWarning(calendar, Array.isArray(snapshot?.errors) ? snapshot.errors.length : 0);
+    const issues = [
+      ...(manualScheduleDraft?.validation?.errors || []),
+      ...(manualScheduleDraft?.validation?.warnings || [])
+    ];
+    if (issues.length) {
+      const details = document.createElement('details');
+      details.className = 'production-calendar-validation-details';
+      details.innerHTML = `<summary>Detalhes da validação (${issues.length})</summary><ul>${issues.map(item => `<li>${escapeHtml(item.message)}</li>`).join('')}</ul>`;
+      calendar.appendChild(details);
+    }
   }
 
   function renderProductionCalendar(targetElement, result, options = {}) {
@@ -1967,16 +2169,33 @@ export function PlanningPage() {
       });
   }
 
-  function renderSimulation(result, form) {
+  function renderSimulation(result, form, { restoreManualDraft = false } = {}) {
     const coloredResult = withProductionColors(result);
     currentSimulation = coloredResult;
     const automaticSnapshot = buildProductionCalendarSnapshot(coloredResult, { ignoreManualDraft: true });
-    manualScheduleDraft = createManualScheduleDraft({
-      planningId: productionCalendarPlanningId(coloredResult),
-      baseSimulationId: coloredResult?.code || lastPayload?.planningCode || Date.now(),
-      allocations: automaticSnapshot.allocations,
-      machines: automaticSnapshot.machines
-    });
+    const restoredDraft = restoreManualDraft && manualScheduleDraft?.allocations?.length
+      ? JSON.parse(JSON.stringify(manualScheduleDraft))
+      : null;
+    const candidateDraft = restoredDraft || createManualScheduleDraft({
+        planningId: productionCalendarPlanningId(coloredResult),
+        baseSimulationId: coloredResult?.code || lastPayload?.planningCode || Date.now(),
+        allocations: automaticSnapshot.allocations,
+        machines: automaticSnapshot.machines
+      });
+    if (isManualScheduleValidationCompatible(restoredDraft)) {
+      manualScheduleDraft = restoredDraft;
+    } else {
+      const validatedAt = new Date().toISOString();
+      const validationTransaction = applyManualScheduleTransaction({
+        currentDraft: candidateDraft,
+        intent: { type: 'VALIDATE_DRAFT' },
+        draftContext: { validatedAt },
+        validationContext: currentManualScheduleValidationContext(automaticSnapshot)
+      });
+      manualScheduleDraft = validationTransaction.accepted
+        ? validationTransaction.draft
+        : { ...candidateDraft, validation: validationTransaction.validation };
+    }
     draft.currentSimulation = coloredResult;
     draft.lastPayload = lastPayload;
     draft.manualScheduleDraft = manualScheduleDraft;
@@ -2021,7 +2240,7 @@ export function PlanningPage() {
   function restoreSimulation(form) {
     if (!currentSimulation) return;
     const wasPending = hasPendingSimulationChanges;
-    renderSimulation(currentSimulation, form);
+    renderSimulation(currentSimulation, form, { restoreManualDraft: true });
     hasPendingSimulationChanges = wasPending;
     const notice = target.querySelector('.unsimulated-notice');
     if (notice) notice.hidden = !hasPendingSimulationChanges;
@@ -2797,59 +3016,60 @@ export function PlanningPage() {
       return false;
     }
 
-    function applyManualDraftMoveWithDecisions(intent, move, decisions = {}) {
-      return applyDraftMove(manualScheduleDraft, {
-        allocationId: move.allocation.allocationId,
-        targetDate: intent.to.date,
-        targetMachineId: move.machine.machineId,
-        machines: currentProductionCalendarSnapshot().machines,
-        matrixRows: matrix,
-        days: currentProductionCalendarSnapshot().days,
-        dailyMinutes: manualDraftDailyMinutes(),
-        ...decisions
-      });
-    }
-
     productionCalendarMoveRunner = async (intent, move) => {
-      const snapshot = manualScheduleDraft ? JSON.parse(JSON.stringify(manualScheduleDraft)) : null;
       const previousVisualState = { ...productionCalendarVisualState };
+      const transactionTimestamp = new Date().toISOString();
       productionCalendarMoveInProgress = true;
+      setOperationLoading(true, 'Validando movimentação...');
       try {
         if (!manualScheduleDraft) throw new Error('Rascunho manual indisponivel para movimentacao.');
+        const calendarSnapshot = currentProductionCalendarSnapshot();
+        const validationContext = currentManualScheduleValidationContext(calendarSnapshot);
         const decisions = {};
-        try {
-          manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
-        } catch (error) {
-          if (error?.code === 'CONFIRM_MERGE') {
-            if (!await confirmManualDraftMove(error)) throw error;
+        const transact = () => applyManualScheduleTransaction({
+          currentDraft: manualScheduleDraft,
+          intent: {
+            ...intent,
+            allocationId: move.allocation.allocationId,
+            targetDate: intent.to.date,
+            targetMachineId: move.machine.machineId
+          },
+          draftContext: {
+            machines: calendarSnapshot.machines,
+            productivityMatrix: matrix,
+            days: calendarSnapshot.days,
+            dailyMinutes: manualDraftDailyMinutes(),
+            now: transactionTimestamp,
+            validatedAt: transactionTimestamp
+          },
+          validationContext,
+          decisions
+        });
+        let transaction = transact();
+        while (transaction.decisionRequired) {
+          const decision = transaction.decisionContext || {};
+          if (decision.code === 'CONFIRM_MERGE') {
+            if (!await confirmManualDraftMove(decision)) return;
             decisions.confirmMerge = true;
-            try {
-              manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
-            } catch (capacityError) {
-              if (capacityError?.code !== 'CAPACITY_EXCEEDED') throw capacityError;
-              decisions.capacityDecision = await confirmManualCapacityDecision(capacityError);
-              if (decisions.capacityDecision === 'cancel') throw capacityError;
-              manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
-            }
-          } else if (error?.code === 'CONFIRM_REPLACE') {
-            if (!await confirmManualDraftMove(error)) throw error;
+          } else if (decision.code === 'CONFIRM_REPLACE') {
+            if (!await confirmManualDraftMove(decision)) return;
             decisions.confirmReplace = true;
-            try {
-              manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
-            } catch (capacityError) {
-              if (capacityError?.code !== 'CAPACITY_EXCEEDED') throw capacityError;
-              decisions.capacityDecision = await confirmManualCapacityDecision(capacityError);
-              if (decisions.capacityDecision === 'cancel') throw capacityError;
-              manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
-            }
-          } else if (error?.code === 'CAPACITY_EXCEEDED') {
-            decisions.capacityDecision = await confirmManualCapacityDecision(error);
-            if (decisions.capacityDecision === 'cancel') throw error;
-            manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
+          } else if (decision.code === 'CAPACITY_EXCEEDED') {
+            decisions.capacityDecision = await confirmManualCapacityDecision(decision);
+            if (decisions.capacityDecision === 'cancel') return;
           } else {
-            throw error;
+            break;
           }
+          transaction = transact();
         }
+        if (!transaction.accepted) {
+          productionCalendarVisualState = previousVisualState;
+          const firstIssue = transaction.blockingIssues[0];
+          const error = new Error(firstIssue?.message || 'Movimento recusado pela validação cronológica.');
+          error.validation = transaction.validation;
+          throw error;
+        }
+        manualScheduleDraft = transaction.draft;
         draft.manualScheduleDraft = manualScheduleDraft;
         saveDraftNow();
         if (String(previousVisualState.selectedAllocationId || '') === String(move.allocation.allocationId || '')) {
@@ -2859,18 +3079,24 @@ export function PlanningPage() {
           };
         }
         refreshTimelineOnly();
-        toast('Producao movimentada no rascunho manual.');
+        toast(transaction.warnings.length
+          ? `Produção movimentada com ${transaction.warnings.length} alerta(s).`
+          : 'Produção movimentada no rascunho manual.');
       } catch (error) {
         productionCalendarVisualState = previousVisualState;
-        if (snapshot) {
-          manualScheduleDraft = restoreManualScheduleDraftSnapshot(snapshot);
-          draft.manualScheduleDraft = manualScheduleDraft;
-          saveDraftNow();
-          refreshTimelineOnly();
+        const issues = [...(error?.validation?.errors || []), ...(error?.validation?.warnings || [])];
+        const calendar = target.querySelector('.production-calendar-container');
+        calendar?.querySelector('.production-calendar-rejection-details')?.remove();
+        if (calendar && issues.length) {
+          const details = document.createElement('details');
+          details.className = 'production-calendar-validation-details production-calendar-rejection-details';
+          details.innerHTML = `<summary>Detalhes do movimento recusado (${issues.length})</summary><ul>${issues.map(item => `<li>${escapeHtml(item.message)}</li>`).join('')}</ul>`;
+          calendar.appendChild(details);
         }
         throw error;
       } finally {
         productionCalendarMoveInProgress = false;
+        setOperationLoading(false);
       }
     };
     function focusCalendarCardFromFlow(node) {

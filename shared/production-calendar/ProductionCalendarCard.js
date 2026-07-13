@@ -96,6 +96,8 @@ export function ProductionCalendarCard({
   card.style.setProperty('--production-calendar-card-accent', color.accent);
   card.style.setProperty('--production-calendar-card-bg', color.bg);
   card.style.setProperty('--production-calendar-card-border', color.border);
+  const validationErrors = Array.isArray(allocation.errors) ? allocation.errors : [];
+  const validationWarnings = Array.isArray(allocation.warnings) ? allocation.warnings : [];
 
   const productionCode = firstExisting(
     allocation.productionCode,
@@ -164,6 +166,14 @@ export function ProductionCalendarCard({
   }
 
   card.append(selectionButton, title, materialElement, metrics);
+  if (validationErrors.length || validationWarnings.length) {
+    const indicator = document.createElement('span');
+    indicator.className = `production-calendar-card-validation ${validationErrors.length ? 'has-error' : 'has-warning'}`;
+    indicator.textContent = validationErrors.length ? '⛔' : '⚠';
+    indicator.title = [...validationErrors, ...validationWarnings].join('\n');
+    indicator.setAttribute('aria-label', validationErrors.length ? 'Erros de validação' : 'Alertas de validação');
+    card.appendChild(indicator);
+  }
 
   if (typeof onStartDrag === 'function') {
     card.addEventListener('pointerdown', event => {

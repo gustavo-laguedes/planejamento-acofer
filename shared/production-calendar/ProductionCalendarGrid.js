@@ -54,6 +54,7 @@ export function ProductionCalendarGrid({
   days = [],
   machines = [],
   allocations = [],
+  validation = null,
   state = {},
   onOpenDetails,
   onToggleSelection,
@@ -101,6 +102,16 @@ export function ProductionCalendarGrid({
     dateLine.textContent = formatProductionCalendarDate(day.date);
 
     dayHeading.append(weekdayLine, dateLine);
+    const dateValidation = validation?.issuesByDate?.[day.date] || day;
+    const errorCount = Number(dateValidation?.errorCount || 0);
+    const warningCount = Number(dateValidation?.warningCount || 0);
+    if (errorCount || warningCount) {
+      const indicator = document.createElement('span');
+      indicator.className = `production-calendar-day-validation ${errorCount ? 'has-error' : 'has-warning'}`;
+      indicator.textContent = errorCount ? `⚠ ${errorCount}` : `⚠ ${warningCount}`;
+      indicator.title = [...(dateValidation.errors || []), ...(dateValidation.warnings || [])].join('\n');
+      dayHeading.appendChild(indicator);
+    }
     header.appendChild(dayHeading);
   });
 

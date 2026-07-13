@@ -481,6 +481,49 @@
   padding-left: 18px;
 }
 
+.production-calendar-card-validation {
+  font-size: 14px;
+  line-height: 1;
+  position: absolute;
+  right: 8px;
+  top: 8px;
+}
+
+.production-calendar-card-validation.has-error,
+.production-calendar-day-validation.has-error {
+  color: #b91c1c;
+}
+
+.production-calendar-card-validation.has-warning,
+.production-calendar-day-validation.has-warning {
+  color: #b45309;
+}
+
+.production-calendar-day-validation {
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  margin-top: 3px;
+}
+
+.production-calendar-validation-details {
+  border-top: 1px solid #e2e8f0;
+  color: #475569;
+  font-size: 12px;
+  padding: 10px 14px;
+}
+
+.production-calendar-validation-details summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.production-calendar-validation-details ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
 .production-calendar-details-backdrop {
   align-items: center;
   background: rgba(15, 23, 42, 0.32);

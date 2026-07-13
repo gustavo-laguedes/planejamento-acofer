@@ -104,6 +104,7 @@ export function ProductionCalendar({
   days = [],
   machines = [],
   allocations = [],
+  validation: scheduleValidation = null,
   permissions = {},
   visualState = {},
   onRequestMove,
@@ -240,6 +241,7 @@ export function ProductionCalendar({
     days,
     machines,
     allocations,
+    validation: scheduleValidation,
     state,
     onOpenDetails: openDetails,
     onStartDrag: (event, allocation, card) => {
