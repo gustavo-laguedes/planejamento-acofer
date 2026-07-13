@@ -1,13 +1,20 @@
 import { api } from '../shared/api.js';
 import { getCurrentUser } from '../shared/api.js';
 import { CalendarTimeline } from '../shared/CalendarTimeline.js';
+import { ProductionCalendar, adaptPlanningResultToProductionCalendar } from '../shared/production-calendar/index.js';
 import { DataTable } from '../shared/DataTable.js';
 import { InternalTabs } from '../shared/InternalTabs.js';
 import { createOperationOverlay, setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
 import { SummaryCards } from '../shared/SummaryCard.js';
 import { PlanningStatusPill } from '../shared/StatusPill.js';
+import {
+  applyDraftMove,
+  createManualScheduleDraft,
+  restoreManualScheduleDraftSnapshot
+} from '../services/manualScheduleDraft.service.js';
 
+const USE_PRODUCTION_CALENDAR_V2 = true;
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
 const STOCK_MINIMUM_DAYS_KEY = 'acofer.stock.minimumDays';
 const PRODUCTION_THEMES = [
@@ -522,7 +529,8 @@ function defaultDraft() {
     dailyTeamOverrides: {},
     setupHours: '',
     lastPayload: null,
-    currentSimulation: null
+    currentSimulation: null,
+    manualScheduleDraft: null
   };
 }
 
@@ -540,7 +548,8 @@ function normalizeDraft(rawDraft) {
     dailyTeamOverrides: draft.dailyTeamOverrides && typeof draft.dailyTeamOverrides === 'object' ? draft.dailyTeamOverrides : {},
     setupHours: draft.setupHours ?? '',
     lastPayload: draft.lastPayload && typeof draft.lastPayload === 'object' ? draft.lastPayload : null,
-    currentSimulation: draft.currentSimulation && typeof draft.currentSimulation === 'object' ? draft.currentSimulation : null
+    currentSimulation: draft.currentSimulation && typeof draft.currentSimulation === 'object' ? draft.currentSimulation : null,
+    manualScheduleDraft: draft.manualScheduleDraft && typeof draft.manualScheduleDraft === 'object' ? draft.manualScheduleDraft : null
   };
   normalized.shifts = normalizeShiftTimes(normalized.shifts.map((shift, index) => ({
     ...defaultShift(index, shift.shiftStartTime),
@@ -581,15 +590,15 @@ export function PlanningPage() {
   const page = document.createElement('section');
   page.className = 'stack planning-page';
   page.innerHTML = `
-    <div class="page-header">
-      <div>
-        <h1>Planejamento</h1>
-        <p>Monte o plano por per&iacute;odo, com turnos e v&aacute;rias produ&ccedil;&otilde;es.</p>
+      <div class="page-header">
+        <div>
+          <h1>Planejamento</h1>
+          <p>Monte o plano por per&iacute;odo, com turnos e v&aacute;rias produ&ccedil;&otilde;es.</p>
+        </div>
       </div>
-    </div>
-    <div class="internal-tabs-target"></div>
-    <div class="planning-target"></div>
-  `;
+      <div class="internal-tabs-target"></div>
+      <div class="planning-target"></div>
+    `;
 
   const tabsTarget = page.querySelector('.internal-tabs-target');
   const target = page.querySelector('.planning-target');
@@ -602,6 +611,10 @@ export function PlanningPage() {
   let currentSimulation = draft.currentSimulation || null;
   let currentPlanningStockAlerts = new Map();
   let planningStockAlertRequestId = 0;
+  let productionCalendarMoveInProgress = false;
+  let productionCalendarMoveRunner = null;
+  let productionCalendarVisualState = {};
+  let manualScheduleDraft = draft.manualScheduleDraft || null;
   let hasPendingSimulationChanges = false;
   let autosaveTimer = null;
   let recalculationTimer = null;
@@ -677,6 +690,7 @@ export function PlanningPage() {
   }
 
   function renderTabs() {
+    if (!tabsTarget) return;
     tabsTarget.innerHTML = '';
     tabsTarget.appendChild(InternalTabs(planningTabs, activeTab, tab => {
       activeTab = tab;
@@ -887,18 +901,21 @@ export function PlanningPage() {
     return {
       operationOverrides: JSON.parse(JSON.stringify(draft.operationOverrides || {})),
       operationSplits: JSON.parse(JSON.stringify(draft.operationSplits || [])),
-      lastPayload,
-      currentSimulation
+      manualScheduleDraft: manualScheduleDraft ? JSON.parse(JSON.stringify(manualScheduleDraft)) : null,
+      lastPayload: lastPayload ? JSON.parse(JSON.stringify(lastPayload)) : null,
+      currentSimulation: currentSimulation ? JSON.parse(JSON.stringify(currentSimulation)) : null
     };
   }
 
   function restoreDraftPlanningState(snapshot) {
     draft.operationOverrides = snapshot.operationOverrides;
     draft.operationSplits = snapshot.operationSplits;
+    manualScheduleDraft = snapshot.manualScheduleDraft || null;
     lastPayload = snapshot.lastPayload;
     currentSimulation = snapshot.currentSimulation;
     draft.lastPayload = lastPayload;
     draft.currentSimulation = currentSimulation;
+    draft.manualScheduleDraft = manualScheduleDraft;
     saveDraftNow();
     refreshTimelineOnly();
   }
@@ -950,6 +967,91 @@ export function PlanningPage() {
 
   function splitKeyForOperation(operation = {}, detail = {}) {
     return String(operation.splitParentOperationId || detail.operationId || operation.operationId || operation.materialId);
+  }
+
+  function stripDailyOperationSuffix(value) {
+    return String(value || '').replace(/:day-\d+$/i, '');
+  }
+
+  function productionCalendarParentOperationId(allocation = {}) {
+    return String(
+      allocation.calendarParentOperationId
+      || allocation.parentOperationId
+      || stripDailyOperationSuffix(allocation.operationId)
+      || ''
+    );
+  }
+
+  function productionCalendarAllocationsForParent(snapshot, parentOperationId) {
+    const parentKey = String(parentOperationId || '');
+    if (!parentKey) return [];
+    return (snapshot?.allocations || [])
+      .filter(item => productionCalendarParentOperationId(item) === parentKey);
+  }
+
+  function productionCalendarAllocationLabel(allocation = {}) {
+    return [
+      allocation.materialName,
+      allocation.materialCode,
+      allocation.productionId,
+      allocation.operationId
+    ].find(value => String(value || '').trim()) || 'Produção';
+  }
+
+  function nextProductionCalendarDateAfter(snapshot, date) {
+    const nextVisibleWorkingDay = (snapshot?.days || [])
+      .map(day => day?.date)
+      .filter(dayDate => isValidDateOnly(dayDate) && dayDate > date)
+      .find(dayDate => {
+        const day = (snapshot?.days || []).find(item => item?.date === dayDate);
+        return day?.isWorkingDay !== false;
+      });
+    return nextVisibleWorkingDay || addDays(date, 1);
+  }
+
+  function showProductionReplacementConfirmation({ draggedAllocation, occupiedAllocation }) {
+    page.querySelector('.production-replacement-modal')?.remove();
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop production-replacement-modal';
+    backdrop.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="production-replacement-title">
+        <div class="modal-header">
+          <div>
+            <h3 id="production-replacement-title">Substituir produção programada</h3>
+          </div>
+          <button class="link-button cancel-replacement" type="button">Cancelar</button>
+        </div>
+        <p>Este período já possui ${escapeHtml(productionCalendarAllocationLabel(occupiedAllocation))}.</p>
+        <p>Ao inserir ${escapeHtml(productionCalendarAllocationLabel(draggedAllocation))} neste local:</p>
+        <ul>
+          <li>a produção existente será reagendada;</li>
+          <li>o planejamento será recalculado;</li>
+          <li>outras datas poderão ser afetadas.</li>
+        </ul>
+        <div class="form-actions modal-actions">
+          <button class="secondary-button cancel-replacement" type="button">Cancelar</button>
+          <button class="primary-button confirm-replacement" type="button">Substituir e recalcular</button>
+        </div>
+      </div>
+    `;
+    return new Promise(resolve => {
+      const close = confirmed => {
+        backdrop.remove();
+        resolve(Boolean(confirmed));
+      };
+      backdrop.querySelectorAll('.cancel-replacement').forEach(button => {
+        button.addEventListener('click', () => close(false));
+      });
+      backdrop.querySelector('.confirm-replacement')?.addEventListener('click', () => close(true));
+      backdrop.addEventListener('click', event => {
+        if (event.target === backdrop) close(false);
+      });
+      backdrop.addEventListener('keydown', event => {
+        if (event.key === 'Escape') close(false);
+      });
+      page.appendChild(backdrop);
+      backdrop.querySelector('.confirm-replacement')?.focus();
+    });
   }
 
   function applyDropPlanningChange(detail = {}) {
@@ -1452,7 +1554,9 @@ export function PlanningPage() {
         return [`${Number(match[1]) - 1}:${match[2]}`, value];
       }));
     currentSimulation = null;
+    manualScheduleDraft = null;
     lastPayload = null;
+    draft.manualScheduleDraft = null;
     hasPendingSimulationChanges = false;
     clearTimeout(recalculationTimer);
     clearTimeout(autosaveTimer);
@@ -1608,6 +1712,177 @@ export function PlanningPage() {
     return [...existing, ...current];
   }
 
+  function productionCalendarMachines(result) {
+    const machineSources = [
+      result?.machines,
+      result?.summary?.machines,
+      result?.machineOptions,
+      result?.summary?.machineOptions
+    ];
+    return machineSources.find(source => Array.isArray(source) && source.length) || [];
+  }
+
+  function productionCalendarPlanningId(result) {
+    return result?.planningId
+      || result?.planning_id
+      || result?.id
+      || result?.summary?.planningId
+      || result?.summary?.planning_id
+      || draft.planningCode
+      || lastPayload?.planningCode
+      || null;
+  }
+
+  function logProductionCalendarAdapterErrors(errors) {
+    const isDevelopment = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+    if (isDevelopment && errors.length) {
+      console.warn('ProductionCalendar V2 ignorou alocações inválidas.', errors);
+    }
+  }
+
+  function renderProductionCalendarWarning(calendar, errorCount) {
+    if (!errorCount) return;
+    const warning = document.createElement('p');
+    warning.className = 'muted-text production-calendar-adapter-warning';
+    warning.textContent = `Algumas alocações inválidas não foram exibidas. (${errorCount})`;
+    const toolbar = calendar.querySelector('.production-calendar-toolbar');
+    if (toolbar) {
+      toolbar.insertAdjacentElement('afterend', warning);
+    } else {
+      calendar.prepend(warning);
+    }
+  }
+
+  function noopProductionCalendarDetails() {
+    // Pendência: conectar ao fluxo de detalhes quando houver callback simples compartilhado com o calendário atual.
+  }
+
+  function currentProductionCalendarSnapshot() {
+    if (!currentSimulation) return buildProductionCalendarSnapshot({ days: [], operations: [], calendarOperations: [] });
+    return buildProductionCalendarSnapshot(currentSimulation, { stockAlerts: currentPlanningStockAlerts });
+  }
+
+  function findProductionCalendarMachine(snapshot, machineId) {
+    return (snapshot?.machines || []).find(machine => String(machine?.machineId) === String(machineId)) || null;
+  }
+
+  function validateProductionCalendarMoveIntent(intent, snapshot) {
+    if (!intent || intent.type !== 'MOVE_ALLOCATION') return null;
+    if (productionCalendarMoveInProgress) throw new Error('Aguarde o replanejamento atual terminar.');
+
+    const destinationKind = intent.destination?.kind;
+    if (!['empty', 'occupied'].includes(destinationKind)) throw new Error('Destino invalido para movimentacao.');
+    if (!isValidDateOnly(intent.to?.date)) throw new Error('Destino sem data valida.');
+    if (!intent.to?.machineId) throw new Error('Destino sem maquina.');
+    const allocation = (snapshot?.allocations || []).find(item => String(item?.allocationId) === String(intent.allocationId)) || null;
+    if (!allocation) throw new Error('Este bloco foi atualizado pelo recalculo. Atualize a selecao e tente novamente.');
+
+    const parentOperationId = productionCalendarParentOperationId(allocation);
+    if (!parentOperationId) throw new Error('Operacao pai inexistente.');
+
+    if (String(allocation.date || '') === String(intent.to.date) && String(allocation.machineId || '') === String(intent.to.machineId)) {
+      throw new Error('Destino igual a origem.');
+    }
+
+    const machine = findProductionCalendarMachine(snapshot, intent.to.machineId);
+    if (!machine?.machineId || !machine?.machineName) throw new Error('Maquina de destino inexistente.');
+
+    const parentAllocations = productionCalendarAllocationsForParent(snapshot, parentOperationId);
+    if (!parentAllocations.length) throw new Error('Este bloco foi atualizado pelo recalculo. Atualize a selecao e tente novamente.');
+
+    return { mode: 'move', allocation, parentOperationId, machine };
+  }
+  async function handleProductionCalendarMoveRequest(intent) {
+    if (!intent || intent.type !== 'MOVE_ALLOCATION') return;
+    if (typeof productionCalendarMoveRunner !== 'function') {
+      toast('Simulação indisponível para movimentação.');
+      return;
+    }
+    const snapshot = currentProductionCalendarSnapshot();
+    try {
+      const move = validateProductionCalendarMoveIntent(intent, snapshot);
+      if (!move) return;
+      await productionCalendarMoveRunner(intent, move);
+    } catch (error) {
+      toast(error);
+    }
+  }
+
+  function daysWithDraftAllocations(days = [], allocations = []) {
+    const byDate = new Map((Array.isArray(days) ? days : []).map(day => [String(day.date || ''), day]));
+    (Array.isArray(allocations) ? allocations : []).forEach(allocation => {
+      const date = String(allocation?.date || '');
+      if (isValidDateOnly(date) && !byDate.has(date)) {
+        byDate.set(date, { date, label: formatDateOnly(date), weekday: '' });
+      }
+    });
+    return [...byDate.values()].sort((left, right) => String(left.date).localeCompare(String(right.date)));
+  }
+
+  function buildProductionCalendarSnapshot(result, options = {}) {
+    const adapted = adaptPlanningResultToProductionCalendar({
+      planningId: productionCalendarPlanningId(result),
+      calendarOperations: Array.isArray(result?.calendarOperations) ? result.calendarOperations : [],
+      operations: Array.isArray(result?.operations) ? result.operations : [],
+      days: Array.isArray(result?.days) ? result.days : [],
+      machines: productionCalendarMachines(result),
+      status: result?.summary?.status || result?.status
+    });
+    const activeManualDraft = !options.ignoreManualDraft && manualScheduleDraft?.allocations?.length
+      ? manualScheduleDraft
+      : null;
+    const allocations = activeManualDraft ? activeManualDraft.allocations : adapted.allocations;
+    const snapshot = {
+      days: daysWithDraftAllocations(adapted.days, allocations),
+      machines: adapted.machines,
+      allocations,
+      permissions: { readOnly: true },
+      errors: adapted.errors,
+      warnings: [],
+      visualState: {
+        ...productionCalendarVisualState,
+        stockAlerts: Boolean(options.stockAlerts)
+      }
+    };
+    logProductionCalendarAdapterErrors(adapted.errors);
+    return snapshot;
+  }
+
+  function renderProductionCalendarSnapshot(targetElement, snapshot) {
+    targetElement.innerHTML = '';
+    const calendar = ProductionCalendar({
+      days: Array.isArray(snapshot?.days) ? snapshot.days : [],
+      machines: Array.isArray(snapshot?.machines) ? snapshot.machines : [],
+      allocations: Array.isArray(snapshot?.allocations) ? snapshot.allocations : [],
+      permissions: snapshot?.permissions || { readOnly: true },
+      visualState: snapshot?.visualState || {},
+      onOpenDetails: noopProductionCalendarDetails,
+      onRequestMove: handleProductionCalendarMoveRequest,
+      onVisualStateChange: nextVisualState => {
+        productionCalendarVisualState = {
+          ...productionCalendarVisualState,
+          ...(nextVisualState || {})
+        };
+      }
+    });
+    targetElement.appendChild(calendar);
+    renderProductionCalendarWarning(calendar, Array.isArray(snapshot?.errors) ? snapshot.errors.length : 0);
+  }
+
+  function renderProductionCalendar(targetElement, result, options = {}) {
+    targetElement.innerHTML = '';
+    if (!USE_PRODUCTION_CALENDAR_V2) {
+      targetElement.appendChild(CalendarTimeline(result.days, timelineOperations(result), {
+        mode: 'planning',
+        ...(result.summary || {}),
+        stockAlerts: options.stockAlerts || currentPlanningStockAlerts
+      }));
+      return;
+    }
+
+    renderProductionCalendarSnapshot(targetElement, buildProductionCalendarSnapshot(result, options));
+  }
+
   function simulatedProductionByDate(result) {
     const productionByDate = new Map();
     timelineOperations(result)
@@ -1695,8 +1970,16 @@ export function PlanningPage() {
   function renderSimulation(result, form) {
     const coloredResult = withProductionColors(result);
     currentSimulation = coloredResult;
+    const automaticSnapshot = buildProductionCalendarSnapshot(coloredResult, { ignoreManualDraft: true });
+    manualScheduleDraft = createManualScheduleDraft({
+      planningId: productionCalendarPlanningId(coloredResult),
+      baseSimulationId: coloredResult?.code || lastPayload?.planningCode || Date.now(),
+      allocations: automaticSnapshot.allocations,
+      machines: automaticSnapshot.machines
+    });
     draft.currentSimulation = coloredResult;
     draft.lastPayload = lastPayload;
+    draft.manualScheduleDraft = manualScheduleDraft;
     saveDraftNow();
     hasPendingSimulationChanges = false;
     const resultsTarget = target.querySelector('.planning-results');
@@ -1706,12 +1989,7 @@ export function PlanningPage() {
     const oldSummaryPanel = target.querySelector('.final-summary-panel');
     if (oldSummaryPanel) oldSummaryPanel.hidden = true;
     currentPlanningStockAlerts = new Map();
-    timelineTarget.innerHTML = '';
-    timelineTarget.appendChild(CalendarTimeline(coloredResult.days, timelineOperations(coloredResult), {
-      mode: 'planning',
-      ...(coloredResult.summary || {}),
-      stockAlerts: currentPlanningStockAlerts
-    }));
+    renderProductionCalendar(timelineTarget, coloredResult, { stockAlerts: currentPlanningStockAlerts });
     schedulePlanningStockAlerts(coloredResult);
     flowsTarget.innerHTML = renderProductionFlows(coloredResult);
     requestAnimationFrame(drawProductionFlowConnectors);
@@ -1729,12 +2007,8 @@ export function PlanningPage() {
       ...(currentSimulation.summary || {}),
       dailyTeamOverrides: draft.dailyTeamOverrides || {}
     };
-    timelineTarget.innerHTML = '';
-    timelineTarget.appendChild(CalendarTimeline(currentSimulation.days, timelineOperations(currentSimulation), {
-      mode: 'planning',
-      ...(currentSimulation.summary || {}),
-      stockAlerts: currentPlanningStockAlerts
-    }));
+    draft.manualScheduleDraft = manualScheduleDraft;
+    renderProductionCalendar(timelineTarget, currentSimulation, { stockAlerts: currentPlanningStockAlerts });
   }
 
   function markPlanningInconsistent() {
@@ -1875,6 +2149,7 @@ export function PlanningPage() {
         draft = defaultDraft();
         lastPayload = null;
         currentSimulation = null;
+        manualScheduleDraft = null;
         backdrop.remove();
         window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Planejamento ${saved.plan.code || saved.plan.id} lancado.` }));
         activeTab = 'history';
@@ -2139,7 +2414,7 @@ export function PlanningPage() {
     const form = target.querySelector('form');
     const shiftsTarget = target.querySelector('.shifts-target');
     const productionsTarget = target.querySelector('.productions-target');
-    target.querySelector('.timeline-target').appendChild(CalendarTimeline([], [], { mode: 'planning' }));
+    renderProductionCalendar(target.querySelector('.timeline-target'), { days: [], operations: [], calendarOperations: [] });
     restoreSimulation(form);
 
     function rerenderBuilder() {
@@ -2406,12 +2681,20 @@ export function PlanningPage() {
       draft = defaultDraft();
       lastPayload = null;
       currentSimulation = null;
+      manualScheduleDraft = null;
       draft.lastPayload = null;
       draft.currentSimulation = null;
+      draft.manualScheduleDraft = null;
       rerenderBuilder();
     });
 
     async function simulateCurrent() {
+      if (manualScheduleDraft?.dirty) {
+        const discard = confirm('Existem alteracoes manuais no calendario. Recalcular automaticamente descartara essas alteracoes.');
+        if (!discard) return null;
+        manualScheduleDraft = null;
+        draft.manualScheduleDraft = null;
+      }
       updateDraftFromGeneral();
       if (!validateDraft(form)) return null;
       lastPayload = payload();
@@ -2426,6 +2709,170 @@ export function PlanningPage() {
       return result;
     }
 
+    function manualDraftDailyMinutes() {
+      const shifts = Array.isArray(draft.shifts) && draft.shifts.length ? draft.shifts : [defaultShift(0)];
+      return shifts.reduce((sum, shift, index) => (
+        sum + productiveMinutes(shift.hoursPerDay, index === 0 ? 8.8 : 6)
+      ), 0);
+    }
+
+    function openManualDraftChoiceModal({ title, bodyHtml, actions }) {
+      page.querySelector('.manual-draft-choice-modal')?.remove();
+      const backdrop = document.createElement('div');
+      backdrop.className = 'modal-backdrop manual-draft-choice-modal';
+      backdrop.innerHTML = `
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="manual-draft-choice-title">
+          <div class="modal-header">
+            <h3 id="manual-draft-choice-title">${escapeHtml(title)}</h3>
+            <button class="link-button" type="button" data-manual-draft-choice="cancel">Cancelar</button>
+          </div>
+          <div class="manual-draft-choice-body">${bodyHtml}</div>
+          <div class="form-actions modal-actions">
+            ${actions.map(action => `<button class="${escapeHtml(action.className || 'secondary-button')}" type="button" data-manual-draft-choice="${escapeHtml(action.value)}">${escapeHtml(action.label)}</button>`).join('')}
+          </div>
+        </div>
+      `;
+      return new Promise(resolve => {
+        const close = value => {
+          backdrop.remove();
+          resolve(value);
+        };
+        backdrop.addEventListener('click', event => {
+          const button = event.target.closest('[data-manual-draft-choice]');
+          if (button) close(button.dataset.manualDraftChoice || 'cancel');
+          else if (event.target === backdrop) close('cancel');
+        });
+        backdrop.addEventListener('keydown', event => {
+          if (event.key === 'Escape') close('cancel');
+        });
+        page.appendChild(backdrop);
+        backdrop.querySelector('[data-manual-draft-choice]')?.focus();
+      });
+    }
+
+    async function confirmManualCapacityDecision(error) {
+      const capacity = Number(error?.proposedAllocation?.capacityPercent || 0);
+      const choice = await openManualDraftChoiceModal({
+        title: 'Capacidade do dia excedida',
+        bodyHtml: `
+          <p>Capacidade final prevista: <strong>${Number.isFinite(capacity) ? `${capacity.toFixed(2)}%` : '-'}</strong>.</p>
+          <p>Escolha como tratar o excedente.</p>
+        `,
+        actions: [
+          { value: 'cancel', label: 'Cancelar', className: 'secondary-button' },
+          { value: 'split', label: 'Preencher o dia e reagendar excedente', className: 'secondary-button' },
+          { value: 'override', label: 'Permitir capacidade extraordinaria', className: 'primary-button' }
+        ]
+      });
+      return ['split', 'override'].includes(choice) ? choice : 'cancel';
+    }
+
+    async function confirmManualDraftMove(error) {
+      if (error?.code === 'CONFIRM_MERGE') {
+        const choice = await openManualDraftChoiceModal({
+          title: 'Unificar producoes',
+          bodyHtml: '<p>As quantidades, componentes e operacoes pai serao preservados em um unico card.</p>',
+          actions: [
+            { value: 'cancel', label: 'Cancelar', className: 'secondary-button' },
+            { value: 'confirm', label: 'Unificar producoes', className: 'primary-button' }
+          ]
+        });
+        return choice === 'confirm';
+      }
+      if (error?.code === 'CONFIRM_REPLACE') {
+        const occupant = error.occupyingAllocation || {};
+        const choice = await openManualDraftChoiceModal({
+          title: 'Substituir producao programada',
+          bodyHtml: `
+            <p>Este periodo ja possui <strong>${escapeHtml(occupant.materialName || occupant.materialId || 'outra producao')}</strong>.</p>
+            <p>Ao inserir a producao movida, a existente sera reagendada e os movimentos manuais anteriores serao preservados.</p>
+          `,
+          actions: [
+            { value: 'cancel', label: 'Cancelar', className: 'secondary-button' },
+            { value: 'confirm', label: 'Substituir e reagendar', className: 'primary-button' }
+          ]
+        });
+        return choice === 'confirm';
+      }
+      return false;
+    }
+
+    function applyManualDraftMoveWithDecisions(intent, move, decisions = {}) {
+      return applyDraftMove(manualScheduleDraft, {
+        allocationId: move.allocation.allocationId,
+        targetDate: intent.to.date,
+        targetMachineId: move.machine.machineId,
+        machines: currentProductionCalendarSnapshot().machines,
+        matrixRows: matrix,
+        days: currentProductionCalendarSnapshot().days,
+        dailyMinutes: manualDraftDailyMinutes(),
+        ...decisions
+      });
+    }
+
+    productionCalendarMoveRunner = async (intent, move) => {
+      const snapshot = manualScheduleDraft ? JSON.parse(JSON.stringify(manualScheduleDraft)) : null;
+      const previousVisualState = { ...productionCalendarVisualState };
+      productionCalendarMoveInProgress = true;
+      try {
+        if (!manualScheduleDraft) throw new Error('Rascunho manual indisponivel para movimentacao.');
+        const decisions = {};
+        try {
+          manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
+        } catch (error) {
+          if (error?.code === 'CONFIRM_MERGE') {
+            if (!await confirmManualDraftMove(error)) throw error;
+            decisions.confirmMerge = true;
+            try {
+              manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
+            } catch (capacityError) {
+              if (capacityError?.code !== 'CAPACITY_EXCEEDED') throw capacityError;
+              decisions.capacityDecision = await confirmManualCapacityDecision(capacityError);
+              if (decisions.capacityDecision === 'cancel') throw capacityError;
+              manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
+            }
+          } else if (error?.code === 'CONFIRM_REPLACE') {
+            if (!await confirmManualDraftMove(error)) throw error;
+            decisions.confirmReplace = true;
+            try {
+              manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
+            } catch (capacityError) {
+              if (capacityError?.code !== 'CAPACITY_EXCEEDED') throw capacityError;
+              decisions.capacityDecision = await confirmManualCapacityDecision(capacityError);
+              if (decisions.capacityDecision === 'cancel') throw capacityError;
+              manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
+            }
+          } else if (error?.code === 'CAPACITY_EXCEEDED') {
+            decisions.capacityDecision = await confirmManualCapacityDecision(error);
+            if (decisions.capacityDecision === 'cancel') throw error;
+            manualScheduleDraft = applyManualDraftMoveWithDecisions(intent, move, decisions);
+          } else {
+            throw error;
+          }
+        }
+        draft.manualScheduleDraft = manualScheduleDraft;
+        saveDraftNow();
+        if (String(previousVisualState.selectedAllocationId || '') === String(move.allocation.allocationId || '')) {
+          productionCalendarVisualState = {
+            ...productionCalendarVisualState,
+            selectedAllocationId: null
+          };
+        }
+        refreshTimelineOnly();
+        toast('Producao movimentada no rascunho manual.');
+      } catch (error) {
+        productionCalendarVisualState = previousVisualState;
+        if (snapshot) {
+          manualScheduleDraft = restoreManualScheduleDraftSnapshot(snapshot);
+          draft.manualScheduleDraft = manualScheduleDraft;
+          saveDraftNow();
+          refreshTimelineOnly();
+        }
+        throw error;
+      } finally {
+        productionCalendarMoveInProgress = false;
+      }
+    };
     function focusCalendarCardFromFlow(node) {
       const materialId = String(node?.dataset.flowMaterialId || '');
       if (!materialId) return;

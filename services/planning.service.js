@@ -1,4 +1,5 @@
 import { holidayForDate } from '../shared/holidays.js';
+import { buildPlanningDailyAllocations } from './planningAllocation.service.js';
 
 function addDays(date, days) {
   const copy = new Date(`${date}T00:00:00`);
@@ -1267,6 +1268,19 @@ function calendarOperationsForSchedule(operations, calendar) {
   return (Array.isArray(operations) ? operations : []).flatMap(operation => operationDailyCalendarCards(operation, calendar));
 }
 
+function planningCalendarOperations(operations, calendar, payload) {
+  const calendarOperations = calendarOperationsForSchedule(operations, calendar);
+  const machineNames = [...new Set((Array.isArray(operations) ? operations : [])
+    .map(operation => operation.machineName)
+    .filter(Boolean)
+    .map(String))];
+  return buildPlanningDailyAllocations(calendarOperations, {
+    planningId: payload?.planningCode || payload?.code || null,
+    allocationOverrides: payload?.allocationOverrides || [],
+    machines: machineNames.map(machineName => ({ machineId: machineName, machineName }))
+  }).operations;
+}
+
 function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, shifts, setupHours = 0, dailyTeamOverrides = {}, operationOverrides = {}, operationSplits = [], existingOperations = [], manualWorkDates = [] }) {
   const calendar = calendarFromPayload({ shifts, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, manualWorkDates });
   const { shiftStart, shiftEnd } = calendar;
@@ -1980,7 +1994,7 @@ function buildSinglePlan(payload, context) {
     operations: operations.map((operation, index) => index === 0
       ? { ...operation, _planningMeta: { shifts: Array.isArray(payload.shifts) && payload.shifts.length ? payload.shifts : [{ hoursPerDay: payload.hoursPerDay, shiftStartTime: payload.shiftStartTime, shiftEndTime: payload.shiftEndTime, pauseHours: 0 }], setupHours: toOperationalHours(payload.setupHours || 0), dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides), manualWorkDates } }
       : operation),
-    calendarOperations: calendarOperationsForSchedule(operations, scheduleCalendar),
+    calendarOperations: planningCalendarOperations(operations, scheduleCalendar, payload),
     days
   };
 }
@@ -2226,7 +2240,7 @@ export function buildPlan(payload, context) {
     operations: operations.map((operation, index) => index === 0
       ? { ...operation, _planningMeta: { shifts, setupHours: toOperationalHours(payload.setupHours || 0), dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides), manualWorkDates, productions: productions.map(production => ({ productionIndex: production.productionIndex, productionKey: `production-${production.productionIndex}`, title: production.productionTitle || `ProduÃ§Ã£o ${production.productionIndex + 1}`, color: production.color || null, materialId: production.material.id, materialName: production.material.name, materialCode: materialCode(production.material), plannedQty: production.plannedQty, plannedUnit: production.material.primary_unit, machineName: production.machineName || null, peopleCount: production.peopleCount == null || production.peopleCount === '' ? null : Number(production.peopleCount), desiredDate: production.desiredDate || null, productionModelName: production.productionModelName || null })) } }
       : operation),
-    calendarOperations: calendarOperationsForSchedule(operations, scheduleCalendar),
+    calendarOperations: planningCalendarOperations(operations, scheduleCalendar, payload),
     days
   };
 }
