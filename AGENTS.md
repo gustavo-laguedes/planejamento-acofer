@@ -65,6 +65,14 @@
 - Servidor local: `npm run dev` ou `npm start`.
 - Antes de escolher validações, confira os arquivos em `tests/` relacionados ao risco tocado.
 
+## Skills Do Projeto
+
+- Skills versionadas ficam em `.agents/skills/<skill-name>/SKILL.md` e sao carregadas sob demanda.
+- Agents devem usar a skill especifica do dominio quando a tarefa tocar investigacao, diagnosticos, calendario manual, persistencia/legado ou estoque.
+- Toto Wolff usa `$acofer-testing` para testes tecnicos deterministicos; Max Verstappen usa `$acofer-operational-homologation` para homologacao operacional.
+- Sequencia de independencia: JARVIS implementa -> Toto testa tecnicamente -> Max homologa operacionalmente.
+- A entrega deve listar `Skills usadas`, fontes canonicas consultadas, arquivos analisados ou alterados e validacoes realizadas.
+
 ## Coordenação De Subagents
 
 Use subagents explicitamente, por delegação do Codex coordenador, quando a tarefa justificar. Não convoque todos automaticamente para tarefas pequenas.
