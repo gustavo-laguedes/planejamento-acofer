@@ -685,7 +685,9 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Funcoes extraidas na REF-023: `dateOnlyFromDate`, `parseDateOnly`, `addCalendarMonths`, `isWeekendDate`.
 - [x] REF-024 concluida: auditoria e centralizacao de `isValidDateOnly` no modulo `shared/planning-date/planningCivilDate.js`; commit-base `d7a7c20`; worktree inicial limpo; baseline inicial e suite final `node --test tests/*.js` com 54 testes, 54 aprovados e 0 falhas; contagem canonica final da `PlanningPage.js`: 7137 linhas.
 - [x] Funcoes extraidas na REF-024: somente `isValidDateOnly`. Nenhuma outra extracao foi autorizada ou executada.
-- [x] Proxima missao futura recomendada registrada, sem execucao: auditar a copia privada de `isValidDateOnly` em `shared/planning-presentation/planningFormatters.js` e, se seguro, fazer o modulo consumir o helper central.
+- [x] REF-025 concluida: auditoria do bloco arquitetural `planningLookups` no commit-base `aae0dfb`; funcoes candidatas auditadas incluíram `materialById`, `matchingMatrix`, `productionMaterialOptions`, `materialMatches`, `findSimulationOperation`, `treeForProductionIndex`, `matchingDropOption`, selectors de calendario/manual, estoque, fluxo e detalhes. Foram rejeitadas funcoes com API, DOM, draft mutavel, payload, calendario manual, transporte, estoque, arvore produtiva, persistencia, precedencia ou IDs sensiveis.
+- [x] Funcoes extraidas na REF-025: `findMaterialById`, `selectMatchingMatrixRows`, `selectProductionMaterialOptions`, `materialMatchesSearch` para `shared/planning-domain/planningLookups.js`; suite final `node --test tests/*.js` com 55 testes, 55 aprovados e 0 falhas; contagem canonica final da `PlanningPage.js`: 7099 linhas.
+- [x] Proxima fronteira recomendada apos REF-025, sem execucao: auditar e, se seguro, extrair apenas `productionCalendarParentOperationId` e seus normalizadores imediatos para modulo de identidade de calendario manual, preservando IDs legados.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.

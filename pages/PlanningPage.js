@@ -44,6 +44,12 @@ import {
   isWeekendDate,
   parseDateOnly
 } from '../shared/planning-date/planningCivilDate.js';
+import {
+  findMaterialById,
+  materialMatchesSearch,
+  selectMatchingMatrixRows,
+  selectProductionMaterialOptions
+} from '../shared/planning-domain/planningLookups.js';
 import { DataTable } from '../shared/DataTable.js';
 import { holidayForDate } from '../shared/holidays.js';
 import { createOperationOverlay, setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
@@ -1444,27 +1450,12 @@ export function PlanningPage() {
     return Number.isFinite(dailyMinutes) && dailyMinutes > 0 ? dailyMinutes : null;
   }
 
-  function materialById(id) {
-    return materials.find(material => String(material.id) === String(id));
-  }
-
-  function matchingMatrix(material) {
-    const codes = new Set((material?.codes || []).map(code => String(code).toLowerCase()));
-    return matrix
-      .filter(row => row.active !== false)
-      .filter(row => row.material_name === material?.name || (row.material_codes || []).some(code => codes.has(String(code).toLowerCase())))
-      .sort((left, right) =>
-        matrixPriority(left) - matrixPriority(right)
-        || matrixSecondsPerUnit(left) - matrixSecondsPerUnit(right)
-      );
-  }
-
   function hydrateProductionDefaults(production) {
-    const material = materialById(production.materialId);
+    const material = findMaterialById(materials, production.materialId);
     if (!material) return;
     const models = productionModelsFor(material);
     if (!production.productionModelName && models[0]) production.productionModelName = models[0].name;
-    const rows = matchingMatrix(material);
+    const rows = selectMatchingMatrixRows(matrix, material, { getPriority: matrixPriority, getSecondsPerUnit: matrixSecondsPerUnit });
     const machines = [...new Set(rows.map(row => row.machine_name).filter(Boolean))];
     if (!production.machineName && machines[0]) production.machineName = machines[0];
     const people = [...new Set(rows
@@ -1484,27 +1475,6 @@ export function PlanningPage() {
     registeredMachines = registeredMachines.filter(machine => machine?.active !== false);
   }
 
-  function productionMaterialOptions(production) {
-    const root = materialById(production.materialId);
-    if (!root) return [];
-    const seen = new Set();
-    const result = [];
-
-    function visit(material) {
-      if (!material || seen.has(String(material.id))) return;
-      seen.add(String(material.id));
-      result.push(material);
-      const models = productionModelsFor(material);
-      const selectedModel = models.find(model =>
-        String(model.name) === String(material.id === root.id ? production.productionModelName : '')
-      ) || models[0];
-      (selectedModel?.inputMaterials || []).forEach(input => visit(materialById(input.materialId || input.id)));
-    }
-
-    visit(root);
-    return result;
-  }
-
   function locationOptions(selectedId) {
     return locations.map(location => `
       <option value="${location.id}" ${String(location.id) === String(selectedId) ? 'selected' : ''}>${escapeHtml(location.name)}</option>
@@ -1514,7 +1484,7 @@ export function PlanningPage() {
   function productionPayload() {
     return draft.productions.map((production, index) => {
       hydrateProductionDefaults(production);
-      const material = materialById(production.materialId);
+      const material = findMaterialById(materials, production.materialId);
       return {
         materialId: Number(production.materialId),
         color: isHexColor(production.color) ? production.color : automaticProductionColor(index),
@@ -1532,7 +1502,7 @@ export function PlanningPage() {
 
   function payload() {
     const firstProduction = draft.productions[0] || {};
-    const firstMaterial = materialById(firstProduction.materialId);
+    const firstMaterial = findMaterialById(materials, firstProduction.materialId);
     return {
       dateMode: 'start',
       selectedDate: draft.planningStartDate,
@@ -1857,7 +1827,7 @@ export function PlanningPage() {
       form.reportValidity();
       return false;
     }
-    const invalidProduction = draft.productions.find(production => !materialById(production.materialId) || !(Number(production.plannedQty) > 0));
+    const invalidProduction = draft.productions.find(production => !findMaterialById(materials, production.materialId) || !(Number(production.plannedQty) > 0));
     if (invalidProduction) {
       toast('Selecione material e quantidade maior que zero em todas as produções.');
       return false;
@@ -1885,14 +1855,6 @@ export function PlanningPage() {
       return false;
     }
     return true;
-  }
-
-  function materialMatches(material, searchValue) {
-    const haystack = [
-      material.name,
-      ...(material.codes || [])
-    ].map(value => String(value || '').toLowerCase());
-    return haystack.some(value => value.includes(searchValue));
   }
 
   function renderShift(shift, index) {
@@ -1948,8 +1910,8 @@ export function PlanningPage() {
 
   function renderProduction(production, index) {
     hydrateProductionDefaults(production);
-    const material = materialById(production.materialId);
-    const rows = matchingMatrix(material);
+    const material = findMaterialById(materials, production.materialId);
+    const rows = selectMatchingMatrixRows(matrix, material, { getPriority: matrixPriority, getSecondsPerUnit: matrixSecondsPerUnit });
     const machines = [...new Set(rows.map(row => row.machine_name).filter(Boolean))];
     const people = [...new Set(rows
       .filter(row => !production.machineName || row.machine_name === production.machineName)
@@ -1994,8 +1956,8 @@ export function PlanningPage() {
 
   function renderProductionDetailsFields(production, index) {
     hydrateProductionDefaults(production);
-    const material = materialById(production.materialId);
-    const rows = matchingMatrix(material);
+    const material = findMaterialById(materials, production.materialId);
+    const rows = selectMatchingMatrixRows(matrix, material, { getPriority: matrixPriority, getSecondsPerUnit: matrixSecondsPerUnit });
     const machines = [...new Set(rows.map(row => row.machine_name).filter(Boolean))];
     const people = [...new Set(rows
       .filter(row => !production.machineName || row.machine_name === production.machineName)
@@ -2754,7 +2716,7 @@ export function PlanningPage() {
     if (removedIndex < 0) return;
     const activeMaterialIds = new Set();
     draft.productions.forEach(production => {
-      productionMaterialOptions(production).forEach(material => activeMaterialIds.add(String(material.id)));
+      selectProductionMaterialOptions(materials, production).forEach(material => activeMaterialIds.add(String(material.id)));
     });
     const reindex = item => {
       const currentIndex = Number(item.productionIndex || 0);
@@ -4326,7 +4288,7 @@ export function PlanningPage() {
   }
 
   function bestPlanningPcpProductivity(stockRow = {}) {
-    const material = materialById(stockRow.material?.id || stockRow.materialId);
+    const material = findMaterialById(materials, stockRow.material?.id || stockRow.materialId);
     return (matrix || [])
       .filter(row => row.active !== false && planningProductivityMatchesMaterial(row, material || {}, stockRow))
       .sort((left, right) => Number(right.output_qty ?? right.outputQty ?? 0) - Number(left.output_qty ?? left.outputQty ?? 0))[0] || null;
@@ -4340,7 +4302,7 @@ export function PlanningPage() {
   }
 
   function pcpDraftProductionFromStockRow(row = {}, index = 0) {
-    const material = materialById(row.material?.id || row.materialId);
+    const material = findMaterialById(materials, row.material?.id || row.materialId);
     const productivity = row.productivity || bestPlanningPcpProductivity(row) || {};
     const targetQty = Math.ceil(Number(row.targetQty || 0));
     return {
@@ -5585,7 +5547,7 @@ export function PlanningPage() {
 
     function queueSimulationRefresh() {
       if (!currentSimulation) return;
-      if (!draft.productions.every(production => materialById(production.materialId) && Number(production.plannedQty) > 0)) {
+      if (!draft.productions.every(production => findMaterialById(materials, production.materialId) && Number(production.plannedQty) > 0)) {
         hasPendingSimulationChanges = true;
         const notice = target.querySelector('.unsimulated-notice');
         if (notice) notice.hidden = false;
@@ -5750,7 +5712,7 @@ export function PlanningPage() {
         if (!button) return;
         event.preventDefault();
         const previousMaterialId = production.materialId;
-        const material = materialById(button.dataset.materialId);
+        const material = findMaterialById(materials, button.dataset.materialId);
         production.materialId = material?.id || '';
         if (String(previousMaterialId || '') !== String(production.materialId || '')) {
           clearProductionMaterialDecisions(index);
@@ -5820,7 +5782,7 @@ export function PlanningPage() {
         suggestionsTarget.innerHTML = '';
         return;
       }
-      const matches = materials.filter(material => materialMatches(material, searchValue)).slice(0, 12);
+      const matches = materials.filter(material => materialMatchesSearch(material, searchValue)).slice(0, 12);
       suggestionsTarget.innerHTML = matches.length
         ? matches.map(material => `
             <button type="button" data-material-id="${material.id}">
@@ -5870,7 +5832,7 @@ export function PlanningPage() {
       if (!button || !card) return;
       event.preventDefault();
       const production = draft.productions.find(item => item.id === card.dataset.productionId);
-      const material = materialById(button.dataset.materialId);
+      const material = findMaterialById(materials, button.dataset.materialId);
       const previousMaterialId = production.materialId;
       production.materialId = material?.id || '';
       if (String(previousMaterialId || '') !== String(production.materialId || '')) {
