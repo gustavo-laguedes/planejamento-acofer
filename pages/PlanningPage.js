@@ -37,6 +37,12 @@ import {
   minutesToTime,
   timeToMinutes
 } from '../shared/planning-presentation/planningTimeFormatters.js';
+import {
+  addCalendarMonths,
+  dateOnlyFromDate,
+  isWeekendDate,
+  parseDateOnly
+} from '../shared/planning-date/planningCivilDate.js';
 import { DataTable } from '../shared/DataTable.js';
 import { holidayForDate } from '../shared/holidays.js';
 import { createOperationOverlay, setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
@@ -687,31 +693,6 @@ function chips(values = [], emptyText = 'Sem informa&ccedil;&atilde;o') {
   return items.length
     ? items.map(value => `<span class="code-pill">${escapeHtml(value)}</span>`).join('')
     : `<span class="muted-text">${emptyText}</span>`;
-}
-
-function dateOnlyFromDate(date) {
-  const safeDate = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
-  const year = safeDate.getFullYear();
-  const month = String(safeDate.getMonth() + 1).padStart(2, '0');
-  const day = String(safeDate.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function parseDateOnly(value) {
-  const dateValue = String(value || '').slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) return new Date();
-  const [year, month, day] = dateValue.split('-').map(Number);
-  return new Date(year, month - 1, day);
-}
-
-function addCalendarMonths(date, offset) {
-  const next = new Date(date.getFullYear(), date.getMonth() + offset, 1);
-  return next;
-}
-
-function isWeekendDate(date) {
-  const day = date.getDay();
-  return day === 0 || day === 6;
 }
 
 function planningInlineHolidayForDate(dateKeyValue) {

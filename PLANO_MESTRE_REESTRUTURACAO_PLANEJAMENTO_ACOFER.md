@@ -681,7 +681,13 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Funcoes extraidas na REF-021: `formatDateOnly`, `formatPeriod`, `parsePtBrDecimal`, `escapeHtml`, `normalizeText`, `normalizeJsonArray`, `normalizeJsonObject`, `formatPtBrDecimal`, `formatPtBrInteger`.
 - [x] REF-022 concluida: extracao cirurgica de helpers puros de duracao e horario para `shared/planning-presentation/planningTimeFormatters.js`; commit-base `c404baf`; suite final `node --test tests/*.js` com 53 testes, 53 aprovados e 0 falhos.
 - [x] Funcoes extraidas na REF-022: `formatDuration`, `formatHourDuration`, `minutesToTime`, `timeToMinutes`.
-- [ ] Proxima extracao recomendada registrada, sem execucao: extracao pequena dos helpers puros de data civil/calendario (`dateOnlyFromDate`, `parseDateOnly`, `addCalendarMonths`, `isWeekendDate`), se a auditoria continuar indicando baixo risco.
+- [x] REF-023 concluida: extracao cirurgica de helpers neutros de data civil/calendario para `shared/planning-date/planningCivilDate.js`; commit-base `3650829`; contagem canonica por Node; suite final registrada em `docs/refactor/REF-023_PLANNING_CIVIL_DATE_EXTRACTION.md`. Correcao factual: `dateOnlyFromDate` e `parseDateOnly` nao sao puras/deterministicas para todos os inputs, pois preservam fallback legado para `new Date()` em entradas invalidas/vazias.
+- [x] Funcoes extraidas na REF-023: `dateOnlyFromDate`, `parseDateOnly`, `addCalendarMonths`, `isWeekendDate`.
+- [x] Proxima extracao recomendada registrada, sem execucao: extracao pequena de `generatePlanningCode`, se a auditoria confirmar baixo risco e preservar uso de `Date` local.
+- [ ] `productiveMinutes` permanece pendente.
+- [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
+- [ ] REF-013 homologacao manual permanece pendente.
+- [ ] Calendario V2 permanece pendente.
 
 ---
 
@@ -1778,6 +1784,24 @@ Próxima missão sugerida:
 ```
 
 ## Entradas
+
+### 2026-08-07 15:36 — REF-023 — Extracao cirurgica de helpers neutros de data civil/calendario
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de extracao pequena e delimitada
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `36508293a6682a884806ba90b5cebe2a2e368f0c`
+Objetivo: extrair somente `dateOnlyFromDate`, `parseDateOnly`, `addCalendarMonths` e `isWeekendDate` da `PlanningPage.js`, preservando comportamento civil local, rollover e invalidos, sem dependencia da pagina e sem regra produtiva.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-001_PLANNING_PAGE_MAP.md`, `docs/refactor/REF-020_TECHNICAL_CHECKPOINT.md`, `docs/refactor/REF-021_PLANNING_FORMATTERS_EXTRACTION.md`, `docs/refactor/REF-022_PLANNING_TIME_FORMATTERS_EXTRACTION.md`, `pages/PlanningPage.js`, `shared/planning-presentation/planningFormatters.js`, `shared/planning-presentation/planningTimeFormatters.js`, `package.json` e buscas por consumidores.
+Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-date/planningCivilDate.js`, `tests/planningCivilDate.test.js`, `docs/refactor/REF-023_PLANNING_CIVIL_DATE_EXTRACTION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: `PlanningPage.js` passou a importar quatro helpers de `shared/planning-date/planningCivilDate.js`; as definicoes locais foram removidas; novo teste de caracterizacao importa diretamente o modulo extraido; documento de evidencia REF-023 criado.
+Testes/comandos: baseline inicial `node --test tests/*.js` passou com 53 testes, 53 aprovados e 0 falhos; `node --check` no novo modulo e na pagina passou; teste focado `planningCivilDate` passou; testes relacionados de formatters/time passaram; suite completa final registrada na evidencia.
+Contagem canonica: `PlanningPage.js` passou de 7162 para 7143 linhas pelo metodo Node aprovado; commit-base `3650829` tambem tinha 7162 linhas.
+Checkboxes atualizados: REF-023 registrada como concluida no checkpoint de refatoracao; commit-base `3650829`, metodo canonico, funcoes extraidas e pendencias preservadas foram registrados.
+Riscos/pendencias: `dateOnlyFromDate` e `parseDateOnly` nao sao puras/deterministicas em sentido estrito para todos os inputs, porque invalidos/vazios caem em `new Date()` e dependem do relogio atual; a extracao segue arquiteturalmente valida por serem helpers neutros, sem efeito colateral externo e sem regra produtiva. Comportamento estranho preservado para invalidos, rollover de datas aparentemente invalidas e `addCalendarMonths` sempre retornando dia 1; `productiveMinutes`, helpers de turno, REF-013 manual e Calendario V2 continuam pendentes.
+Proxima missao sugerida: extrair somente `generatePlanningCode`, se auditoria confirmar baixo risco e preservar semantica de `Date` local.
+
+---
 
 ### 2026-08-07 15:00 — REF-022 — Extracao cirurgica de helpers puros de duracao e horario
 
