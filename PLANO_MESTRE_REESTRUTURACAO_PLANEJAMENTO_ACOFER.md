@@ -351,6 +351,22 @@ O Codex deve parar e não ampliar escopo quando encontrar:
 
 Nesses casos, deve registrar o bloqueio e devolver evidências.
 
+### 5.5 Regra de contagem física da `PlanningPage.js`
+
+Para registrar contagem física de linhas da `PlanningPage.js`, usar somente:
+
+```text
+node -e "const fs=require('fs'); const s=fs.readFileSync('pages/PlanningPage.js','utf8'); console.log(s.split(/\r?\n/).length)"
+```
+
+Para conferir versões em commits, usar somente:
+
+```text
+node -e "const {execFileSync}=require('child_process'); const s=execFileSync('git',['show','<COMMIT>:pages/PlanningPage.js'],{encoding:'utf8'}); console.log(s.split(/\r?\n/).length)"
+```
+
+Não usar `Measure-Object -Line` para registrar essa métrica.
+
 ---
 
 ## 6. Fluxo obrigatório de cada missão
@@ -663,7 +679,9 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Primeira extracao recomendada definida: helpers puros de formatacao/normalizacao (`formatDateOnly`, `formatPeriod`, `parsePtBrDecimal`, `escapeHtml`, `normalizeText`, `normalizeJsonArray`, `normalizeJsonObject`, `formatPtBrDecimal`, `formatPtBrInteger`) para `shared/planning-presentation/planningFormatters.js`.
 - [x] REF-021 concluida: primeira extracao cirurgica de formatadores/normalizadores puros para `shared/planning-presentation/planningFormatters.js`; commit-base `5f7b69c`; suite final `node --test tests/*.js` com 52 testes, 52 aprovados e 0 falhos.
 - [x] Funcoes extraidas na REF-021: `formatDateOnly`, `formatPeriod`, `parsePtBrDecimal`, `escapeHtml`, `normalizeText`, `normalizeJsonArray`, `normalizeJsonObject`, `formatPtBrDecimal`, `formatPtBrInteger`.
-- [ ] Proxima extracao recomendada registrada, sem execucao: helpers puros de duracao e tempo civil (`formatDuration`, `formatHourDuration`, `dateOnlyFromDate`, `parseDateOnly`, `addCalendarMonths`, `isWeekendDate`, `minutesToTime`, `productiveMinutes`, `timeToMinutes`).
+- [x] REF-022 concluida: extracao cirurgica de helpers puros de duracao e horario para `shared/planning-presentation/planningTimeFormatters.js`; commit-base `c404baf`; suite final `node --test tests/*.js` com 53 testes, 53 aprovados e 0 falhos.
+- [x] Funcoes extraidas na REF-022: `formatDuration`, `formatHourDuration`, `minutesToTime`, `timeToMinutes`.
+- [ ] Proxima extracao recomendada registrada, sem execucao: extracao pequena dos helpers puros de data civil/calendario (`dateOnlyFromDate`, `parseDateOnly`, `addCalendarMonths`, `isWeekendDate`), se a auditoria continuar indicando baixo risco.
 
 ---
 
@@ -1761,6 +1779,25 @@ Próxima missão sugerida:
 
 ## Entradas
 
+### 2026-08-07 15:00 — REF-022 — Extracao cirurgica de helpers puros de duracao e horario
+
+Status: CONCLUIDA
+Executor/agent: Codex coordenador; JARVIS implementou escopo cirurgico; Toto validou tecnicamente por teste focado e suite; Max nao executou homologacao manual por nao haver mudanca operacional visivel.
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-testing`.
+Branch/commit de referencia: `rebuild-production-calendar` / `c404baf36f4820d263dab899e771870a20846640`; commit-base oficial `c404baf`.
+Objetivo: retirar da `PlanningPage.js` somente quatro helpers puros relacionados a duracao e conversao de horario, colocando-os em modulo neutro e testavel sem alterar comportamento.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-001_PLANNING_PAGE_MAP.md`, `docs/refactor/REF-020_TECHNICAL_CHECKPOINT.md`, `docs/refactor/REF-021_PLANNING_FORMATTERS_EXTRACTION.md`, `pages/PlanningPage.js`, `shared/planning-presentation/planningFormatters.js`, `tests/planningFormatters.test.js`, `package.json` e buscas por consumidores.
+Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-presentation/planningTimeFormatters.js`, `tests/planningTimeFormatters.test.js`, `docs/refactor/REF-022_PLANNING_TIME_FORMATTERS_EXTRACTION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: `PlanningPage.js` passou a importar quatro helpers de `shared/planning-presentation/planningTimeFormatters.js`; as definicoes locais foram removidas; novo teste de caracterizacao importa diretamente o modulo extraido; documento de evidencia REF-022 criado.
+Testes/comandos: antes, `git status --short`, `git rev-parse HEAD`, `git branch --show-current` e `node --test tests/*.js` confirmaram worktree limpo, HEAD `c404baf...` e 52/52; depois, `node --check shared/planning-presentation/planningTimeFormatters.js`, `node --check pages/PlanningPage.js`, `node --test tests/planningTimeFormatters.test.js`, `node --test tests/planningFormatters.test.js` e `node --test tests/*.js`.
+Resultado: teste focado passou; suite completa final passou com 53 testes, 53 aprovados e 0 falhos; `PlanningPage.js` foi de 7183 para 7162 linhas; reducao liquida de 21 linhas.
+Homologacao: nao marcada; teste verde nao substitui homologacao operacional. REF-013 permanece pendente.
+Checkboxes atualizados: REF-022 registrada como concluida no checkpoint de refatoracao; commit-base `c404baf`, funcoes extraidas e resultado da suite registrados; proxima extracao recomendada registrada sem execucao.
+Riscos/pendencias: `minutesToTime(undefined)` preserva `NaN:NaN`; `timeToMinutes` aceita horas acima de 23; helpers de data civil/calendario, `productiveMinutes`, turnos, estoque, Gantt, Calendario V2, persistencia e services nao foram tocados.
+Proxima missao sugerida: extrair somente helpers puros de data civil/calendario da `PlanningPage.js`, se auditoria continuar indicando baixo risco.
+
+---
+
 ### 2026-08-07 14:31 — REF-021 — Primeira extracao cirurgica de formatadores e normalizadores puros
 
 Status: CONCLUIDA
@@ -1772,7 +1809,7 @@ Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-0
 Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-presentation/planningFormatters.js`, `tests/planningFormatters.test.js`, `docs/refactor/REF-021_PLANNING_FORMATTERS_EXTRACTION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
 Resumo do diff: `PlanningPage.js` passou a importar nove helpers de `shared/planning-presentation/planningFormatters.js`; as definicoes locais foram removidas; novo teste de caracterizacao importa diretamente o modulo extraido; documento de evidencia REF-021 criado.
 Testes/comandos: antes, `git status --short`, `git rev-parse HEAD`, `git branch --show-current` e `node --test tests/*.js` confirmaram worktree limpo, HEAD `5f7b69c...` e 51/51; depois, `node --check shared/planning-presentation/planningFormatters.js`, `node --check pages/PlanningPage.js`, `node --test tests/planningFormatters.test.js` e `node --test tests/*.js`.
-Resultado: teste focado passou; suite completa final passou com 52 testes, 52 aprovados e 0 falhos; `PlanningPage.js` foi de 6863 para 6804 linhas; reducao liquida aproximada de 59 linhas.
+Resultado: teste focado passou; suite completa final passou com 52 testes, 52 aprovados e 0 falhos. Correcao factual posterior a REF-022: a contagem fisica correta da `PlanningPage.js` ao final da REF-021 / commit `c404baf` e 7183 linhas; o valor 6804 registrado originalmente estava incorreto.
 Homologacao: nao marcada; teste verde nao substitui homologacao operacional. REF-013 permanece pendente.
 Checkboxes atualizados: REF-021 registrada como concluida no checkpoint de refatoracao; commit-base `5f7b69c`, funcoes extraidas e resultado da suite registrados; proxima extracao recomendada registrada sem execucao.
 Riscos/pendencias: helpers homonimos em outras paginas/services foram apenas mapeados; `parsePtBrDecimal('1234,56')` preserva comportamento historico hora-like; `isValidDateOnly` ficou duplicado como helper privado no novo modulo para nao exportar funcao fora do grupo autorizado; Calendario V2 nao foi removido.

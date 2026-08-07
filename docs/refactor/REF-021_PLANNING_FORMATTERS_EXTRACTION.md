@@ -98,9 +98,20 @@ fail: 0
 
 ## 11. PlanningPage antes/depois
 
-- Linhas antes: 6863
-- Linhas depois: 6804
-- Reducacao liquida aproximada: 59 linhas
+- Correcao factual posterior a REF-022: a contagem fisica correta da `PlanningPage.js` ao final da REF-021, no commit `c404baf`, e 7183 linhas.
+- Valor incorreto registrado originalmente: 6804 linhas depois da extracao.
+- Metodo canonico para contagem fisica de linhas:
+
+```text
+node -e "const fs=require('fs'); const s=fs.readFileSync('pages/PlanningPage.js','utf8'); console.log(s.split(/\r?\n/).length)"
+```
+
+- Metodo canonico para conferir versoes em commits:
+
+```text
+node -e "const {execFileSync}=require('child_process'); const s=execFileSync('git',['show','<COMMIT>:pages/PlanningPage.js'],{encoding:'utf8'}); console.log(s.split(/\r?\n/).length)"
+```
+
 - Definicoes locais removidas: 9 funcoes, aproximadamente 79 linhas
 - Imports adicionados: import nomeado de 9 helpers vindo de `../shared/planning-presentation/planningFormatters.js`
 
@@ -139,4 +150,4 @@ O `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md` tambem foi atualizado.
 
 ## 15. Conclusao
 
-REF-021 concluida. A `PlanningPage.js` deixou de possuir as nove definicoes locais de formatacao/normalizacao aprovadas, passou a consumir um modulo neutro e testavel, e a suite completa permaneceu verde com zero falhas.
+REF-021 concluida. A `PlanningPage.js` deixou de possuir as nove definicoes locais de formatacao/normalizacao aprovadas, passou a consumir um modulo neutro e testavel, e a suite completa permaneceu verde com zero falhas. Correcao factual posterior: a contagem fisica correta da `PlanningPage.js` ao final da REF-021 / commit `c404baf` e 7183 linhas, nao 6804.

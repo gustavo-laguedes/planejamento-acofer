@@ -31,6 +31,12 @@ import {
   normalizeText,
   parsePtBrDecimal
 } from '../shared/planning-presentation/planningFormatters.js';
+import {
+  formatDuration,
+  formatHourDuration,
+  minutesToTime,
+  timeToMinutes
+} from '../shared/planning-presentation/planningTimeFormatters.js';
 import { DataTable } from '../shared/DataTable.js';
 import { holidayForDate } from '../shared/holidays.js';
 import { createOperationOverlay, setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
@@ -655,21 +661,6 @@ function planningStatusPill(value) {
   return PlanningStatusPill(formatStatus(value), { statusClass: canceled ? 'canceled' : '' });
 }
 
-function formatDuration(minutes) {
-  const total = Math.max(Math.round(Number(minutes || 0)), 0);
-  const hours = Math.floor(total / 60);
-  const mins = total % 60;
-  if (!hours) return `${mins} min`;
-  return mins ? `${hours}h ${String(mins).padStart(2, '0')}min` : `${hours}h`;
-}
-
-function formatHourDuration(value) {
-  const totalMinutes = Math.max(Math.round(Number(value || 0) * 60), 0);
-  const hours = Math.floor(totalMinutes / 60);
-  const mins = totalMinutes % 60;
-  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')} h/dia`;
-}
-
 function isPlanningRootName(value) {
   return ['Plano de producao', 'Plano de produção'].includes(String(value || ''));
 }
@@ -788,13 +779,6 @@ function productionModelsFor(material) {
   return Array.isArray(material?.production_models) ? material.production_models.filter(model => (model.inputMaterials || []).length) : [];
 }
 
-function minutesToTime(minutes) {
-  const normalized = ((Math.round(minutes) % (24 * 60)) + (24 * 60)) % (24 * 60);
-  const hours = Math.floor(normalized / 60);
-  const mins = normalized % 60;
-  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
-}
-
 function productiveMinutes(value, fallback = 8.8) {
   return Math.max(Math.round(parsePtBrDecimal(value, fallback) * 60), 1);
 }
@@ -804,11 +788,6 @@ function formatProductiveMinutes(minutes) {
   const hours = Math.floor(safeMinutes / 60);
   const mins = safeMinutes % 60;
   return mins ? `${hours}h${String(mins).padStart(2, '0')}` : `${hours}h`;
-}
-
-function timeToMinutes(value) {
-  const [hours, minutes] = String(value || '00:00').split(':').map(Number);
-  return (Number(hours) || 0) * 60 + (Number(minutes) || 0);
 }
 
 function defaultShift(index = 0, startTime = null) {
