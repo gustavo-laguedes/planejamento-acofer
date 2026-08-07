@@ -51,6 +51,13 @@ import {
   selectProductionMaterialOptions
 } from '../shared/planning-domain/planningLookups.js';
 import {
+  buildNormalizedPlanningPayload,
+  buildPlanningSimulationPayload,
+  buildProductionPayload,
+  buildShiftPayload,
+  buildStockOnlyMaterialsForPayload
+} from '../shared/planning-domain/planningPayloadBuilder.js';
+import {
   buildProductionCalendarValidationSnapshot as buildProductionCalendarValidationSnapshotModel,
   buildTimelineOperations,
   mergeDraftAllocationDays,
@@ -1352,17 +1359,13 @@ export function PlanningPage() {
   }
 
   function normalizePlanningPayload(sourcePayload = payload(), planningCode = draft.planningCode) {
-    const planningStartDate = sourcePayload.planningStartDate || sourcePayload.startDate || sourcePayload.selectedDate || draft.planningStartDate;
-    const planningEndDate = operationPeriod(currentSimulation?.operations, planningStartDate, sourcePayload.planningEndDate || sourcePayload.endDate).endDate;
-    return {
-      ...sourcePayload,
-      selectedDate: planningStartDate,
-      startDate: planningStartDate,
-      endDate: planningEndDate,
-      planningStartDate,
-      planningEndDate,
-      planningCode
-    };
+    return buildNormalizedPlanningPayload({
+      sourcePayload,
+      planningCode,
+      draftPlanningStartDate: draft.planningStartDate,
+      operations: currentSimulation?.operations,
+      getOperationPeriod: operationPeriod
+    });
   }
 
   function updatePageTitle() {
@@ -1428,57 +1431,30 @@ export function PlanningPage() {
   function productionPayload() {
     return draft.productions.map((production, index) => {
       hydrateProductionDefaults(production);
-      const material = findMaterialById(materials, production.materialId);
-      return {
-        materialId: Number(production.materialId),
-        color: isHexColor(production.color) ? production.color : automaticProductionColor(index),
-        materialCode: material?.codes?.[0] || '',
-        plannedQty: Number(production.plannedQty),
-        plannedUnit: material?.primary_unit || 'un',
-        machineName: production.machineName,
-        peopleCount: Number(production.peopleCount),
-        desiredDate: production.desiredDate || null,
-        productionModelName: production.productionModelName,
-        transports: []
-      };
+      return buildProductionPayload({
+        productions: [production],
+        materials,
+        findMaterialById,
+        isHexColor,
+        getAutomaticProductionColor: automaticProductionColor,
+        productionIndexOffset: index
+      })[0];
     });
   }
 
   function payload() {
-    const firstProduction = draft.productions[0] || {};
-    const firstMaterial = findMaterialById(materials, firstProduction.materialId);
-    return {
-      dateMode: 'start',
-      selectedDate: draft.planningStartDate,
-      startDate: draft.planningStartDate,
-      planningStartDate: draft.planningStartDate,
-      materialId: Number(firstProduction.materialId),
-      materialCode: firstMaterial?.codes?.[0] || '',
-      plannedQty: Number(firstProduction.plannedQty),
-      plannedUnit: firstMaterial?.primary_unit || 'un',
-      machineName: firstProduction.machineName,
-      peopleCount: Number(firstProduction.peopleCount),
-      productionModelName: firstProduction.productionModelName,
-      shifts: normalizeShiftTimes(draft.shifts).map((shift, index) => ({
-        label: shift.label,
-        hoursPerDay: String(shift.hoursPerDay || '').trim() || '8,48',
-        shiftStartTime: shift.shiftStartTime,
-        pauseLabel: shift.pauseLabel,
-        pauseHours: '0',
-        shiftEndTime: shift.shiftEndTime,
-        teamAvailable: defaultTeamAvailableForShift(shift.teamAvailable, index)
-      })),
+    return buildPlanningSimulationPayload({
+      draft,
+      materials,
+      findMaterialById,
+      shifts: buildShiftPayload(normalizeShiftTimes(draft.shifts), {
+        getDefaultTeamAvailable: defaultTeamAvailableForShift
+      }),
       setupHours: parsePtBrDecimal(draft.setupHours, 0),
       productions: productionPayload(),
       stockOnlyMaterials: stockOnlyMaterialsForPayload(),
-      stockOnlyMaterialChoices: draft.stockOnlyMaterialChoices || [],
-      skipProductionMaterials: draft.skipProductionMaterials || [],
-      operationOverrides: draft.operationOverrides || {},
-      operationSplits: draft.operationSplits || [],
-      dailyTeamOverrides: draft.dailyTeamOverrides || {},
-      manualWorkDates: manualScheduleDraft?.manualWorkDates || draft.manualWorkDates || lastPayload?.manualWorkDates || [],
-      planningCode: draft.planningCode || null
-    };
+      manualWorkDates: manualScheduleDraft?.manualWorkDates || draft.manualWorkDates || lastPayload?.manualWorkDates || []
+    });
   }
 
   function productionColorByIndex(index = 0) {
@@ -1959,12 +1935,10 @@ export function PlanningPage() {
   }
 
   function stockOnlyMaterialsForPayload() {
-    const finalProducts = new Set(draft.productions.map((production, index) =>
-      stockOnlyKey(index, production.materialId)
-    ));
-    return (draft.stockOnlyMaterials || []).filter(item =>
-      !finalProducts.has(stockOnlyKey(item.productionIndex, item.materialId))
-    );
+    return buildStockOnlyMaterialsForPayload({
+      stockOnlyMaterials: draft.stockOnlyMaterials,
+      productions: draft.productions
+    });
   }
 
   function skipProductionChecked(productionIndex, materialId) {
