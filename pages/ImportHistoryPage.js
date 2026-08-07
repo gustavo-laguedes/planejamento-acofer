@@ -2,8 +2,7 @@ import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
 import { UploadCsvButton } from '../shared/UploadCsvButton.js';
 import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
-import { InternalTabs } from '../shared/InternalTabs.js';
-import { canAccess } from '../shared/rbac.js';
+import { ROLES, canAccess, normalizeRole } from '../shared/rbac.js';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -106,20 +105,19 @@ export function ImportHistoryPage() {
   const canReadInventory = canAccess(user, 'inventory:read');
   const canWriteInventory = canAccess(user, 'inventory:write');
   const canWriteProduction = canAccess(user, 'launches:write');
+  const isSuperAdmin = normalizeRole(user?.role) === ROLES.SUPER_ADMIN;
   const page = document.createElement('section');
   page.className = 'stack launches-page';
   page.innerHTML = `
     <div class="page-header">
       <div>
-        <h1>Lan&ccedil;amentos</h1>
-        <p>Importa&ccedil;&otilde;es, invent&aacute;rio e registros informativos.</p>
+        <h1>Lan&ccedil;amentos / Importa&ccedil;&atilde;o CSV</h1>
       </div>
     </div>
-    <div class="launches-tabs"></div>
     <div class="launches-target"></div>
   `;
 
-  const tabsTarget = page.querySelector('.launches-tabs');
+  const pageTitle = page.querySelector('.page-header h1');
   const target = page.querySelector('.launches-target');
   let materials = [];
   let machines = [];
@@ -129,6 +127,16 @@ export function ImportHistoryPage() {
   let productionFilters = {
     materialId: '',
     machineName: '',
+    startDate: '',
+    endDate: ''
+  };
+  let transportFilters = {
+    materialId: '',
+    materialSearch: '',
+    invoiceNumber: '',
+    invoiceSearch: '',
+    routeKey: '',
+    routeSearch: '',
     startDate: '',
     endDate: ''
   };
@@ -589,73 +597,535 @@ export function ImportHistoryPage() {
     return Array.isArray(codes) && codes.length ? codes[0] : '';
   }
 
+  function isCanceledTransport(row) {
+    return ['canceled', 'cancelled', 'cancelado', 'cancelada'].includes(String(row?.status || '').trim().toLowerCase());
+  }
+
+  function materialById(id) {
+    return materials.find(material => String(material.id) === String(id)) || null;
+  }
+
+  function transportRouteLabel(row) {
+    return `${row.origin_location_name || '-'} / ${row.destination_location_name || '-'}`;
+  }
+
+  function transportRouteKey(row) {
+    return `${row.origin_location_id || ''}->${row.destination_location_id || ''}`;
+  }
+
+  function transportGroupKey(row) {
+    return [
+      String(row.transport_date || '').slice(0, 10),
+      String(row.invoice_number || ''),
+      String(row.origin_location_id || ''),
+      String(row.destination_location_id || ''),
+      String(row.notes || ''),
+      isCanceledTransport(row) ? 'canceled' : 'active'
+    ].join('|');
+  }
+
+  function groupTransportRows(rows) {
+    const groups = new Map();
+    rows.forEach(row => {
+      const key = transportGroupKey(row);
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          transport_date: row.transport_date,
+          invoice_number: row.invoice_number,
+          origin_location_id: row.origin_location_id,
+          destination_location_id: row.destination_location_id,
+          origin_location_name: row.origin_location_name,
+          destination_location_name: row.destination_location_name,
+          notes: row.notes,
+          status: row.status,
+          created_at: row.created_at,
+          rows: []
+        });
+      }
+      groups.get(key).rows.push(row);
+    });
+    return [...groups.values()];
+  }
+
+  function transportMaterialSummary(group) {
+    return group.rows.map(row => {
+      const code = firstCodeFromCodes(row.material_codes);
+      const label = [row.material_name || '-', code].filter(Boolean).join(' - ');
+      return `${label}: ${formatNumber(row.quantity)} ${row.primary_unit || ''}`.trim();
+    }).join('<br>');
+  }
+
+  function transportQuantitySummary(group) {
+    const totals = group.rows.reduce((acc, row) => {
+      const unit = String(row.primary_unit || '').trim();
+      acc.set(unit, (acc.get(unit) || 0) + Number(row.quantity || 0));
+      return acc;
+    }, new Map());
+    return [...totals.entries()].map(([unit, quantity]) => `${formatNumber(quantity)} ${unit}`.trim()).join(' / ') || '0';
+  }
+
+  function transportFactorQuantity(material, quantity) {
+    return Number((Number(quantity || 0) * Number(material?.primary_to_secondary_factor || 1)).toFixed(3));
+  }
+
+  function transportFactorMaterial(row) {
+    return materialById(row?.material_id || row?.materialId) || {
+      primary_to_secondary_factor: row?.primary_to_secondary_factor,
+      secondary_unit: row?.secondary_unit
+    };
+  }
+
+  function transportFactorSummary(rows) {
+    const totals = rows.reduce((acc, row) => {
+      const material = transportFactorMaterial(row);
+      const unit = String(material?.secondary_unit || '').trim();
+      const quantity = transportFactorQuantity(material, row.quantity);
+      if (!unit || !(quantity > 0)) return acc;
+      acc.set(unit, (acc.get(unit) || 0) + quantity);
+      return acc;
+    }, new Map());
+    return [...totals.entries()].map(([unit, quantity]) => `${formatNumber(quantity)} ${unit}`.trim()).join(' / ') || '0';
+  }
+
+  function filteredTransportRows(rows) {
+    return rows.filter(row => {
+      const transportDate = String(row.transport_date || '').slice(0, 10);
+      const materialSearch = normalizeMaterialSearch(transportFilters.materialSearch);
+      const invoiceSearch = normalizeMaterialSearch(transportFilters.invoiceSearch);
+      const routeSearch = normalizeMaterialSearch(transportFilters.routeSearch);
+      if (transportFilters.materialId && String(row.material_id) !== String(transportFilters.materialId)) return false;
+      if (!transportFilters.materialId && materialSearch) {
+        const materialText = normalizeMaterialSearch([row.material_name, ...(row.material_codes || [])].join(' '));
+        if (!materialText.includes(materialSearch)) return false;
+      }
+      if (transportFilters.invoiceNumber && String(row.invoice_number || '') !== String(transportFilters.invoiceNumber)) return false;
+      if (!transportFilters.invoiceNumber && invoiceSearch && !normalizeMaterialSearch(row.invoice_number).includes(invoiceSearch)) return false;
+      if (transportFilters.routeKey && transportRouteKey(row) !== transportFilters.routeKey) return false;
+      if (!transportFilters.routeKey && routeSearch && !normalizeMaterialSearch(transportRouteLabel(row)).includes(routeSearch)) return false;
+      if (transportFilters.startDate && transportDate < transportFilters.startDate) return false;
+      if (transportFilters.endDate && transportDate > transportFilters.endDate) return false;
+      return true;
+    });
+  }
+
+  function renderTransportIndicators(indicatorsTarget, rows) {
+    const groups = groupTransportRows(rows);
+    const activeRows = rows.filter(row => !isCanceledTransport(row));
+    const totalsByUnit = activeRows.reduce((acc, row) => {
+      const unit = String(row.primary_unit || '').trim();
+      acc.set(unit, (acc.get(unit) || 0) + Number(row.quantity || 0));
+      return acc;
+    }, new Map());
+    const quantityText = [...totalsByUnit.entries()].map(([unit, quantity]) => `${formatNumber(quantity)} ${unit}`.trim()).join(' / ') || '0';
+    const factorText = transportFactorSummary(activeRows);
+    indicatorsTarget.innerHTML = `
+      <div class="summary-grid transport-summary-grid">
+        <article class="metric-card compact"><span>Total de transportes</span><strong>${formatNumber(groups.filter(group => !isCanceledTransport(group)).length)}</strong></article>
+        <article class="metric-card compact"><span>Materiais transportados</span><strong>${formatNumber(new Set(activeRows.map(row => String(row.material_id))).size)}</strong></article>
+        <article class="metric-card compact"><span>Quantidade transportada</span><strong>${escapeHtml(quantityText)}</strong></article>
+        <article class="metric-card compact"><span>Peso fator transportado</span><strong>${escapeHtml(factorText)}</strong></article>
+        <article class="metric-card compact"><span>Notas fiscais</span><strong>${formatNumber(new Set(activeRows.map(row => String(row.invoice_number || '')).filter(Boolean)).size)}</strong></article>
+        <article class="metric-card compact"><span>Rotas utilizadas</span><strong>${formatNumber(new Set(activeRows.map(transportRouteKey)).size)}</strong></article>
+        <article class="metric-card compact"><span>Transportes cancelados</span><strong>${formatNumber(groups.filter(isCanceledTransport).length)}</strong></article>
+      </div>
+    `;
+  }
+
+  function renderTransportCombo({ name, label, placeholder, selectedValue, searchValue = '', items, valueKey = 'value', labelKey = 'label' }) {
+    const selected = items.find(item => String(item[valueKey]) === String(selectedValue));
+    return `
+      <div class="transport-combo" data-combo-name="${escapeHtml(name)}">
+        <span class="transport-combo-label">${escapeHtml(label)}</span>
+        <input class="transport-combo-search" name="${escapeHtml(name)}Search" type="search" autocomplete="off" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(selected ? selected[labelKey] : searchValue)}" />
+        <input name="${escapeHtml(name)}" type="hidden" value="${escapeHtml(selectedValue || '')}" />
+        <div class="transport-combo-menu" hidden>
+          ${items.map(item => `
+            <button type="button" data-combo-value="${escapeHtml(item[valueKey])}" data-combo-label="${escapeHtml(item[labelKey])}" data-combo-search="${escapeHtml(normalizeMaterialSearch(item.search || item[labelKey]))}">
+              ${escapeHtml(item[labelKey])}
+            </button>
+          `).join('')}
+          <div class="material-suggestion-empty" hidden>Nenhum item encontrado.</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function bindTransportCombos(root, onSelect = () => {}) {
+    root._transportComboSelect = onSelect;
+    if (root.dataset.transportCombosBound === 'true') return;
+    root.dataset.transportCombosBound = 'true';
+    const closeCombos = except => {
+      root.querySelectorAll('.transport-combo-menu').forEach(menu => {
+        if (except && menu === except) return;
+        menu.hidden = true;
+      });
+    };
+    root.addEventListener('focusin', event => {
+      const input = event.target.closest('.transport-combo-search');
+      if (!input) return;
+      const combo = input.closest('.transport-combo');
+      const menu = combo.querySelector('.transport-combo-menu');
+      closeCombos(menu);
+      menu.hidden = false;
+      filterTransportCombo(combo, input.value);
+    });
+    root.addEventListener('input', event => {
+      const input = event.target.closest('.transport-combo-search');
+      if (!input) return;
+      const combo = input.closest('.transport-combo');
+      const menu = combo.querySelector('.transport-combo-menu');
+      combo.querySelector('input[type="hidden"]').value = '';
+      closeCombos(menu);
+      menu.hidden = false;
+      filterTransportCombo(combo, input.value);
+    });
+    root.addEventListener('click', event => {
+      const option = event.target.closest('[data-combo-value]');
+      if (!option) {
+        if (!event.target.closest('.transport-combo')) closeCombos();
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const combo = option.closest('.transport-combo');
+      combo.querySelector('.transport-combo-search').value = option.dataset.comboLabel || '';
+      combo.querySelector('input[type="hidden"]').value = option.dataset.comboValue || '';
+      combo.querySelector('.transport-combo-menu').hidden = true;
+      root._transportComboSelect?.(combo.dataset.comboName, option.dataset.comboValue || '', combo);
+    });
+    document.addEventListener('pointerdown', event => {
+      if (root.contains(event.target)) return;
+      closeCombos();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      closeCombos();
+      root.querySelector('.transport-combo-search:focus')?.blur();
+    });
+  }
+
+  function filterTransportCombo(combo, value) {
+    const search = normalizeMaterialSearch(value);
+    let visible = 0;
+    combo.querySelectorAll('[data-combo-value]').forEach(button => {
+      const matches = !search || String(button.dataset.comboSearch || '').includes(search);
+      button.hidden = !matches;
+      if (matches) visible += 1;
+    });
+    const empty = combo.querySelector('.material-suggestion-empty');
+    if (empty) empty.hidden = visible > 0;
+  }
+
   async function renderTransportRecords(container) {
     await loadLookups();
     container.innerHTML = `
-      <div class="section-heading">
-        <h2>Transportes</h2>
+      <div class="launches-wide-panel production-launch-panel production-launch-layout transport-launch-layout">
+        <div class="panel production-consult-card transport-consult-card">
+          <div class="transport-filters-target"></div>
+          <div class="transport-indicators-target"></div>
+        </div>
+        <div class="panel production-table-card transport-table-card">
+          <div class="section-heading">
+            <h2>Transportes lan&ccedil;ados</h2>
+            ${canWriteProduction ? '<button class="primary-button realize-transport" type="button">Realizar transporte</button>' : ''}
+          </div>
+          <div class="table-target"></div>
+        </div>
       </div>
-      ${canWriteProduction ? `
-        <form class="filters manual-record-form transport-record-form">
-          <label>Data<input name="transportDate" type="date" required value="${todayBrazil()}" /></label>
-          <label>Material<select name="materialId" required>${materialOptions('', true)}</select></label>
-          <label>Local origem<select name="originLocationId" required>${locationOptions('', true)}</select></label>
-          <label>Local destino<select name="destinationLocationId" required>${locationOptions('', true)}</select></label>
-          <label>Quantidade<input name="quantity" type="number" step="0.001" min="0.001" required /></label>
-          <label>Nota fiscal<input name="invoiceNumber" /></label>
-          <label class="wide-field">Observa&ccedil;&atilde;o<input name="notes" /></label>
-          <button class="primary-button" type="submit">Registrar transporte</button>
-        </form>
-      ` : ''}
-      <div class="table-target"></div>
     `;
+    container.querySelector('.realize-transport')?.addEventListener('click', () => openTransportModal(null, loadTable).catch(toast));
     const loadTable = async () => {
       const rows = await api('/stock/manual-transports');
       const tableTarget = container.querySelector('.table-target');
+      const filtersTarget = container.querySelector('.transport-filters-target');
+      const indicatorsTarget = container.querySelector('.transport-indicators-target');
+      const filteredRows = filteredTransportRows(rows);
+      const groups = groupTransportRows(filteredRows);
       tableTarget.innerHTML = '';
-      tableTarget.appendChild(DataTable({
+      const table = DataTable({
         columns: [
-          { label: 'Data', render: row => formatDateOnly(row.transport_date), sortValue: row => row.transport_date },
-          { label: 'Material', render: row => row.material_name || '-' },
-          { label: 'C&oacute;digo', render: row => firstCodeFromCodes(row.material_codes) || '-' },
-          { label: 'Origem', render: row => row.origin_location_name || '-' },
-          { label: 'Destino', render: row => row.destination_location_name || '-' },
-          { label: 'Quantidade', render: row => formatNumber(row.quantity), sortValue: row => Number(row.quantity || 0) },
-          { label: 'Nota fiscal', render: row => row.invoice_number || '-' },
-          { label: 'Observa&ccedil;&atilde;o', render: row => row.notes || '-' }
+          { label: 'Data', render: group => formatDateOnly(group.transport_date), sortValue: group => group.transport_date },
+          { label: 'Materiais transportados', render: transportMaterialSummary },
+          { label: 'Origem / destino', render: group => escapeHtml(transportRouteLabel(group)) },
+          { label: 'Quantidade', render: transportQuantitySummary, sortValue: group => group.rows.reduce((sum, row) => sum + Number(row.quantity || 0), 0) },
+          { label: 'Peso fator', render: group => transportFactorSummary(group.rows), sortValue: group => group.rows.reduce((sum, row) => sum + Number(transportFactorQuantity(transportFactorMaterial(row), row.quantity) || 0), 0) },
+          { label: 'Nota fiscal', render: group => group.invoice_number || '-' },
+          { label: 'Observa&ccedil;&atilde;o', render: group => group.notes || '-' },
+          { label: 'Status', render: group => isCanceledTransport(group) ? '<span class="production-status-pill canceled">Cancelado</span>' : '<span class="production-status-pill launched">Lan&ccedil;ado</span>' },
+          { label: 'Editar', render: group => canWriteProduction ? `<button class="link-button" data-edit-transport="${escapeHtml(group.key)}">${isCanceledTransport(group) ? 'Visualizar' : 'Editar'}</button>` : '' }
         ],
-        rows
-      }));
+        rows: groups,
+        rowClass: group => isCanceledTransport(group) ? 'production-canceled-row' : ''
+      });
+      table.classList.add('transport-launch-table-wrap');
+      tableTarget.appendChild(table);
+      renderTransportFilters(filtersTarget, rows);
+      renderTransportIndicators(indicatorsTarget, filteredRows);
+      tableTarget.onclick = event => {
+        if (!canWriteProduction) return;
+        const button = event.target.closest('[data-edit-transport]');
+        if (!button) return;
+        const group = groups.find(item => item.key === button.dataset.editTransport);
+        if (group) openTransportModal(group, loadTable).catch(toast);
+      };
     };
-    container.querySelector('.transport-record-form')?.addEventListener('submit', async event => {
+
+    function renderTransportFilters(filtersTarget, rows) {
+      const materialIdsInRows = new Set(rows.map(row => String(row.material_id)));
+      const materialItems = materials
+        .filter(material => materialIdsInRows.has(String(material.id)))
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'))
+        .map(material => ({ value: String(material.id), label: material.name, search: [material.name, ...(material.codes || [])].join(' ') }));
+      const invoiceItems = [...new Set(rows.map(row => String(row.invoice_number || '').trim()).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }))
+        .map(invoice => ({ value: invoice, label: invoice }));
+      const routeItems = [...new Map(rows.map(row => [transportRouteKey(row), { value: transportRouteKey(row), label: transportRouteLabel(row) }])).values()]
+        .sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'));
+      filtersTarget.innerHTML = `
+        <form class="filters transport-filters">
+          ${renderTransportCombo({ name: 'filterMaterialId', label: 'Material transportado', placeholder: 'Digite para buscar material transportado', selectedValue: transportFilters.materialId, searchValue: transportFilters.materialSearch, items: materialItems })}
+          ${renderTransportCombo({ name: 'filterInvoiceNumber', label: 'Nota fiscal', placeholder: 'Digite para buscar nota fiscal', selectedValue: transportFilters.invoiceNumber, searchValue: transportFilters.invoiceSearch, items: invoiceItems })}
+          ${renderTransportCombo({ name: 'filterRouteKey', label: 'Origem / destino', placeholder: 'Selecione origem / destino', selectedValue: transportFilters.routeKey, searchValue: transportFilters.routeSearch, items: routeItems })}
+          <label>Data inicial<input name="filterStartDate" type="date" value="${escapeHtml(transportFilters.startDate)}" /></label>
+          <label>Data final<input name="filterEndDate" type="date" value="${escapeHtml(transportFilters.endDate)}" /></label>
+          <button class="primary-button" type="submit">Filtrar</button>
+          <button class="secondary-button clear-transport-filters" type="button">Limpar filtros</button>
+        </form>
+      `;
+      bindTransportCombos(filtersTarget);
+      filtersTarget.onsubmit = event => {
+        event.preventDefault();
+        const form = event.target.closest('form');
+        if (!form) return;
+        transportFilters = {
+          materialId: form.elements.filterMaterialId.value,
+          materialSearch: form.elements.filterMaterialIdSearch.value,
+          invoiceNumber: form.elements.filterInvoiceNumber.value,
+          invoiceSearch: form.elements.filterInvoiceNumberSearch.value,
+          routeKey: form.elements.filterRouteKey.value,
+          routeSearch: form.elements.filterRouteKeySearch.value,
+          startDate: form.elements.filterStartDate.value,
+          endDate: form.elements.filterEndDate.value
+        };
+        loadTable().catch(toast);
+      };
+      filtersTarget.querySelector('.clear-transport-filters')?.addEventListener('click', () => {
+        transportFilters = {
+          materialId: '',
+          materialSearch: '',
+          invoiceNumber: '',
+          invoiceSearch: '',
+          routeKey: '',
+          routeSearch: '',
+          startDate: '',
+          endDate: ''
+        };
+        loadTable().catch(toast);
+      });
+    }
+
+    await loadTable();
+  }
+
+  async function openTransportModal(group = null, onSaved = async () => {}) {
+    await loadLookups();
+    const readOnlyMode = Boolean(group && isCanceledTransport(group));
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    const initialLines = group?.rows?.length
+      ? group.rows.map(row => ({
+        id: row.id,
+        materialId: row.material_id,
+        materialSearch: materialSearchLabel(materialById(row.material_id)) || row.material_name || '',
+        quantity: row.quantity,
+        unit: row.primary_unit || materialById(row.material_id)?.primary_unit || '',
+        factorUnit: row.secondary_unit || materialById(row.material_id)?.secondary_unit || ''
+      }))
+      : [{ materialId: '', materialSearch: '', quantity: '', unit: '', factorUnit: '' }];
+    let lines = initialLines;
+    backdrop.innerHTML = `
+      <div class="modal wide-modal production-modal transport-modal${readOnlyMode ? ' production-canceled-modal' : ''}" role="dialog" aria-modal="true">
+        <div class="modal-header">
+          <h2>${group ? readOnlyMode ? 'Visualizar transporte' : 'Editar transporte' : 'Realizar transporte'}</h2>
+          <div class="modal-header-actions">
+            ${readOnlyMode ? '' : '<button class="secondary-button clear-transport" type="button">Limpar transporte</button>'}
+          </div>
+        </div>
+        <form class="transport-realization-form">
+          <div class="grid-form">
+            <label>Data<input name="transportDate" type="date" required value="${escapeHtml(String(group?.transport_date || todayBrazil()).slice(0, 10))}" ${readOnlyMode ? 'readonly' : ''} /></label>
+            <label>N&uacute;mero da nota fiscal<input name="invoiceNumber" value="${escapeHtml(group?.invoice_number || '')}" ${readOnlyMode ? 'readonly' : ''} /></label>
+            <label>Origem<select name="originLocationId" required ${readOnlyMode ? 'disabled' : ''}>${locationOptions(group?.origin_location_id || '', true)}</select></label>
+            <label>Destino<select name="destinationLocationId" required ${readOnlyMode ? 'disabled' : ''}>${locationOptions(group?.destination_location_id || '', true)}</select></label>
+          </div>
+          <section class="transport-lines-section">
+            <div class="section-heading compact-heading">
+              <h3>Materiais transportados</h3>
+              ${readOnlyMode ? '' : '<button class="secondary-button add-transport-line" type="button">+ Adicionar material</button>'}
+            </div>
+            <div class="transport-lines-target"></div>
+          </section>
+          <label class="wide-field">Observa&ccedil;&atilde;o<input name="notes" value="${escapeHtml(group?.notes || '')}" ${readOnlyMode ? 'readonly' : ''} /></label>
+          <div class="form-actions production-modal-actions">
+            ${group && !readOnlyMode ? '<button class="danger-button cancel-transport" type="button">Cancelar transporte</button>' : ''}
+            ${isSuperAdmin && group ? '<button class="danger-button icon-danger-button delete-transport" type="button" title="Excluir transporte" aria-label="Excluir transporte"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg></button>' : ''}
+            <button class="secondary-button close-modal" type="button">Cancelar</button>
+            ${readOnlyMode ? '' : '<button class="primary-button" type="submit">Salvar transporte</button>'}
+          </div>
+        </form>
+      </div>
+    `;
+    const form = backdrop.querySelector('form');
+    const linesTarget = backdrop.querySelector('.transport-lines-target');
+
+    function collectLines() {
+      return [...linesTarget.querySelectorAll('.transport-line')].map(row => {
+        const materialId = row.querySelector('[name="lineMaterialId"]').value;
+        const material = materialById(materialId);
+        return {
+          id: row.dataset.recordId || '',
+          materialId,
+          materialSearch: row.querySelector('[name="lineMaterialIdSearch"]').value,
+          quantity: Number(row.querySelector('[name="lineQuantity"]').value || 0),
+          unit: material?.primary_unit || row.querySelector('[name="lineUnit"]').value || '',
+          factorUnit: material?.secondary_unit || ''
+        };
+      });
+    }
+
+    function updateTransportLineDerived(lineRow) {
+      const materialId = lineRow?.querySelector('[name="lineMaterialId"]')?.value;
+      const material = materialById(materialId);
+      const quantity = Number(lineRow?.querySelector('[name="lineQuantity"]')?.value || 0);
+      const unitInput = lineRow?.querySelector('[name="lineUnit"]');
+      const factorInput = lineRow?.querySelector('[name="lineFactorQty"]');
+      if (unitInput) unitInput.value = material?.primary_unit || '';
+      if (factorInput) {
+        const factorQty = transportFactorQuantity(material, quantity);
+        const factorUnit = material?.secondary_unit || '';
+        factorInput.value = factorQty > 0 && factorUnit ? `${formatNumber(factorQty)} ${factorUnit}` : '';
+      }
+    }
+
+    function renderLines() {
+      linesTarget.innerHTML = lines.map((line, index) => {
+        const selectedMaterial = materialById(line.materialId);
+        const factorQty = transportFactorQuantity(selectedMaterial, line.quantity);
+        const factorUnit = selectedMaterial?.secondary_unit || line.factorUnit || '';
+        const materialItems = materials
+          .filter(material => material.active !== false)
+          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'))
+          .map(material => ({ value: String(material.id), label: materialSearchLabel(material), search: [material.name, ...(material.codes || [])].join(' ') }));
+        return `
+          <div class="transport-line" data-line-index="${index}" data-record-id="${escapeHtml(line.id || '')}">
+            ${renderTransportCombo({ name: 'lineMaterialId', label: 'Material', placeholder: 'Digite para buscar material cadastrado', selectedValue: line.materialId || '', items: materialItems })}
+            <label>Quantidade<input name="lineQuantity" type="number" step="0.001" min="0.001" required value="${escapeHtml(line.quantity || '')}" ${readOnlyMode ? 'readonly' : ''} /></label>
+            <label>Unidade<input name="lineUnit" value="${escapeHtml(selectedMaterial?.primary_unit || line.unit || '')}" readonly /></label>
+            <label>Peso fator<input name="lineFactorQty" value="${escapeHtml(factorQty > 0 && factorUnit ? `${formatNumber(factorQty)} ${factorUnit}` : '')}" readonly /></label>
+            ${readOnlyMode || lines.length <= 1 || (line.id && !isSuperAdmin) ? '' : '<button class="small-action-button danger remove-transport-line" type="button" aria-label="Remover material">-</button>'}
+          </div>
+        `;
+      }).join('');
+      bindTransportCombos(linesTarget, (name, value, combo) => {
+        if (name !== 'lineMaterialId') return;
+        const lineRow = combo?.closest('.transport-line');
+        updateTransportLineDerived(lineRow);
+      });
+    }
+
+    renderLines();
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
+    });
+    backdrop.querySelector('.add-transport-line')?.addEventListener('click', event => {
       event.preventDefault();
-      const form = event.currentTarget;
-      const submit = form.querySelector('button[type="submit"]');
-      submit.disabled = true;
-      try {
+      lines = collectLines();
+      lines.push({ materialId: '', materialSearch: '', quantity: '', unit: '', factorUnit: '' });
+      renderLines();
+    });
+    linesTarget.addEventListener('click', event => {
+      if (!event.target.classList.contains('remove-transport-line')) return;
+      const index = Number(event.target.closest('.transport-line')?.dataset.lineIndex || 0);
+      lines = collectLines().filter((_, lineIndex) => lineIndex !== index);
+      renderLines();
+    });
+    linesTarget.addEventListener('input', event => {
+      if (!event.target.matches('[name="lineQuantity"]')) return;
+      updateTransportLineDerived(event.target.closest('.transport-line'));
+      lines = collectLines();
+    });
+    backdrop.querySelector('.clear-transport')?.addEventListener('click', () => {
+      form.reset();
+      form.elements.transportDate.value = todayBrazil();
+      lines = [{ materialId: '', materialSearch: '', quantity: '', unit: '', factorUnit: '' }];
+      renderLines();
+    });
+    backdrop.querySelector('.cancel-transport')?.addEventListener('click', async () => {
+      if (!confirm('Confirma o cancelamento deste transporte?')) return;
+      await Promise.all((group.rows || []).map(row => api(`/stock/manual-transports/${row.id}/cancel`, { method: 'POST', body: { reason: 'Cancelado pelo usuario' } })));
+      backdrop.remove();
+      await onSaved();
+    });
+    backdrop.querySelector('.delete-transport')?.addEventListener('click', async () => {
+      if (!confirm('Excluir definitivamente este transporte?')) return;
+      await Promise.all((group.rows || []).map(row => api(`/stock/manual-transports/${row.id}`, { method: 'DELETE' })));
+      backdrop.remove();
+      await onSaved();
+    });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const payloadLines = collectLines();
+      const hasMissingRequired = !form.elements.transportDate.value
+        || !form.elements.originLocationId.value
+        || !form.elements.destinationLocationId.value
+        || payloadLines.some(line => !line.materialId || !Number.isFinite(line.quantity) || line.quantity <= 0);
+      if (hasMissingRequired) {
+        toast('Preencha data, origem, destino, material e quantidade.');
+        return;
+      }
+      if (String(form.elements.originLocationId.value) === String(form.elements.destinationLocationId.value)) {
+        toast('Origem e destino devem ser diferentes.');
+        return;
+      }
+      const common = {
+        transportDate: form.elements.transportDate.value,
+        originLocationId: Number(form.elements.originLocationId.value),
+        destinationLocationId: Number(form.elements.destinationLocationId.value),
+        invoiceNumber: form.elements.invoiceNumber.value,
+        notes: form.elements.notes.value
+      };
+      const existing = payloadLines.filter(line => line.id);
+      const created = payloadLines.filter(line => !line.id);
+      const remainingIds = new Set(existing.map(line => String(line.id)));
+      const removedIds = (group?.rows || [])
+        .map(row => String(row.id))
+        .filter(id => !remainingIds.has(id));
+      await Promise.all(existing.map(line => api(`/stock/manual-transports/${line.id}`, {
+        method: 'PUT',
+        body: {
+          ...common,
+          materialId: Number(line.materialId),
+          quantity: line.quantity
+        }
+      })));
+      if (created.length) {
         await api('/stock/manual-transports', {
           method: 'POST',
           body: {
-            transportDate: form.elements.transportDate.value,
-            materialId: Number(form.elements.materialId.value),
-            originLocationId: Number(form.elements.originLocationId.value),
-            destinationLocationId: Number(form.elements.destinationLocationId.value),
-            quantity: Number(form.elements.quantity.value || 0),
-            invoiceNumber: form.elements.invoiceNumber.value,
-            notes: form.elements.notes.value
+            ...common,
+          items: created.map(line => ({ materialId: Number(line.materialId), quantity: line.quantity }))
           }
         });
-        form.reset();
-        form.elements.transportDate.value = todayBrazil();
-        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: 'Transporte registrado.' }));
-        await loadTable();
-      } catch (error) {
-        toast(error);
-      } finally {
-        submit.disabled = false;
       }
+      if (removedIds.length) {
+        await Promise.all(removedIds.map(id => api(`/stock/manual-transports/${id}`, { method: 'DELETE' })));
+      }
+      backdrop.remove();
+      window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: 'Transporte salvo.' }));
+      await onSaved();
     });
-    await loadTable();
+    page.appendChild(backdrop);
   }
 
   async function renderPurchaseRecords(container) {
@@ -730,11 +1200,19 @@ export function ImportHistoryPage() {
     return code ? `${material.name} — ${code}` : material.name;
   }
 
+  function normalizeMaterialSearch(value) {
+    return String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+  }
+
   function materialMatchesSearch(material, searchValue) {
-    const normalized = String(searchValue || '').trim().toLowerCase();
+    const normalized = normalizeMaterialSearch(searchValue);
     if (!normalized) return true;
     return [material.name, ...(material.codes || [])]
-      .some(value => String(value || '').toLowerCase().includes(normalized));
+      .some(value => normalizeMaterialSearch(value).includes(normalized));
   }
 
   function machineOptions(selectedName = '') {
@@ -865,7 +1343,8 @@ export function ImportHistoryPage() {
     };
     filtersTarget.onsubmit = event => {
       event.preventDefault();
-      const form = event.target;
+      const form = event.target.closest('form');
+      if (!form) return;
       productionFilters = {
         materialId: form.elements.filterMaterialId.value,
         machineName: form.elements.filterMachineName.value,
@@ -1150,7 +1629,7 @@ export function ImportHistoryPage() {
         const secondaryQty = secondaryQtyFor(material, quantity);
         const fields = line.querySelectorAll('.readonly-field');
         if (fields[0]) fields[0].innerHTML = `<span>Unidade principal</span>${chips([material?.primary_unit])}`;
-        if (fields[1]) fields[1].innerHTML = `<span>Unidade secundÃ¡ria</span>${chips([`${formatNumber(secondaryQty)} ${material?.secondary_unit || ''}`.trim()])}`;
+        if (fields[1]) fields[1].innerHTML = `<span>Unidade secundária</span>${chips([`${formatNumber(secondaryQty)} ${material?.secondary_unit || ''}`.trim()])}`;
       });
     }
 
@@ -1282,14 +1761,13 @@ export function ImportHistoryPage() {
 
       if (!sections.some(section => section.id === activeLaunchTab)) activeLaunchTab = sections[0].id;
       sessionStorage.setItem('planejamento_launches_tab', activeLaunchTab);
-      tabsTarget.innerHTML = '';
-      tabsTarget.appendChild(InternalTabs(sections.map(({ id, label }) => ({ id, label })), activeLaunchTab, tab => {
-        activeLaunchTab = tab;
-        render().catch(toast);
-      }));
 
       const section = sections.find(item => item.id === activeLaunchTab);
-      target.innerHTML = `<div class="panel launches-wide-panel${section.id === 'inventory' ? ' inventory-history-panel' : ''}" data-launch-section="${section.id}"></div>`;
+      pageTitle.textContent = `Lançamentos / ${section.label}`;
+      const wrapperClass = section.id === 'transports'
+        ? 'launches-wide-panel transport-section-shell'
+        : `panel launches-wide-panel${section.id === 'inventory' ? ' inventory-history-panel' : ''}`;
+      target.innerHTML = `<div class="${wrapperClass}" data-launch-section="${section.id}"></div>`;
       await section.render(target.querySelector(`[data-launch-section="${section.id}"]`));
     } catch (error) {
       setInternalError(target, error.message || 'Nao foi possivel carregar lançamentos.');

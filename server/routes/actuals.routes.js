@@ -178,6 +178,18 @@ function toDateOnly(value) {
   return match ? match[1] : '';
 }
 
+function isDateOnly(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(toDateOnly(value));
+}
+
+function queryList(value) {
+  const source = Array.isArray(value) ? value : [value];
+  return source
+    .flatMap(item => String(item || '').split(','))
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
 function matchesFilter(value, filter) {
   const normalizedFilter = normalizeKey(filter);
   if (!normalizedFilter) return true;
@@ -320,12 +332,41 @@ router.post('/launches', requirePermission('launches:write'), async (req, res, n
 router.get('/launches', requirePermission('launches:read'), async (req, res, next) => {
   try {
     const db = requireDb();
-    const rows = await db`
+    const startDate = isDateOnly(req.query.startDate) ? toDateOnly(req.query.startDate) : '';
+    const endDate = isDateOnly(req.query.endDate) ? toDateOnly(req.query.endDate) : '';
+    const machineName = String(req.query.machineName || '').trim();
+    const materialIds = queryList(req.query.materialIds).map(Number).filter(Number.isFinite);
+    const limit = Math.min(Math.max(Number(req.query.limit || 500), 1), 2000);
+    if (startDate && endDate && startDate > endDate) {
+      return res.status(400).json({ error: 'Período de produção inválido.' });
+    }
+    const clauses = [];
+    const params = [];
+    if (startDate) {
+      params.push(startDate);
+      clauses.push(`production_date >= $${params.length}`);
+    }
+    if (endDate) {
+      params.push(endDate);
+      clauses.push(`production_date <= $${params.length}`);
+    }
+    if (machineName) {
+      params.push(machineName);
+      clauses.push(`machine_name = $${params.length}`);
+    }
+    if (materialIds.length) {
+      params.push(materialIds);
+      clauses.push(`material_id = ANY($${params.length}::int[])`);
+    }
+    params.push(limit);
+    const whereClause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = await db.unsafe(`
       SELECT *
       FROM production_launches
+      ${whereClause}
       ORDER BY production_date DESC, created_at DESC
-      LIMIT 200
-    `;
+      LIMIT $${params.length}
+    `, params);
     res.json(rows.map(row => ({ ...row, status: launchStatus(row) })));
   } catch (error) {
     next(error);
@@ -357,6 +398,54 @@ router.get('/launches/:id', requirePermission('launches:read'), async (req, res,
     const [row] = await db`SELECT * FROM production_launches WHERE id = ${req.params.id}`;
     if (!row) return res.status(404).json({ error: 'Produção não encontrada.' });
     res.json({ ...row, status: launchStatus(row) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/launches/:id', requirePermission('launches:write'), async (req, res, next) => {
+  try {
+    if (String(req.user?.role || '').trim() !== 'Super Admin') {
+      return res.status(403).json({ error: 'Somente Super Admin pode excluir produÃ§Ãµes.' });
+    }
+    const db = requireDb();
+    const [current] = await db`SELECT * FROM production_launches WHERE id = ${req.params.id}`;
+    if (!current) return res.status(204).end();
+
+    const result = await db.begin(async tx => {
+      const [deletedLaunch] = await tx`
+        DELETE FROM production_launches
+        WHERE id = ${req.params.id}
+        RETURNING *
+      `;
+      const deletedActuals = await tx`
+        DELETE FROM production_actuals
+        WHERE id = (
+          SELECT id
+          FROM production_actuals
+          WHERE production_date = ${current.production_date}
+            AND material_name = ${current.material_name}
+            AND material_code IS NOT DISTINCT FROM ${current.material_code}
+            AND machine_name IS NOT DISTINCT FROM ${current.machine_name}
+            AND actual_qty = ${current.quantity}
+            AND actual_unit = ${current.primary_unit}
+            AND notes IS NOT DISTINCT FROM ${current.notes}
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        )
+        RETURNING id
+      `;
+      await recordAuditLog(tx, {
+        user: req.user,
+        action: 'ExclusÃ£o de produÃ§Ã£o',
+        module: 'ProduÃ§Ã£o',
+        description: `Excluiu definitivamente ${current.quantity} ${current.primary_unit} do material ${current.material_code || current.material_name} em ${toDateOnly(current.production_date)}`,
+        recordRef: current.id
+      });
+      return { deletedLaunch, deletedActuals: deletedActuals.length };
+    });
+
+    res.json({ ...result.deletedLaunch, deletedActuals: result.deletedActuals });
   } catch (error) {
     next(error);
   }

@@ -2,7 +2,6 @@
 import { getCurrentUser } from '../shared/api.js';
 import { CalendarTimeline, productionCalendarColor } from '../shared/CalendarTimeline.js';
 import { nextSortDirection, sortTableRows } from '../shared/DataTable.js';
-import { InternalTabs } from '../shared/InternalTabs.js';
 import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
 import { PcpStatusPill } from '../shared/StatusPill.js';
@@ -122,6 +121,19 @@ function formatCeilQty(value) {
   const quantity = Number(value);
   if (!Number.isFinite(quantity)) return formatQty(value);
   return Math.ceil(quantity).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+}
+
+function formatPcpTargetQty(row) {
+  if (row.targetQty === null) return 'Não estimado';
+  const unit = row.productivity?.output_unit || row.plannedUnit || '';
+  return `${formatCeilQty(row.targetQty)} ${escapeHtml(unit)}`.trim();
+}
+
+function formatPcpTargetQtyDetail(row) {
+  const soldDuringProduction = Number(row.salesDuringProductionQty || 0);
+  if (!row.productionSalesScoped || !Number.isFinite(soldDuringProduction) || soldDuringProduction <= 0) return '';
+  const unit = row.productivity?.output_unit || row.plannedUnit || '';
+  return `<small>Inclui ${formatCeilQty(soldDuringProduction)} ${escapeHtml(unit)} de venda durante a produção</small>`;
 }
 
 function formatNumber(value, maximumFractionDigits = 1, minimumFractionDigits = 1) {
@@ -387,6 +399,13 @@ function estimatedProductionSeconds(quantity, productivity) {
   return (quantity / outputQty) * workdaySeconds;
 }
 
+function pcpProductionDaysForQuantity(quantity, productivity) {
+  const seconds = estimatedProductionSeconds(quantity, productivity);
+  const workdaySeconds = pcpWorkdayMinutes(pcpProductionCalendar()) * 60;
+  if (!Number.isFinite(seconds) || seconds <= 0 || !Number.isFinite(workdaySeconds) || workdaySeconds <= 0) return null;
+  return seconds / workdaySeconds;
+}
+
 function canEstimatePcpProduction(row) {
   return Number.isFinite(Number(row.salesPerDayQty))
     && Number(row.salesPerDayQty) > 0
@@ -403,6 +422,7 @@ function pcpObservation(row) {
   if (!row.productivity) return 'Sem matriz de produtividade.';
   if (!String(row.productivity.machine_name || '').trim()) return 'Sem máquina cadastrada.';
   if (!Number.isFinite(Number(row.productivity.people_count)) || Number(row.productivity.people_count) < 0) return 'Sem pessoas configuradas.';
+  if (row.productionSalesCapacityOk === false) return 'Produtividade diária abaixo da venda/dia.';
   if (row.status.key === 'outOfRadar') return 'Produto fora do radar.';
   return 'Pronto para análise do PCP.';
 }
@@ -412,13 +432,45 @@ function pcpSuggestionForIdealDays(row, idealDays) {
   const grossTargetQty = Number.isFinite(salesPerDay) && salesPerDay > 0 && Number.isFinite(row.durationDays)
     ? Math.max((idealDays - row.durationDays) * salesPerDay, 0)
     : null;
-  const targetQty = grossTargetQty === null
+  const baseTargetQty = grossTargetQty === null
     ? null
     : Math.max(grossTargetQty - Math.max(Number(row.plannedRemainingQty || 0), 0), 0);
+  const productivityOutputQty = Number(row.productivity?.output_qty);
+  let targetQty = baseTargetQty;
+  let productionDays = row.productivity ? pcpProductionDaysForQuantity(targetQty, row.productivity) : null;
+  let salesDuringProductionQty = Number.isFinite(productionDays) && Number.isFinite(salesPerDay)
+    ? salesPerDay * productionDays
+    : 0;
+  let productionSalesScoped = false;
+  let productionSalesCapacityOk = true;
+  if (baseTargetQty !== null && baseTargetQty > 0 && row.productivity && Number.isFinite(productivityOutputQty) && productivityOutputQty > 0) {
+    productionSalesScoped = true;
+    productionSalesCapacityOk = productivityOutputQty > salesPerDay;
+    if (productionSalesCapacityOk) {
+      for (let index = 0; index < 12; index += 1) {
+        productionDays = pcpProductionDaysForQuantity(targetQty, row.productivity);
+        if (!Number.isFinite(productionDays)) break;
+        const nextTargetQty = baseTargetQty + (salesPerDay * productionDays);
+        if (!Number.isFinite(nextTargetQty) || nextTargetQty < 0) break;
+        if (Math.abs(nextTargetQty - targetQty) < 0.001) {
+          targetQty = nextTargetQty;
+          break;
+        }
+        targetQty = nextTargetQty;
+      }
+      productionDays = pcpProductionDaysForQuantity(targetQty, row.productivity);
+      salesDuringProductionQty = Number.isFinite(productionDays) ? Math.max(targetQty - baseTargetQty, 0) : 0;
+    }
+  }
   return {
     grossTargetQty,
+    baseTargetQty,
     targetQty,
-    estimatedSeconds: row.productivity ? estimatedProductionSeconds(targetQty, row.productivity) : null
+    estimatedSeconds: row.productivity ? estimatedProductionSeconds(targetQty, row.productivity) : null,
+    productionDays,
+    salesDuringProductionQty,
+    productionSalesScoped,
+    productionSalesCapacityOk
   };
 }
 
@@ -467,12 +519,17 @@ function buildPcpRows(stockRows = [], minimumDays, matrixRows = [], priorities =
         idealDays: rowIdealDays,
         followsGlobalIdeal: !idealOverrideForKey(idealOverrides, key),
         grossTargetQty: suggestion.grossTargetQty,
+        baseTargetQty: suggestion.baseTargetQty,
         plannedQty: plannedBalance.plannedQty,
         plannedProducedQty: plannedBalance.producedQty,
         plannedRemainingQty,
         plannedUnit: plannedBalance.unit || row.material?.primary_unit || row.productivity?.output_unit || '',
         futureStockQty: Number(row.totalLocationsQty || 0) + plannedRemainingQty,
         targetQty: suggestion.targetQty,
+        productionDays: suggestion.productionDays,
+        salesDuringProductionQty: suggestion.salesDuringProductionQty,
+        productionSalesScoped: suggestion.productionSalesScoped,
+        productionSalesCapacityOk: suggestion.productionSalesCapacityOk,
         productivity,
         estimatedSeconds: suggestion.estimatedSeconds,
         manualPriority: priorities[key] || ''
@@ -495,10 +552,15 @@ function recalculatePcpRowsForIdealDays(rows = [], idealDays, idealOverrides = {
       idealDays: rowIdealDays,
       followsGlobalIdeal: !override,
       grossTargetQty: suggestion.grossTargetQty,
+      baseTargetQty: suggestion.baseTargetQty,
       thresholdStatus: row.thresholdStatus || row.baseStatus,
       baseStatus: actionStatus,
       status: fullyPlanned ? plannedPcpStatus() : actionStatus,
       targetQty: suggestion.targetQty,
+      productionDays: suggestion.productionDays,
+      salesDuringProductionQty: suggestion.salesDuringProductionQty,
+      productionSalesScoped: suggestion.productionSalesScoped,
+      productionSalesCapacityOk: suggestion.productionSalesCapacityOk,
       estimatedSeconds: suggestion.estimatedSeconds
     };
   });
@@ -1215,8 +1277,7 @@ export function AnalysisPage(options = {}) {
   const page = document.createElement('section');
   page.className = `stack analysis-page${commercialMode ? ' commercial-calendar-page' : ''}`;
   page.innerHTML = `
-    <div class="page-header"><div><h1>Análise</h1><p>Consulta diária, mensal e anual da produção programada.</p></div></div>
-    ${commercialMode ? '' : '<div class="analysis-tabs"></div>'}
+    <div class="page-header"><div><h1>Análise / Assistente PCP</h1></div></div>
     <div class="panel analysis-panel">
       <div class="analysis-calendar-toolbar">
         <div class="analysis-navigation">
@@ -1238,21 +1299,17 @@ export function AnalysisPage(options = {}) {
 
   if (commercialMode) {
     page.querySelector('h1').textContent = 'Comercial';
-    page.querySelector('.page-header p').textContent = 'Consulta de produção final programada para vendas.';
-    page.querySelector('.analysis-tabs')?.remove();
   }
   const assistantPanel = document.createElement('div');
   assistantPanel.className = 'panel analysis-assistant-panel';
   assistantPanel.innerHTML = '<div class="analysis-assistant-target"></div>';
   if (!commercialMode) page.appendChild(assistantPanel);
-  let activeInternalTab = commercialMode ? 'calendar' : 'assistant';
-  page.querySelector('.analysis-tabs')?.appendChild(InternalTabs([
+  const analysisTabs = [
     { id: 'assistant', label: 'Assistente PCP' },
     { id: 'calendar', label: 'Calendário' }
-  ], activeInternalTab, tab => {
-    activeInternalTab = tab;
-    renderInternalTab();
-  }));
+  ];
+  let activeInternalTab = commercialMode ? 'calendar' : sessionStorage.getItem('planejamento_analysis_tab') || 'assistant';
+  if (!analysisTabs.some(tab => tab.id === activeInternalTab)) activeInternalTab = 'assistant';
   const panel = page.querySelector('.analysis-panel');
   const target = page.querySelector('.analysis-calendar-target');
   const assistantTarget = page.querySelector('.analysis-assistant-target');
@@ -1492,6 +1549,11 @@ export function AnalysisPage(options = {}) {
   }
 
   function renderInternalTab() {
+    if (!commercialMode) {
+      const tab = analysisTabs.find(item => item.id === activeInternalTab) || analysisTabs[0];
+      page.querySelector('.page-header h1').textContent = `Análise / ${tab.label}`;
+      sessionStorage.setItem('planejamento_analysis_tab', activeInternalTab);
+    }
     panel.hidden = activeInternalTab !== 'calendar';
     if (assistantPanel) assistantPanel.hidden = activeInternalTab !== 'assistant';
     if (activeInternalTab === 'assistant') loadPcpAssistant().catch(error => {
@@ -1546,7 +1608,7 @@ export function AnalysisPage(options = {}) {
                     <div><dt>Duração atual</dt><dd>${formatStockDurationForDisplay(row.durationDays)}</dd></div>
                     <div><dt>Duração ajust.</dt><dd>${Number.isFinite(row.adjustedDurationDays) ? `${formatNumber(row.adjustedDurationDays)} dias` : 'Não estimado'}</dd></div>
                     <div><dt>Máquina</dt><dd>${canEstimate ? escapeHtml(row.productivity.machine_name) : 'Não estimada'}</dd></div>
-                    <div><dt>Falta</dt><dd>${row.targetQty === null ? 'Não estimado' : `${formatCeilQty(row.targetQty)} ${escapeHtml(row.productivity?.output_unit || row.plannedUnit || '')}`.trim()}</dd></div>
+                    <div><dt>Falta</dt><dd>${formatPcpTargetQty(row)}${formatPcpTargetQtyDetail(row)}</dd></div>
                     <div><dt>Tempo</dt><dd>${canEstimate ? formatDurationFromSeconds(row.estimatedSeconds, productionCalendar) : 'Não estimado'}</dd></div>
                     <div><dt>Fim est.</dt><dd>${escapeHtml(stockEndLabel)}</dd></div>
                     <div><dt>Fim prod.</dt><dd>${escapeHtml(productionEndLabel)}</dd></div>
@@ -1602,7 +1664,7 @@ export function AnalysisPage(options = {}) {
                     </label>
                   </td>
                   <td><strong>${formatQty(row.plannedRemainingQty)} ${escapeHtml(row.plannedUnit || row.productivity?.output_unit || '')}</strong></td>
-                  <td><strong>${row.targetQty === null ? 'Não estimado' : `${formatCeilQty(row.targetQty)} ${escapeHtml(row.productivity?.output_unit || row.plannedUnit || '')}`.trim()}</strong></td>
+                  <td><strong>${formatPcpTargetQty(row)}</strong>${formatPcpTargetQtyDetail(row)}</td>
                   <td>${canEstimate ? formatDurationFromSeconds(row.estimatedSeconds, productionCalendar) : 'Não estimado'}</td>
                   <td class="pcp-date-cell">${escapeHtml(productionEndLabel)}</td>
                   <td>${canEstimate ? escapeHtml(row.productivity.machine_name) : 'Não estimada'}</td>
@@ -1650,13 +1712,14 @@ export function AnalysisPage(options = {}) {
     });
   }
 
-  function applyPcpGlobalIdealDaysInput(input) {
+  function applyPcpGlobalIdealDaysInput(input, { render = true } = {}) {
     const value = Number(String(input.value || '').trim());
     if (!Number.isInteger(value) || value <= 0) return;
     const selectedKeys = selectedPcpRowsFromTable().map(row => row.key);
     writePcpIdealDays(value);
     writePcpIdealOverrides({});
     currentPcpRows = recalculatePcpRowsForIdealDays(currentPcpRows, value, {});
+    if (!render) return;
     const minimumDays = readStockMinimumDays();
     if (minimumDays) {
       renderPcpAssistant(currentPcpRows, minimumDays);
@@ -2255,6 +2318,13 @@ export function AnalysisPage(options = {}) {
     if (minimumDays) {
       renderPcpAssistant(currentPcpRows, minimumDays);
       restorePcpSelection(selectedKeys);
+    }
+  });
+
+  assistantTarget?.addEventListener('input', event => {
+    const idealDaysInput = event.target.closest('[data-pcp-ideal-days]');
+    if (idealDaysInput) {
+      applyPcpGlobalIdealDaysInput(idealDaysInput, { render: false });
     }
   });
 

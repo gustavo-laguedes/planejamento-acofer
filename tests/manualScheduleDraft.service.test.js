@@ -11,7 +11,8 @@ const machines = [
   { machineId: 'M3', machineName: 'M3' },
   { machineId: 'MT-100', machineName: 'MT-100' },
   { machineId: 'MT-200', machineName: 'MT-200' },
-  { machineId: 'CAP-1', machineName: 'CAP-1' }
+  { machineId: 'CAP-1', machineName: 'CAP-1' },
+  { machineId: 'focus8', machineName: 'Focus-8' }
 ];
 
 const matrixRows = [
@@ -28,6 +29,9 @@ const matrixRows = [
   { material_code: 'Q-196', machine_name: 'MT-200', people_count: 4, output_qty: 99999, output_unit: 'un', time_seconds: 31680 },
   { material_code: 'Q-196', machine_name: 'MT-200', people_count: 3, output_qty: 99999, output_unit: 'kg', time_seconds: 31680 },
   { material_id: 'CAPACITY-TEST', machine_id: 'CAP-1', people_count: 4, output_qty: 10, output_unit: 'kg', time_seconds: 31680 }
+  , { id: 'wrong-reto-id', material_id: '40', material_code: '00808700093', material_codes: ['00808700093'], material_name: 'CA60 4,2 Bobina', machine_name: 'Trefila', people_count: 1, output_qty: 7000, output_unit: 'un', time_seconds: 31680 }
+  , { id: 'reto42-aco8', material_code: '00808700091', material_codes: ['00808700091'], material_name: '4,2 Reto - 12m', machine_name: 'Aço-8', people_count: 1, output_qty: 2314, output_unit: 'un', time_seconds: 31680 }
+  , { id: 'reto42-focus8', material_code: '00808700091', material_codes: ['00808700091'], material_name: '4,2 Reto - 12m', machine_name: 'Focus-8', people_count: 1, output_qty: 2314, output_unit: 'un', time_seconds: 31680 }
 ];
 
 function allocation(overrides = {}) {
@@ -332,6 +336,17 @@ function domainResult(result) {
   assert.equal(byId(afterC, 'other-preserved').date, '2026-07-15');
   assertIntegrity(afterC, afterB);
 
+  const afterCPreferSource = move(afterB, {
+    allocationId: 'ca60-6',
+    targetDate: '2026-07-16',
+    targetMachineId: 'M1',
+    confirmReplace: true,
+    preferSourceDateForReplace: true
+  });
+  assert.equal(byId(afterCPreferSource, 'ca60-6').date, '2026-07-16');
+  assert.equal(byId(afterCPreferSource, 'ca60-5').date, '2026-07-21');
+  assertIntegrity(afterCPreferSource, afterB);
+
   const afterD = move(afterC, {
     allocationId: 'other-preserved',
     targetDate: '2026-07-20',
@@ -341,6 +356,23 @@ function domainResult(result) {
   assert.equal(byId(afterD, 'ca60-5').date, '2026-07-17');
   assertPinnedUnchanged(afterC, afterD, ['other-preserved']);
   assertIntegrity(afterD, afterC);
+}
+
+// Reordenacao dentro do mesmo quadrante preserva quantidades e coloca o card arrastado antes.
+{
+  const source = draft([
+    allocation({ allocationId: 'order-a', materialId: 'CA60', quantity: 2, date: '2026-07-16', capacityPercent: 33.33, maxDailyCapacity: 6 }),
+    allocation({ allocationId: 'order-b', materialId: 'BR70', quantity: 3, date: '2026-07-16', capacityPercent: 30, maxDailyCapacity: 10 })
+  ]);
+  const reordered = move(source, {
+    allocationId: 'order-b',
+    targetDate: '2026-07-16',
+    targetMachineId: 'M1',
+    moveMode: 'reorder_before'
+  });
+  assert.equal(byId(reordered, 'order-b').startTime, '07:00');
+  assert.equal(byId(reordered, 'order-a').startTime, byId(reordered, 'order-b').endTime);
+  assertIntegrity(reordered, source);
 }
 
 // Missao 14.1 / 4. Unificacao exata de CA60 5,0 pela capacidade real de 7.000 kg.
@@ -486,6 +518,89 @@ function domainResult(result) {
     capacityDecision: 'split'
   }), 'CAPACITY_SPLIT_INVALID');
   assertRollback(splitFailure, splitBefore, splitError);
+}
+
+// Draft ocupado: escolha explicita entre substituir e completar dia.
+{
+  const focusSource = draft([allocation({
+    allocationId: 'reto42-focus-move',
+    materialId: '40',
+    materialCode: '00808700091',
+    materialCodes: ['00808700091'],
+    materialName: '4,2 Reto - 12m',
+    machineId: 'M1',
+    machineName: 'Aço-8',
+    quantity: 1319,
+    unit: 'un',
+    peopleCount: 1,
+    date: '2026-07-21',
+    capacityPercent: 57.01,
+    maxDailyCapacity: 2314,
+    parentOperationId: 'op-reto42-focus'
+  })]);
+  const focusMoved = move(focusSource, {
+    allocationId: 'reto42-focus-move',
+    targetDate: '2026-07-21',
+    targetMachineId: 'focus8'
+  });
+  assert.equal(byId(focusMoved, 'reto42-focus-move').machineId, 'focus8');
+  assert.equal(byId(focusMoved, 'reto42-focus-move').machineName, 'Focus-8');
+  assert.equal(byId(focusMoved, 'reto42-focus-move').maxDailyCapacity, 2314);
+  assertIntegrity(focusMoved, focusSource);
+
+  const source = draft([
+    allocation({ allocationId: 'same-replace-source', materialId: 'CA60', quantity: 3, date: '2026-07-21', parentOperationId: 'op-same-source' }),
+    allocation({ allocationId: 'same-replace-occupant', materialId: 'CA60', quantity: 2, date: '2026-07-16', parentOperationId: 'op-same-occupant' })
+  ]);
+  const replaced = move(source, {
+    allocationId: 'same-replace-source',
+    targetDate: '2026-07-16',
+    targetMachineId: 'M1',
+    moveMode: 'replace',
+    confirmReplace: true
+  });
+  assert.equal(replaced.allocations.length, 2);
+  assert.equal(byId(replaced, 'same-replace-source').date, '2026-07-16');
+  assert.notEqual(byId(replaced, 'same-replace-occupant').date, '2026-07-16');
+  assertIntegrity(replaced, source);
+
+  const completeDifferent = draft([
+    allocation({ allocationId: 'complete-ca60', materialId: 'CA60', quantity: 3, date: '2026-07-16', capacityPercent: 50, parentOperationId: 'op-complete-ca60' }),
+    allocation({ allocationId: 'complete-br70', materialId: 'BR70', quantity: 3, date: '2026-07-17', capacityPercent: 30, parentOperationId: 'op-complete-br70' })
+  ]);
+  const completed = move(completeDifferent, {
+    allocationId: 'complete-br70',
+    targetDate: '2026-07-16',
+    targetMachineId: 'M1',
+    moveMode: 'complete_day'
+  });
+  assert.equal(completed.allocations.length, 2);
+  assert.equal(byId(completed, 'complete-br70').date, '2026-07-16');
+  assert.equal(byId(completed, 'complete-br70').machineId, 'M1');
+  assert.ok(byId(completed, 'complete-br70').startTime >= byId(completed, 'complete-ca60').endTime);
+  assertIntegrity(completed, completeDifferent);
+
+  const overCapacity = draft([
+    allocation({ allocationId: 'complete-over-ca60', materialId: 'CA60', quantity: 5, date: '2026-07-16', capacityPercent: 83.33, parentOperationId: 'op-over-ca60' }),
+    allocation({ allocationId: 'complete-over-br70', materialId: 'BR70', quantity: 3, date: '2026-07-17', capacityPercent: 30, parentOperationId: 'op-over-br70' })
+  ]);
+  const overError = captureError(() => move(overCapacity, {
+    allocationId: 'complete-over-br70',
+    targetDate: '2026-07-16',
+    targetMachineId: 'M1',
+    moveMode: 'complete_day'
+  }), 'CAPACITY_EXCEEDED');
+  assert.equal(overError.proposedAllocation.capacityPercent, 113.33);
+  const authorized = move(overCapacity, {
+    allocationId: 'complete-over-br70',
+    targetDate: '2026-07-16',
+    targetMachineId: 'M1',
+    moveMode: 'complete_day',
+    capacityDecision: 'override'
+  });
+  assert.equal(authorized.allocations.length, 2);
+  assert.equal(byId(authorized, 'complete-over-br70').isCapacityOverride, true);
+  assertIntegrity(authorized, overCapacity);
 }
 
 console.log('manualScheduleDraft.service.test.js ok');

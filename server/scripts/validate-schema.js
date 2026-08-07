@@ -18,6 +18,7 @@ const expectedTables = [
   'productivity_matrix',
   'stock_adjustments',
   'stock_location_adjustments',
+  'stock_transport_records',
   'stock_snapshot'
 ];
 
@@ -32,7 +33,8 @@ const expectedColumns = {
     'manual_schedule_validation_fingerprint', 'manual_schedule_validated_at',
     'manual_schedule_is_dirty', 'manual_schedule_revision', 'updated_at'
   ],
-  production_plan_days: ['allocation_id', 'start_time', 'end_time']
+  production_plan_days: ['allocation_id', 'start_time', 'end_time'],
+  stock_transport_records: ['status', 'canceled_at', 'cancel_reason']
 };
 
 const expectedAppUserRoles = [
@@ -71,7 +73,10 @@ try {
     SELECT table_name, column_name
     FROM information_schema.columns
     WHERE table_schema = 'public'
-      AND table_name IN ('app_users', 'import_history', 'inventory_counts', 'productivity_matrix', 'production_plans', 'production_plan_days')
+      AND table_name IN (
+        'app_users', 'import_history', 'inventory_counts', 'productivity_matrix',
+        'production_plans', 'production_plan_days', 'stock_transport_records'
+      )
   `);
   const columnsByTable = new Map();
   for (const row of columnRows) {

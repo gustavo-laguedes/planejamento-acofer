@@ -1,4 +1,5 @@
-export const MANUAL_SCHEDULE_CONTRACT_VERSION = 1;
+export const MANUAL_SCHEDULE_CONTRACT_VERSION = 2;
+const SUPPORTED_MANUAL_SCHEDULE_VERSIONS = new Set([1, MANUAL_SCHEDULE_CONTRACT_VERSION]);
 export const MANUAL_SCHEDULE_INCOMPATIBLE_MESSAGE = 'O calendário manual deste planejamento utiliza uma versão incompatível.';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -101,7 +102,7 @@ export function normalizePersistedAllocation(allocation = {}, index = 0) {
 export function validateManualScheduleContract(draft) {
   const errors = [];
   if (!draft || typeof draft !== 'object' || Array.isArray(draft)) errors.push('Draft manual ausente ou inválido.');
-  if (draft && Number(draft.version) !== MANUAL_SCHEDULE_CONTRACT_VERSION) errors.push(MANUAL_SCHEDULE_INCOMPATIBLE_MESSAGE);
+  if (draft && !SUPPORTED_MANUAL_SCHEDULE_VERSIONS.has(Number(draft.version))) errors.push(MANUAL_SCHEDULE_INCOMPATIBLE_MESSAGE);
   if (draft && !Array.isArray(draft.allocations)) errors.push('Allocations do calendário manual ausentes.');
   const ids = new Set();
   for (const allocation of draft?.allocations || []) {
@@ -132,10 +133,14 @@ export function serializeManualScheduleDraft({
     baseSimulationId: draft?.baseSimulationId === null || draft?.baseSimulationId === undefined ? null : text(draft.baseSimulationId),
     baseSimulationHash: manualScheduleBaseHash(baseSimulation),
     allocations,
+    constraints: clone(Array.isArray(draft?.constraints) ? draft.constraints : []),
+    frozenThrough: clone(draft?.frozenThrough || null),
+    schedulerState: clone(draft?.schedulerState || { workItems: [], operationRevisions: [] }),
+    identityMap: clone(draft?.identityMap || {}),
     manualWorkDates: uniqueStrings(settings.manualWorkDates ?? draft?.manualWorkDates),
     dailyTeamOverrides: clone(settings.dailyTeamOverrides ?? draft?.dailyTeamOverrides ?? {}),
     setupMinutes: number(settings.setupMinutes ?? draft?.setupMinutes),
-    minimumStartRatio: number(settings.minimumStartRatio ?? draft?.minimumStartRatio, 0.30),
+    minimumStartRatio: 1,
     dependencyCompletionBufferMinutes: number(settings.dependencyCompletionBufferMinutes ?? draft?.dependencyCompletionBufferMinutes, 60),
     createdAt: text(draft?.createdAt) || timestamp,
     updatedAt: timestamp
@@ -156,12 +161,17 @@ export function normalizePersistedManualScheduleDraft(value) {
   if (typeof value === 'string') {
     try { parsed = JSON.parse(value); } catch { return { status: 'invalid', draft: null, diagnostics: ['O calendário manual salvo está corrompido.'] }; }
   }
-  if (Number(parsed?.version) !== MANUAL_SCHEDULE_CONTRACT_VERSION) {
+  if (!SUPPORTED_MANUAL_SCHEDULE_VERSIONS.has(Number(parsed?.version))) {
     return { status: 'incompatible', draft: null, raw: clone(parsed), diagnostics: [MANUAL_SCHEDULE_INCOMPATIBLE_MESSAGE] };
   }
   const draft = {
     ...clone(parsed),
+    version: MANUAL_SCHEDULE_CONTRACT_VERSION,
     allocations: (parsed.allocations || []).map(normalizePersistedAllocation),
+    constraints: clone(Array.isArray(parsed.constraints) ? parsed.constraints : []),
+    frozenThrough: clone(parsed.frozenThrough || null),
+    schedulerState: clone(parsed.schedulerState || { workItems: [], operationRevisions: [] }),
+    identityMap: clone(parsed.identityMap || {}),
     dirty: false
   };
   const validation = validateManualScheduleContract(draft);

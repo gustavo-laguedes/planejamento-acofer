@@ -18,7 +18,16 @@ export {
   getProductionCalendarAllocationColor,
   ProductionCalendarCard
 } from './ProductionCalendarCard.js';
+export {
+  getProductionDisplayColor,
+  getProductionDisplayFallbackColor,
+  getProductionDisplayTheme,
+  mixProductionDisplayColor,
+  PRODUCTION_DISPLAY_PALETTE
+} from './productionDisplayColor.js';
 export { ProductionCalendarDetails } from './ProductionCalendarDetails.js';
+export { ProductionCalendarEditor } from './ProductionCalendarEditor.js';
+export { ProductionCalendarSplitEditor, resolveProductionCalendarSplitPreview } from './ProductionCalendarSplitEditor.js';
 export { createProductionCalendarDragController } from './ProductionCalendarDrag.js';
 export {
   activateProductionCalendarDrag,
@@ -35,12 +44,19 @@ export {
   validateProductionCalendarAllocations
 } from './productionCalendar.validation.js';
 export {
+  buildProductionCalendarDayPresentation,
+  buildProductionCalendarDayProductivity,
+  addProductionCalendarDays,
   createProductionCalendarGridRows,
+  extendProductionCalendarDayRange,
+  fillProductionCalendarDayRange,
+  formatProductionCalendarCompactNumber,
   formatProductionCalendarDate,
   formatProductionCalendarDuration,
   formatProductionCalendarPercent,
   formatProductionCalendarQuantity,
   getProductionCalendarWeekday,
+  getProductionCalendarProductionLimitDate,
   groupAllocationsByMachineAndDate,
   isProductionCalendarNonWorkingDay,
   normalizeProductionCalendarDay

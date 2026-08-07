@@ -7,12 +7,52 @@
   width: 100%;
 }
 
+body.production-calendar-exclusive-open {
+  overflow: hidden;
+}
+
+.production-calendar-exclusive-page {
+  background: #f5f7fb;
+  display: flex;
+  flex-direction: column;
+  inset: 0;
+  position: fixed;
+  z-index: 900;
+}
+
+.production-calendar-exclusive-header {
+  align-items: center;
+  background: #ffffff;
+  border-bottom: 1px solid #d6dee8;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 12px 18px;
+}
+
+.production-calendar-exclusive-header h1 {
+  color: #172033;
+  font-size: 20px;
+  margin: 0;
+}
+
+.production-calendar-exclusive-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 18px 20px;
+}
+
 .production-calendar-toolbar {
   align-items: center;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 8px;
-  justify-content: space-between;
+  grid-template-areas:
+    ". manual"
+    "primary horizon"
+    "selection selection";
+  grid-template-columns: minmax(0, 1fr) auto;
   min-height: 32px;
   min-width: 0;
 }
@@ -36,12 +76,39 @@
   min-width: 0;
 }
 
+.production-calendar-toolbar-horizon {
+  flex-wrap: wrap;
+  grid-area: horizon;
+  justify-content: flex-end;
+  justify-self: end;
+}
+
+.production-calendar-manual-actions {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  grid-area: manual;
+  justify-self: end;
+}
+
+.production-calendar-toolbar-actions-primary {
+  flex-wrap: wrap;
+  grid-area: primary;
+  justify-self: start;
+}
+
+.production-calendar-toolbar-actions-right {
+  justify-self: end;
+}
+
 .production-calendar-toolbar-selection {
   align-items: center;
   display: flex;
   flex: 1 1 260px;
   gap: 6px;
+  grid-area: selection;
   min-width: 0;
+  width: 100%;
 }
 
 .production-calendar-toolbar-selection[hidden] {
@@ -106,6 +173,62 @@
   cursor: not-allowed;
 }
 
+.production-calendar-toolbar-button.production-calendar-discard-button {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #ffffff;
+  min-height: 30px;
+}
+
+.production-calendar-toolbar-button.production-calendar-discard-button:hover:not(:disabled) {
+  background: #b91c1c;
+  border-color: #991b1b;
+}
+
+.production-calendar-toolbar-button.production-calendar-discard-button:focus-visible {
+  outline-color: #991b1b;
+}
+
+.production-calendar-toolbar-button.production-calendar-discard-button:disabled {
+  background: #fca5a5;
+  border-color: #fca5a5;
+  color: #fff7f7;
+}
+
+.production-calendar-toolbar-button.production-calendar-optimize-button {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #ffffff;
+}
+
+.production-calendar-toolbar-button.production-calendar-optimize-button:hover:not(:disabled) {
+  background: #115e59;
+  border-color: #134e4a;
+}
+
+.production-calendar-toolbar-button.production-calendar-optimize-button:focus-visible {
+  outline-color: #0f766e;
+}
+
+@media (max-width: 980px) {
+  .production-calendar-toolbar {
+    grid-template-areas:
+      "manual"
+      "primary"
+      "horizon"
+      "selection";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .production-calendar-toolbar-horizon {
+    justify-self: end;
+  }
+
+  .production-calendar-manual-actions {
+    justify-self: end;
+  }
+}
+
 .production-calendar-toolbar-pill {
   border: 1px solid #d9e2ec;
   border-radius: 999px;
@@ -143,6 +266,27 @@
   width: 100%;
 }
 
+.production-calendar-transport-connectors {
+  inset: 0 auto auto 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+  z-index: 4;
+}
+
+.production-calendar-transport-connectors marker path {
+  fill: #2f6f95;
+}
+
+.production-calendar-transport-connector {
+  fill: none;
+  marker-end: url("#production-calendar-transport-arrow");
+  opacity: 0.88;
+  stroke: #2f6f95;
+  stroke-linecap: round;
+  stroke-width: 2.25;
+}
+
 .production-calendar-grid-header,
 .production-calendar-grid-row {
   display: grid;
@@ -150,10 +294,28 @@
   min-width: max-content;
 }
 
+.production-calendar-day-heading[hidden],
+.production-calendar-cell[hidden] {
+  display: none;
+}
+
 .production-calendar-grid-header {
   position: sticky;
   top: 0;
   z-index: 20;
+}
+
+.production-calendar-day-heading.is-clickable {
+  cursor: pointer;
+}
+
+.production-calendar-day-heading.is-clickable:hover {
+  background: #eef5fb;
+}
+
+.production-calendar-day-heading.is-clickable:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
 }
 
 .production-calendar-machine-heading,
@@ -172,14 +334,18 @@
   color: #182537;
   font-size: 11.5px;
   font-weight: 800;
-  min-height: 48px;
+  min-height: 70px;
 }
 
 .production-calendar-machine-heading {
   align-items: center;
   display: flex;
+  font-size: 13px;
+  font-weight: 900;
+  justify-content: center;
   left: 0;
   position: sticky;
+  text-align: center;
   z-index: 30;
 }
 
@@ -189,6 +355,7 @@
   gap: 2px;
   justify-content: center;
   line-height: 1.25;
+  position: relative;
   text-align: center;
 }
 
@@ -196,31 +363,61 @@
 .production-calendar-cell.is-non-working-day {
   background-image: repeating-linear-gradient(
     135deg,
-    rgba(148, 163, 184, 0.12) 0,
-    rgba(148, 163, 184, 0.12) 6px,
+    rgba(100, 116, 139, 0.19) 0,
+    rgba(100, 116, 139, 0.19) 6px,
     transparent 6px,
     transparent 12px
   );
 }
 
 .production-calendar-day-date {
+  color: #182537;
+  font-size: 11.5px;
+  font-weight: 800;
+}
+
+.production-calendar-day-weekday {
   color: #475569;
   font-size: 10.5px;
   font-weight: 700;
 }
 
+.production-calendar-manual-work-toggle { display: inline-flex; justify-content: center; position: absolute; right: 6px; top: 6px; }
+.production-calendar-manual-work-toggle input { cursor: pointer; height: 14px; margin: 0; width: 14px; }
+.production-calendar-team-pill { background: #e2e8f0; border: 1px solid #94a3b8; border-radius: 999px; color: #334155; cursor: pointer; font-size: 10.5px; font-weight: 850; line-height: 1; margin: 2px auto 0; padding: 4px 7px; }
+.production-calendar-team-pill.is-attention { background: #fef3c7; border-color: #d97706; color: #92400e; }
+.production-calendar-team-pill.is-error { background: #fee2e2; border-color: #dc2626; color: #991b1b; }
+.production-calendar-team-pill.is-override { background: #dbeafe; border-color: #2563eb; color: #1e40af; }
+.production-calendar-team-pill:disabled { cursor: default; opacity: 1; }
+.production-calendar-day-productivity { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; bottom: 4px; color: #1e293b; font-size: 9.5px; font-weight: 850; left: 6px; line-height: 1.35; max-width: calc(100% - 92px); overflow: hidden; padding: 4px 5px; position: absolute; text-align: center; white-space: pre-line; }
+.production-calendar-day-stock-alerts { align-items: flex-end; bottom: 3px; display: flex; gap: 4px; justify-content: flex-end; position: absolute; right: 5px; z-index: 1; }
+.production-calendar-day-stock-alert { background: transparent; color: #dc2626; display: inline-flex; font-size: 10.5px; font-weight: 950; line-height: 1; white-space: nowrap; }
+.production-calendar-day-stock-alert.is-critical { color: #dc2626; }
+.production-calendar-day-stock-alert.is-production-alert { color: #2563eb; }
+.production-calendar-day-stock-alert.is-below-target { color: #7c3aed; }
+.production-calendar-day-modal-backdrop { align-items: center; background: rgba(15, 23, 42, 0.36); display: flex; inset: 0; justify-content: center; padding: 20px; position: fixed; z-index: 1100; }
+.production-calendar-day-modal { background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; box-shadow: 0 20px 48px rgba(15, 23, 42, 0.22); display: grid; gap: 16px; max-width: 480px; padding: 20px; width: min(480px, calc(100vw - 40px)); }
+.production-calendar-day-modal h2 { color: #172033; font-size: 18px; margin: 0; }
+.production-calendar-day-modal-body { color: #334155; font-size: 14px; line-height: 1.45; }
+.production-calendar-day-modal-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.production-calendar-team-form { display: grid; gap: 12px; }
+.production-calendar-team-row { align-items: center; display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr) 90px; }
+.production-calendar-team-row input { border: 1px solid #cbd5e1; border-radius: 6px; min-width: 0; padding: 7px 8px; width: 100%; }
+
 .production-calendar-machine-cell {
-  align-items: flex-start;
+  align-items: center;
   background: #fdfefe;
   color: #1e2f45;
   display: flex;
-  font-size: 12px;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 900;
+  justify-content: center;
   left: 0;
   line-height: 1.3;
   min-height: 132px;
   overflow-wrap: anywhere;
   position: sticky;
+  text-align: center;
   z-index: 10;
 }
 
@@ -296,6 +493,15 @@
   opacity: 0.58;
 }
 
+.production-calendar-card.is-flow-focused {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--production-calendar-card-accent, #2563eb) 62%, #ffffff),
+    0 0 0 7px color-mix(in srgb, var(--production-calendar-card-accent, #2563eb) 18%, transparent),
+    0 14px 28px rgba(15, 23, 42, 0.18);
+  outline: 2px solid var(--production-calendar-card-accent, #2563eb);
+  outline-offset: 1px;
+}
+
 .production-calendar-card-selector {
   align-items: center;
   background: #ffffff;
@@ -345,6 +551,390 @@
   outline-offset: 2px;
 }
 
+.production-calendar-card-edit,
+.production-calendar-card-split,
+.production-calendar-card-transport {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #94a3b8;
+  border-radius: 5px;
+  color: #334155;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 15px;
+  height: 24px;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 7px;
+  top: 36px;
+  width: 24px;
+  z-index: 2;
+}
+
+.production-calendar-card-split {
+  right: 7px;
+  top: 66px;
+}
+
+.production-calendar-card-transport {
+  color: #334155;
+  font-family: "Segoe UI Symbol", "Arial Unicode MS", sans-serif;
+  font-size: 16px;
+  font-weight: 900;
+  right: 7px;
+  top: 66px;
+}
+
+.production-calendar-card-transport[data-active="true"] {
+  background: #f8fafc;
+  border-color: #475569;
+  color: #111827;
+}
+
+.production-calendar-card-edit:hover,
+.production-calendar-card-edit:focus-visible,
+.production-calendar-card-split:hover,
+.production-calendar-card-split:focus-visible,
+.production-calendar-card-transport:hover,
+.production-calendar-card-transport:focus-visible {
+  border-color: #1d4ed8;
+  color: #1d4ed8;
+}
+
+.production-transport-dialog {
+  max-width: 460px;
+}
+
+.production-transport-form {
+  display: grid;
+  gap: 14px;
+}
+
+.production-transport-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.production-transport-form label {
+  color: #334155;
+  display: grid;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 6px;
+}
+
+@media (max-width: 560px) {
+  .production-transport-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.production-transport-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #991b1b;
+  font-size: 12px;
+  margin: 0;
+  padding: 8px 10px;
+}
+
+.production-transport-error[hidden] {
+  display: none;
+}
+
+.production-calendar-editor-backdrop {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.58);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 10050;
+}
+
+.production-calendar-editor-modal {
+  background: #ffffff;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  width: min(440px, 100%);
+}
+
+.production-calendar-unified-editor-modal {
+  overflow: hidden;
+  width: min(1040px, 100%);
+}
+
+.production-calendar-editor-scroll {
+  max-height: calc(100vh - 118px);
+  overflow-y: auto;
+}
+
+.production-calendar-editor-summary {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  padding: 16px 20px 0;
+}
+
+.production-calendar-editor-summary > div {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+}
+
+.production-calendar-editor-summary > label {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+}
+
+.production-calendar-editor-summary span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.production-calendar-editor-summary strong {
+  color: #1e293b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.production-calendar-editor-summary-editable > div {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.production-calendar-editor-summary-editable input {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #172033;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  min-height: 28px;
+  min-width: 0;
+  padding: 4px 6px;
+  width: 100%;
+}
+
+.production-calendar-editor-summary-editable b {
+  color: #334155;
+  font-size: 12px;
+}
+
+.production-calendar-editor-lineage {
+  border-top: 1px solid #e2e8f0;
+  margin-top: 16px;
+}
+
+.production-calendar-editor-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+}
+
+.production-calendar-editor-form h3,
+.production-calendar-editor-distribution-header h3,
+.production-calendar-editor-distribution-header p {
+  margin: 0;
+}
+
+.production-calendar-editor-distribution {
+  border-top: 1px solid #e2e8f0;
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+}
+
+.production-calendar-editor-distribution[hidden] {
+  display: none;
+}
+
+.production-calendar-editor-distribution-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.production-calendar-editor-distribution-header > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.production-calendar-editor-parts {
+  display: grid;
+  gap: 10px;
+}
+
+.production-calendar-editor-part {
+  align-items: end;
+  background: #f8fafc;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: 74px 120px minmax(150px, 1fr) 92px 142px 105px minmax(170px, 1fr) auto;
+  padding: 12px;
+}
+
+.production-calendar-editor-part-result {
+  align-self: center;
+  color: #334155;
+  display: grid;
+  font-size: 11px;
+  gap: 3px;
+}
+
+.production-calendar-editor-header {
+  align-items: flex-start;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: space-between;
+  padding: 18px 20px;
+}
+
+.production-calendar-editor-header h2,
+.production-calendar-editor-header p {
+  margin: 0;
+}
+
+.production-calendar-editor-header h2 {
+  color: #172033;
+  font-size: 18px;
+}
+
+.production-calendar-editor-header p {
+  color: #64748b;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.production-calendar-editor-close {
+  background: transparent;
+  border: 0;
+  color: #475569;
+  cursor: pointer;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.production-calendar-editor-form {
+  display: grid;
+  gap: 16px;
+  padding: 32px 20px 20px;
+}
+
+.production-calendar-editor-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.production-calendar-editor-form label > span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.production-calendar-editor-form select,
+.production-calendar-editor-form input {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+  min-height: 40px;
+  padding: 7px 10px;
+  width: 100%;
+}
+
+.production-calendar-editor-limit {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.production-calendar-editor-preview {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+}
+
+.production-calendar-editor-preview div {
+  align-items: baseline;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.production-calendar-editor-preview span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.production-calendar-editor-preview strong {
+  color: #1e293b;
+  font-size: 12px;
+  text-align: right;
+}
+
+.production-calendar-editor-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #b91c1c;
+  font-size: 12px;
+  margin: 0;
+  padding: 9px 10px;
+}
+
+.production-calendar-editor-form footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+@media (max-width: 520px) {
+  .production-calendar-editor-backdrop {
+    padding: 12px;
+  }
+
+  .production-calendar-editor-form footer {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+}
+
+@media (max-width: 900px) {
+  .production-calendar-editor-fields,
+  .production-calendar-editor-part {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .production-calendar-editor-distribution-header {
+    display: grid;
+  }
+}
+
 .production-calendar-card-title {
   color: var(--production-calendar-card-accent, #172033);
   font-size: var(--production-calendar-card-title-size);
@@ -363,6 +953,42 @@
   line-height: 1.3;
   overflow-wrap: break-word;
   word-break: normal;
+}
+
+.production-calendar-card-stage {
+  color: var(--production-calendar-card-accent, #475569);
+  font-size: 10.5px;
+  font-weight: 750;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.production-calendar-card-memberships {
+  display: grid;
+  gap: 4px;
+  padding-right: 2px;
+}
+
+.production-calendar-card-membership {
+  align-items: center;
+  color: #172033;
+  display: flex;
+  font-size: 10.5px;
+  font-weight: 800;
+  gap: 6px;
+  line-height: 1.2;
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+.production-calendar-card-membership-marker {
+  background: var(--production-calendar-membership-color, #475569);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.12);
+  flex: 0 0 8px;
+  height: 8px;
+  width: 8px;
 }
 
 .production-calendar-card-material-name {
@@ -524,6 +1150,55 @@
   padding-left: 18px;
 }
 
+.production-calendar-rejection-details {
+  background: #fff;
+  border-top: 3px solid #b91c1c;
+  color: #172033;
+  display: grid;
+  gap: 12px;
+}
+
+.production-calendar-rejection-details h3,
+.production-calendar-rejection-details h4,
+.production-calendar-rejection-details p {
+  margin: 0;
+}
+
+.production-calendar-rejection-details h3 {
+  color: #991b1b;
+  font-size: 15px;
+}
+
+.production-calendar-diagnostic-group ol {
+  display: grid;
+  gap: 8px;
+  margin: 6px 0 0;
+  padding-left: 22px;
+}
+
+.production-calendar-diagnostic-group li {
+  padding-left: 3px;
+}
+
+.production-calendar-diagnostic-group p,
+.production-calendar-diagnostic-group small {
+  display: block;
+  margin-top: 2px;
+}
+
+.production-calendar-diagnostic-group.has-warnings {
+  border-left: 3px solid #d97706;
+  padding-left: 10px;
+}
+
+.production-calendar-technical-details pre {
+  background: #f8fafc;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
 .production-calendar-details-backdrop {
   align-items: center;
   background: rgba(15, 23, 42, 0.32);
@@ -597,6 +1272,20 @@
   justify-self: start;
   line-height: 1;
   padding: 5px 8px;
+}
+
+.production-calendar-details-memberships ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.production-calendar-details-memberships li {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.35;
 }
 
 .production-calendar-details-close-icon {

@@ -1,0 +1,2002 @@
+# PLANO MESTRE DE REESTRUTURAÇÃO — PLANEJAMENTO AÇO-FER V1
+
+**Projeto:** Planejamento Aço-Fer  
+**Responsável funcional:** Gustavo (“Gu”) — PCP Aço-Fer  
+**Empresas:** Catrion + Aço-Fer  
+**Documento operacional para:** Gu, ChatGPT coordenador e Codex  
+**Data-base da auditoria:** 06/08/2026  
+**Status geral:** `[ ] NÃO INICIADO`  
+**Versão do documento:** 1.0
+
+---
+
+## 1. Finalidade deste documento
+
+Este arquivo é a fonte de coordenação da reestruturação da versão 1 do Planejamento Aço-Fer.
+
+Ele deve ser lido pelo Codex **antes de qualquer alteração relacionada à reestruturação**, junto com `AGENTS.md` e com as skills do domínio envolvido. O objetivo é permitir que o projeto seja reorganizado com rastreabilidade, preservando o comportamento produtivo existente e evitando alterações amplas, silenciosas ou impossíveis de auditar.
+
+A reestruturação escolhida é a **Opção 2**:
+
+1. manter, nesta versão, a stack atual em JavaScript ESM, Node.js e Express;
+2. não migrar agora para TypeScript, React, Vite ou Tailwind;
+3. dividir `pages/PlanningPage.js` em módulos menores e com responsabilidades claras;
+4. auditar outros arquivos grandes, mas só dividi-los quando houver justificativa arquitetural e escopo aprovado;
+5. consolidar o **Gantt APS como a única interface de calendário/planejamento**;
+6. remover o Calendário V2 do código ativo depois de extrair tudo que ainda for reutilizado pelo Gantt ou pela regra de negócio;
+7. preservar banco, APIs, planejamentos salvos, drafts manuais, regras de estoque, precedências, capacidade, reotimização e auditoria;
+8. preparar a arquitetura para uma futura versão 2/Line, quando a migração de stack será feita em um projeto duplicado e controlado.
+
+Este documento não deve ser tratado como uma lista informal. Ele é um **checklist de execução com gates**, evidências e critérios de aceite.
+
+---
+
+## 2. Decisão arquitetural aprovada
+
+### 2.1 O que será feito agora
+
+- [ ] Estabilizar e registrar o estado atual do projeto.
+- [ ] Corrigir ou reclassificar a suíte de testes atual antes da refatoração ampla.
+- [ ] Auditar responsabilidades e dependências da `PlanningPage.js`.
+- [ ] Extrair funções puras, adapters, controladores e módulos de UI sem alterar comportamento.
+- [ ] Remover a dependência arquitetural do Gantt em relação ao pacote visual do Calendário V2.
+- [ ] Garantir paridade operacional suficiente no Gantt APS.
+- [ ] Tornar o Gantt APS o único renderer ativo.
+- [ ] Remover fallback, flags, renderer, componentes, CSS e testes exclusivos do Calendário V2.
+- [ ] Reduzir a `PlanningPage.js` a uma página orquestradora.
+- [ ] Auditar os demais arquivos grandes e produzir recomendação objetiva.
+- [ ] Homologar o fluxo completo como usuário de PCP.
+
+### 2.2 O que não será feito nesta versão
+
+- ⛔ Converter o frontend para React.
+- ⛔ Converter o projeto para TypeScript.
+- ⛔ Introduzir Vite.
+- ⛔ Migrar o CSS geral para Tailwind.
+- ⛔ Migrar o backend para outra stack.
+- ⛔ Implementar Electron.
+- ⛔ Introduzir funcionalidades do Line, laboratório ou rastreabilidade.
+- ⛔ Redesenhar toda a interface.
+- ⛔ Alterar banco ou migrations sem necessidade comprovada e aprovação específica.
+- ⛔ Reescrever o motor APS.
+- ⛔ Aproveitar a refatoração para “melhorar” regras produtivas não solicitadas.
+
+### 2.3 Direção futura
+
+Quando a versão 1 estiver estável e operacional, o projeto poderá ser duplicado para iniciar a versão 2/Line. Nessa fase futura serão reavaliados:
+
+- TypeScript;
+- React;
+- Vite;
+- Tailwind CSS;
+- Node.js/Express tipado;
+- PostgreSQL/Neon;
+- Clerk;
+- Cloudflare R2;
+- laboratório;
+- rastreabilidade de materiais e lotes;
+- anexos, imagens, certificados e laudos;
+- novos módulos industriais.
+
+A reestruturação atual deve facilitar essa migração futura, mas **não pode depender dela**.
+
+---
+
+## 3. Estado técnico encontrado em 06/08/2026
+
+### 3.1 Stack atual identificada
+
+- Frontend JavaScript ESM sem build.
+- HTML e CSS servidos diretamente.
+- Node.js + Express.
+- PostgreSQL/Neon.
+- Autenticação e autorização existentes no projeto atual.
+- Services de domínio em `services/`.
+- Rotas em `server/routes/`.
+- Banco e migrations em `database/`.
+- Gantt APS em `shared/planning-schedule-view/gantt-aps/`.
+- Calendário V2 em `shared/production-calendar/`.
+
+### 3.2 Arquivos grandes relevantes
+
+Tamanho não é, sozinho, justificativa para refatorar. A lista abaixo define apenas pontos de auditoria.
+
+| Arquivo | Linhas aproximadas | Observação inicial |
+|---|---:|---|
+| `style.css` | 8.108 | Muito grande, porém predominantemente visual; não é prioridade de domínio. |
+| `pages/PlanningPage.js` | 7.097 | Principal alvo; mistura estado, API, UI, simulação, estoque, fluxo, Gantt, edição, persistência e histórico. |
+| `services/planning.service.js` | 2.656 | Motor automático; alto risco. Não dividir sem auditoria específica e testes fortes. |
+| `pages/AnalysisPage.js` | 2.340 | Auditar depois da PlanningPage. |
+| `pages/ImportHistoryPage.js` | 1.781 | Auditar depois da PlanningPage. |
+| `server/routes/planning.routes.js` | 1.628 | Orquestra API/persistência; alto risco. |
+| `services/planningReoptimization.service.js` | 1.548 | Domínio de reotimização; alto risco. |
+| `shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js` | 1.168 | Renderer visual relevante; auditar responsabilidades e lifecycle. |
+| `shared/CalendarTimeline.js` | 2.594 | Renderer/timeline legado adicional; verificar uso real e destino. |
+
+### 3.3 Situação do Git no ZIP analisado
+
+O pacote analisado contém uma árvore de trabalho com muitas alterações modificadas e arquivos novos ainda não registrados em commit. Isso inclui serviços, testes, documentação e evolução do Gantt.
+
+**Consequência obrigatória:** nenhuma refatoração deve começar antes de criar uma fotografia segura do estado atual. O Codex não pode assumir que `HEAD` representa o sistema atual.
+
+### 3.4 Situação atual do Gantt e do Calendário V2
+
+Foram identificados no código atual:
+
+- `USE_PRODUCTION_CALENDAR_V2 = true` em `pages/PlanningPage.js`;
+- renderer host com opções `production-calendar-v2`, `gantt-aps` e `auto`;
+- fallback padrão para `production-calendar-v2`;
+- `createProductionCalendarV2Renderer` ainda registrado;
+- mensagem de rollback explícita para o Calendário V2;
+- `PlanningPage.js` importando diretamente componentes e utilitários de `shared/production-calendar/`;
+- Gantt importando função de cor de `ProductionCalendarCard.js`;
+- funções e variáveis com prefixo `productionCalendar` que hoje já atendem também ao Gantt;
+- testes e documentação ainda acoplados à nomenclatura V2.
+
+Portanto, “apagar a pasta do V2” agora quebraria funcionalidades e testes. Primeiro é necessário separar:
+
+1. visual exclusivo do V2;
+2. lógica neutra de apresentação reutilizável;
+3. adapters de calendário que são, na verdade, adapters do planejamento;
+4. UI operacional ainda usada pelo Gantt;
+5. contratos produtivos que nunca deveriam estar dentro do pacote visual.
+
+### 3.5 Baseline da suíte de testes
+
+Comando executado na auditoria:
+
+```bash
+node --test tests/*.js
+```
+
+Resultado em 06/08/2026:
+
+```text
+51 testes
+45 aprovados
+6 falharam
+```
+
+Falhas observadas:
+
+1. `tests/manualScheduleAllocationSplit.service.test.js`
+   - cenário: edição localizada de uma parte dividida;
+   - indício: ordem/posição da parte editada pode ter mudado;
+   - classificação atual: **possível defeito funcional ou contrato de ordem não formalizado**;
+   - deve ser investigado antes da refatoração.
+
+2. `tests/planningConstraintRecalculation.service.test.js`
+   - usa datas que já ficaram no passado em relação a 06/08/2026;
+   - classificação atual: **teste dependente do relógio/data atual**;
+   - deve usar datas relativas controladas ou relógio injetável.
+
+3. `tests/planningManualScheduleIntegration.test.js`
+   - procura estrutura/harness antigo por inspeção de código;
+   - classificação atual: **teste estático provavelmente desatualizado**.
+
+4. `tests/planningManualStockPartialModal.test.js`
+   - inspeção textual captura referências fora do fluxo que pretendia analisar;
+   - classificação atual: **teste estático frágil/falso positivo provável**.
+
+5. `tests/planningScheduleRenderer.test.js`
+   - espera uma ligação de foco que não foi encontrada no trecho extraído;
+   - classificação atual: **pode representar regressão real de foco Fluxo → Gantt ou teste desatualizado**;
+   - requer investigação funcional.
+
+6. `tests/productionCalendarDayHeader.test.js`
+   - harness DOM não possui `querySelector` usado pelo componente atual;
+   - classificação atual: **simulador DOM incompleto ou teste acoplado ao V2**.
+
+Nenhuma dessas falhas pode ser simplesmente “ajustada para verde”. Cada uma precisa ter causa, decisão e evidência.
+
+---
+
+## 4. Definições obrigatórias
+
+### 4.1 O que significa “não quebrar o sistema”
+
+A refatoração será considerada segura quando preservar, para as mesmas entradas:
+
+- produções e quantidades;
+- árvore produtiva;
+- componentes e consumos;
+- máquinas e pessoas;
+- produtividade e duração;
+- datas e horários calculados;
+- dependências e precedências;
+- estoque inicial, consumo e produção disponível;
+- divisões e resíduos;
+- `allocationId` e linhagens;
+- draft manual;
+- undo/redo;
+- reotimização e passado congelado;
+- save, refresh e reopen;
+- revisão otimista;
+- auditoria;
+- permissões;
+- planejamentos legados;
+- comportamento do Gantt aprovado pelo Gu.
+
+Uma mudança apenas de arquivo, nome interno ou organização não pode alterar esses resultados.
+
+### 4.2 O que significa “remover o Calendário V2”
+
+Ao final, deve haver:
+
+- nenhum renderer V2 ativo;
+- nenhum fallback silencioso para V2;
+- nenhuma flag de seleção do V2;
+- nenhum import do pacote visual V2 pela página de planejamento;
+- nenhum import do pacote visual V2 pelo Gantt;
+- nenhum componente de grid/card/toolbar/details/drag exclusivo do V2 no código ativo;
+- nenhum CSS exclusivo do V2 carregado;
+- nenhum teste que valide o V2 como produto ativo;
+- nenhuma documentação normativa dizendo que o V2 é fallback ou fonte oficial;
+- nenhuma regra de negócio dependente de classes ou estrutura DOM do V2.
+
+**Exceção de rastreabilidade:** referências em um histórico técnico arquivado podem permanecer para registrar a evolução, desde que estejam explicitamente marcadas como históricas, não sejam importadas e não participem do runtime.
+
+### 4.3 O que significa “dividir a PlanningPage”
+
+Não basta recortar o arquivo em vários arquivos que continuam acoplados por variáveis globais.
+
+A divisão correta deve:
+
+- separar responsabilidades por domínio/feature;
+- mover primeiro funções puras;
+- usar dependências explícitas;
+- evitar circularidade;
+- impedir que UI vire fonte de regra produtiva;
+- manter a página como orquestradora;
+- preservar um fluxo claro de estado e eventos;
+- permitir testes focados sem montar a página inteira;
+- evitar “arquivo utilitário genérico” que vire outro monólito;
+- evitar passar objetos gigantes sem contrato apenas para esconder o acoplamento.
+
+### 4.4 O que significa “paridade do Gantt”
+
+O Gantt não precisa copiar visualmente o V2. Ele precisa suportar o fluxo operacional aprovado para o PCP.
+
+A paridade deve ser avaliada por capacidades:
+
+- visualizar máquinas e alocações;
+- identificar produções separadas;
+- inspecionar detalhes;
+- foco por `allocationId`;
+- zoom e horizonte;
+- fullscreen;
+- movimentar alocação permitida;
+- rejeitar movimento inválido;
+- editar configuração quando aplicável;
+- dividir alocação;
+- transporte;
+- capacidade e pessoas;
+- dias extraordinários;
+- undo/redo;
+- descarte de alterações;
+- salvar e reabrir;
+- diagnósticos;
+- projeção de estoque por data;
+- preservação de viewport e seleção quando aplicável.
+
+Cada capacidade deve ser marcada como:
+
+- `DISPONÍVEL NO GANTT`;
+- `DISPONÍVEL FORA DO GANTT, MAS ACESSÍVEL NO FLUXO`;
+- `AINDA DEPENDENTE DO V2`;
+- `NÃO NECESSÁRIA`;
+- `BLOQUEADA`.
+
+---
+
+## 5. Regras invioláveis de execução
+
+### 5.1 Regras de segurança
+
+- [ ] Codex deve ler `AGENTS.md` e este arquivo antes de editar.
+- [ ] Codex deve carregar apenas as skills necessárias ao domínio da missão.
+- [ ] Nenhuma missão pode alterar mais de um objetivo arquitetural principal.
+- [ ] Nenhuma missão pode misturar refatoração com nova funcionalidade produtiva.
+- [ ] Nenhuma missão pode alterar banco/migration sem aprovação explícita.
+- [ ] Nenhuma missão pode fazer commit ou push sem ordem do Gu.
+- [ ] Alterações existentes do usuário devem ser preservadas.
+- [ ] Não usar `git reset --hard`, `git clean -fd`, checkout destrutivo ou comando equivalente.
+- [ ] Não remover arquivos do V2 antes do gate de Gantt exclusivo.
+- [ ] Não alterar nomes persistidos ou payloads sem camada de compatibilidade.
+- [ ] Não alterar `allocationId` ou derivar identidade persistente de data, máquina ou texto visual.
+- [ ] Não chamar scheduler automático em movimento manual.
+- [ ] Não recalcular plano salvo silenciosamente ao abrir.
+- [ ] Não mascarar erro de domínio com fallback visual.
+- [ ] Não criar regra de estoque, precedência, produtividade ou capacidade dentro do Gantt.
+- [ ] Não considerar teste verde como homologação operacional.
+
+### 5.2 Regra de compatibilidade durante movimentação de arquivos
+
+Ao mover um módulo utilizado por muitos consumidores:
+
+1. criar o novo módulo neutro;
+2. mover/copiar a implementação preservando o contrato;
+3. manter temporariamente um re-export compatível no caminho antigo quando necessário;
+4. migrar consumidores em missões pequenas;
+5. executar testes focados;
+6. remover o re-export apenas quando não houver consumidores;
+7. confirmar com `rg` que o caminho antigo não é mais usado.
+
+### 5.3 Regra de check no documento
+
+O Codex só pode marcar `[x]` quando:
+
+- o escopo daquela caixa foi concluído;
+- os critérios de aceite foram atendidos;
+- os testes definidos foram executados;
+- o resultado foi registrado no log deste documento;
+- não há falha bloqueante aberta;
+- mudanças visíveis foram homologadas pelo Gu ou marcadas como aguardando homologação.
+
+Se houver implementação parcial, manter `[ ]` e escrever `STATUS: PARCIAL` no registro da missão.
+
+### 5.4 Regra de interrupção
+
+O Codex deve parar e não ampliar escopo quando encontrar:
+
+- divergência de regra produtiva;
+- necessidade de migration;
+- alteração de contrato persistido;
+- risco de perda de draft;
+- mudança de IDs;
+- comportamento legado sem decisão;
+- regressão não relacionada à missão;
+- conflito com alterações existentes;
+- falha de teste que não possa ser explicada.
+
+Nesses casos, deve registrar o bloqueio e devolver evidências.
+
+---
+
+## 6. Fluxo obrigatório de cada missão
+
+Cada missão seguirá esta sequência:
+
+```text
+Ler AGENTS.md + este plano
+→ identificar a missão e o domínio
+→ carregar skill(s) correta(s)
+→ confirmar estado do Git
+→ ler fontes canônicas
+→ localizar testes existentes
+→ apresentar preflight curto
+→ alterar somente o escopo
+→ executar validação focada
+→ executar regressão necessária
+→ registrar diff e evidências
+→ atualizar checkboxes e log
+→ entregar para revisão técnica
+→ homologar quando houver impacto operacional
+```
+
+### 6.1 Preflight obrigatório do Codex
+
+Antes de editar, o Codex deve declarar:
+
+- missão executada;
+- objetivo único;
+- arquivos que pretende ler;
+- arquivos que pretende alterar;
+- invariantes que serão protegidas;
+- testes previstos;
+- itens fora do escopo.
+
+### 6.2 Entrega obrigatória do Codex
+
+Toda resposta de missão deve conter:
+
+1. `Status da missão`;
+2. `Skills usadas`;
+3. `Fontes canônicas consultadas`;
+4. `Arquivos analisados`;
+5. `Arquivos alterados`;
+6. `Resumo da mudança`;
+7. `Diff resumido`;
+8. `Testes/comandos executados`;
+9. `Resultados`;
+10. `Riscos e limitações`;
+11. `Checkboxes atualizados`;
+12. `Próxima missão recomendada`.
+
+### 6.3 Regra de coordenação entre Gu, ChatGPT e Codex
+
+A cada ciclo de trabalho:
+
+1. o Gu envia ao ChatGPT a versão mais recente deste plano, ou confirma que o arquivo no projeto foi atualizado pelo Codex;
+2. o Gu envia a resposta do Codex, o diff ou os arquivos alterados relevantes;
+3. o ChatGPT relê o plano, especialmente o quadro de status e o registro de execução;
+4. o ChatGPT confere se a missão anterior atingiu o gate e se existe bloqueio;
+5. o ChatGPT prepara **um prompt para a próxima missão**, sem pular etapas nem agrupar alterações incompatíveis;
+6. o Codex lê novamente `AGENTS.md`, este plano e as skills indicadas;
+7. o Codex executa, testa, atualiza checkboxes e registra a execução;
+8. mudanças visíveis ou operacionais retornam ao Gu para homologação.
+
+O ChatGPT não deve assumir que uma caixa foi concluída apenas porque o Codex disse “feito”. É necessário conferir evidências, testes e, quando aplicável, o comportamento operacional.
+
+Quando o plano atualizado não estiver disponível, o prompt seguinte deve ser baseado no último estado comprovado e declarar essa limitação.
+
+---
+
+# 7. FASES E MISSÕES
+
+---
+
+## FASE 0 — Preservação, fotografia e governança
+
+**Objetivo:** garantir que o estado atual possa ser recuperado e comparado.
+
+### Missão REF-000 — Criar baseline seguro
+
+**Status:** `[x] CONCLUÍDA`
+
+#### Tarefas
+
+- [x] Ler `AGENTS.md`, este plano e documentos APS existentes.
+- [x] Executar `git status --short`.
+- [x] Executar `git diff --stat`.
+- [x] Listar arquivos não rastreados relevantes.
+- [x] Registrar branch e commit atual.
+- [x] Confirmar que o estado atual contém mudanças ainda não commitadas.
+- [x] Criar instruções para backup/checkpoint sem apagar alterações.
+- [x] Confirmar que `.env` não será incluído em novo pacote ou commit.
+- [x] Confirmar que não haverá commit/push automático.
+- [x] Registrar versão do Node utilizada.
+- [x] Registrar baseline da suíte completa.
+- [x] Registrar comandos mínimos de inicialização do servidor.
+
+#### Gate
+
+- Existe uma fotografia recuperável do projeto atual.
+- O Gu sabe onde está o backup/checkpoint.
+- Nenhuma linha funcional foi alterada.
+
+#### Evidências esperadas
+
+- saída resumida de Git;
+- baseline de testes;
+- lista de arquivos sensíveis;
+- registro no log.
+
+---
+
+## FASE 1 — Auditoria arquitetural antes da edição
+
+**Objetivo:** entender o acoplamento real e produzir mapa de separação.
+
+### Missão REF-001 — Mapear responsabilidades da `PlanningPage.js`
+
+**Status:** `[x] CONCLUÍDA`
+
+#### Responsabilidades já observadas e que devem ser confirmadas
+
+- [x] formatação, datas e números;
+- [x] draft local e autosave;
+- [x] carregamento de lookups;
+- [x] formulário de produções e turnos;
+- [x] decisões de falta de estoque;
+- [x] fluxo produtivo e conectores;
+- [x] adaptação de operações para calendário;
+- [x] snapshot aceito do calendário;
+- [x] validação manual;
+- [x] movimentação de alocações;
+- [x] reotimização incremental;
+- [x] transporte;
+- [x] edição de máquina/pessoas/capacidade;
+- [x] divisão;
+- [x] otimização de utilização;
+- [x] projeção de estoque;
+- [x] simulação;
+- [x] lançamento do planejamento;
+- [x] detalhes e modais;
+- [x] histórico, cancelamento, abertura e PDF;
+- [x] Gantt/renderer host;
+- [x] legado V2;
+- [x] estado de viewport e fullscreen;
+- [x] eventos DOM.
+
+#### Saídas obrigatórias
+
+- [x] mapa por faixas de linha e funções;
+- [x] mapa de estado mutável da página;
+- [x] grafo de dependências entre grupos de funções;
+- [x] lista de funções puras extraíveis imediatamente;
+- [x] lista de funções que dependem de closure;
+- [x] lista de regras de domínio indevidamente próximas da UI;
+- [x] lista de callbacks do Gantt e do V2;
+- [x] proposta de módulos-alvo;
+- [x] riscos de circularidade;
+- [x] ordem de extração recomendada.
+
+#### Proibição
+
+- Não editar código produtivo nesta missão.
+
+---
+
+### Missão REF-002 — Auditar acoplamento Calendário V2 → Gantt
+
+**Status:** `[x] CONCLUÍDA`
+
+#### Tarefas
+
+- [x] Inventariar todos os imports de `shared/production-calendar/`.
+- [x] Classificar cada export como:
+  - visual exclusivo do V2;
+  - utilitário neutro;
+  - adapter do planejamento;
+  - UI operacional reutilizada;
+  - regra de negócio em local inadequado;
+  - compatibilidade temporária.
+- [x] Mapear `createProductionCalendarV2Renderer`.
+- [x] Mapear `createPlanningScheduleRendererHost` e fallback.
+- [x] Mapear `globalThis.PLANNING_SCHEDULE_RENDERER`.
+- [x] Mapear `USE_PRODUCTION_CALENDAR_V2`.
+- [x] Mapear uso de `ProductionCalendarEditor` e `ProductionCalendarSplitEditor`.
+- [x] Mapear dependência do Gantt em `ProductionCalendarCard.js`.
+- [x] Mapear utilitários de dia, cor, adapter e validação.
+- [x] Mapear CSS carregado automaticamente por `shared/production-calendar/index.js`.
+- [x] Criar matriz de migração com destino de cada símbolo.
+
+#### Saída esperada
+
+Tabela com:
+
+| Símbolo/arquivo atual | Categoria | Consumidores | Destino proposto | Pode remover quando |
+|---|---|---|---|---|
+
+#### Proibição
+
+- Não apagar ou renomear nesta missão.
+
+---
+
+### Missão REF-003 — Auditar outros arquivos grandes
+
+**Status:** `[x] CONCLUÍDA`
+
+#### Arquivos mínimos
+
+- [x] `services/planning.service.js`;
+- [x] `pages/AnalysisPage.js`;
+- [x] `pages/ImportHistoryPage.js`;
+- [x] `server/routes/planning.routes.js`;
+- [x] `services/planningReoptimization.service.js`;
+- [x] `shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js`;
+- [x] `style.css`;
+- [x] `shared/CalendarTimeline.js`.
+
+#### Critérios de auditoria
+
+- quantidade de responsabilidades;
+- coesão interna;
+- fan-in/fan-out;
+- estado mutável;
+- circularidade;
+- duplicação de regra;
+- facilidade de teste;
+- risco de compatibilidade;
+- benefício real de divisão;
+- prioridade.
+
+#### Resultado permitido
+
+Cada arquivo deve receber uma decisão:
+
+- `DIVIDIR NESTA REESTRUTURAÇÃO`;
+- `DIVIDIR DEPOIS`;
+- `NÃO DIVIDIR; TAMANHO JUSTIFICADO`;
+- `INVESTIGAR EM MISSÃO PRÓPRIA`.
+
+Não alterar esses arquivos apenas por quantidade de linhas.
+
+---
+
+## FASE 2 — Caracterização e estabilização dos testes
+
+**Objetivo:** criar proteção para reorganizar sem mudar comportamento.
+
+### Missão REF-010 — Investigar as seis falhas de baseline
+
+**Status:** `[x] CONCLUÍDA — investigação e classificação; correções pendentes`
+
+#### Tarefas por falha
+
+- [x] Split localizado: contrato definido; edicao de allocation preserva posicao no array do draft manual.
+- [x] Recalculation: eliminar dependência da data atual.
+- [x] Manual Schedule Integration: substituir inspeção textual frágil por teste de comportamento quando possível; foco Fluxo -> Gantt restaurado por `allocationId`.
+- [x] Stock Partial Modal: teste restringido ao fluxo real por extracao balanceada e harness comportamental; fluxo parcial usa `manualMovePolicy: 'stock_only_independent'`.
+- [x] Renderer focus: contrato confirmado; Fluxo -> Gantt foca por `allocationId` via renderer host neutro, sem seletor DOM na `PlanningPage.js`.
+- [x] Day Header DOM: harness DOM completado em `tests/productionCalendarDayHeader.test.js`; teste permanece legado temporario enquanto o V2 existir.
+
+#### Diagnósticos REF-010 concluídos
+
+- [x] Split localizado classificado na REF-010 como contrato de ordem ainda não definido, com possível defeito funcional; contrato definido e corrigido na REF-012.
+- [x] Recalculation classificado como teste dependente da data atual.
+- [x] Manual Schedule Integration classificado como teste estático frágil e divergência pendente de foco Fluxo → Gantt.
+- [x] Stock Partial Modal classificado como teste estático frágil por recorte incorreto.
+- [x] Renderer focus classificado como divergência funcional de foco mais teste estático frágil.
+- [x] Day Header DOM classificado como harness DOM incompleto e teste V2 legado.
+
+#### Correções concluídas após REF-010
+
+- [x] REF-010/Recalculation, evidência `docs/refactor/REF-011_PLANNING_CONSTRAINT_DATE_FIX.md`: `planningConstraintRecalculation.service.test.js` deixou de depender de datas fixas envelhecíveis, preservando a regra produtiva de passado somente leitura. Suíte evoluiu de 51 testes, 45 aprovados e 6 falhos para 51 testes, 46 aprovados e 5 falhos.
+- [x] REF-012/Manual Schedule Edit Order, evidencia `docs/refactor/REF-012_MANUAL_SCHEDULE_EDIT_ORDER_FIX.md`: `editDraftAllocation` passou a substituir a allocation editada na mesma posicao do array pelo `allocationId` canonico, sem ordenacao global e sem alterar regras de movimentacao. Suite evoluiu de 51 testes, 46 aprovados e 5 falhos para 51 testes, 47 aprovados e 4 falhos.
+- [x] REF-013/Flow to Gantt Focus, evidencia `docs/refactor/REF-013_FLOW_TO_GANTT_FOCUS.md`: clique/teclado no Fluxo Produtivo preserva abertura dos detalhes e solicita foco por `allocationId` ao `planningScheduleRendererHost`; `PlanningPage.js` nao acessa DOM interno do Gantt; testes estaticos frageis foram substituidos/fortalecidos por harness comportamental. Suite evoluiu de 51 testes, 47 aprovados e 4 falhos para 51 testes, 49 aprovados e 2 falhos.
+
+- [x] REF-014/Manual Stock Partial Modal Test, evidencia `docs/refactor/REF-014_MANUAL_STOCK_PARTIAL_MODAL_TEST.md`: `planningManualStockPartialModal.test.js` deixou de depender do delimitador removido `focusCalendarCardFromFlow`; o fluxo parcial foi protegido por harness comportamental, confirma `applyManualScheduleTransaction`, `manualMovePolicy: 'stock_only_independent'`, contexto de estoque, sucesso, rejeicao, erro e ausencia de `simulateCurrent`, `scheduleOperations` e `reoptimizePlanningFuture`. Suite evoluiu de 51 testes, 49 aprovados e 2 falhos para 51 testes, 50 aprovados e 1 falho.
+- [x] REF-015/Production Calendar Day Header Harness, evidencia `docs/refactor/REF-015_PRODUCTION_CALENDAR_DAY_HEADER_HARNESS.md`: `productionCalendarDayHeader.test.js` deixou de falhar por ausencia de `querySelector` no `FakeElement`; a correcao ficou somente no harness DOM, com busca recursiva minima e seletores explicitos usados pelo grid. Suite evoluiu de 51 testes, 50 aprovados e 1 falho para 51 testes, 51 aprovados e 0 falhos.
+
+#### Regra
+
+Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar:
+
+- comportamento esperado;
+- fonte do contrato;
+- reprodução;
+- por que a correção está no código ou no teste.
+
+#### Gate
+
+- [x] Suíte base sem falhas inexplicadas.
+- [x] Falhas temporariamente aceitas têm justificativa registrada em `docs/refactor/REF-010_BASELINE_FAILURE_INVESTIGATION.md`.
+
+**Gate para correção dos testes:** liberado com escopo controlado por falha.  
+**Baseline automatizado:** verde em 51/51 apos REF-015.  
+**Gate para extração da `PlanningPage.js`:** liberado por `docs/refactor/REF-020_TECHNICAL_CHECKPOINT.md`, com baseline 51/51 confirmado em 2026-08-07 e checkpoint manual pendente para o Gu executar antes da primeira extracao. Homologacao manual da REF-013 permanece pendente.
+
+#### Checkpoint tecnico REF-020
+
+- [x] Baseline automatizado reconfirmado: 51 testes, 51 aprovados e 0 falhos.
+- [x] Worktree inventariado: 41 arquivos rastreados modificados e 68 arquivos nao rastreados antes do documento de evidencia; 69 no estado final da missao, incluindo `docs/refactor/REF-020_TECHNICAL_CHECKPOINT.md`.
+- [x] Arquivos funcionais, testes, migration, Gantt APS, services novos e documentacao REF identificados.
+- [x] `.env` confirmado como sensivel protegido por `.gitignore`, sem abrir nem expor conteudo.
+- [x] Residuos em `tmp/` classificados como nao versionar.
+- [x] Estrategia de checkpoint manual registrada.
+- [ ] Checkpoint Git manual criado pelo Gu.
+- [ ] Homologacao manual REF-013 concluida.
+- [x] Gate de refatoracao liberado para primeira extracao apos checkpoint manual.
+- [x] Primeira extracao recomendada definida: helpers puros de formatacao/normalizacao (`formatDateOnly`, `formatPeriod`, `parsePtBrDecimal`, `escapeHtml`, `normalizeText`, `normalizeJsonArray`, `normalizeJsonObject`, `formatPtBrDecimal`, `formatPtBrInteger`) para `shared/planning-presentation/planningFormatters.js`.
+- [ ] Primeira extracao iniciada.
+
+---
+
+### Missão REF-011 — Criar cenários de caracterização do planejamento
+
+**Status:** `[ ] PENDENTE`
+
+#### Cenários mínimos
+
+- [ ] simulação simples com uma produção;
+- [ ] árvore com intermediário;
+- [ ] estoque parcial;
+- [ ] falta de estoque integral da parcela diária;
+- [ ] múltiplas máquinas compatíveis;
+- [ ] produtividade por pessoas;
+- [ ] divisão com resíduo;
+- [ ] movimento manual aceito;
+- [ ] movimento manual rejeitado e rollback;
+- [ ] dia não útil/manualWorkDate;
+- [ ] dailyTeamOverride;
+- [ ] transporte;
+- [ ] reotimização com passado congelado;
+- [ ] save/reopen;
+- [ ] conflito de revisão;
+- [ ] planejamento legado normalizado;
+- [ ] produção separada por `productionBreakdown`.
+
+#### Saída
+
+Criar fixtures ou builders reutilizáveis, sem depender da data atual ou de banco externo quando não necessário.
+
+---
+
+### Missão REF-012 — Criar contrato de paridade visual/operacional do Gantt
+
+**Status:** `[ ] PENDENTE`
+
+#### Matriz obrigatória
+
+| Capacidade | V2 atual | Gantt atual | Fonte da ação | Teste técnico | Homologação Gu | Pendência |
+|---|---|---|---|---|---|---|
+
+#### Capacidades mínimas
+
+- [ ] renderização;
+- [ ] máquina sem produção;
+- [ ] produção separada;
+- [ ] memberships;
+- [ ] cores;
+- [ ] inspector;
+- [ ] foco externo;
+- [ ] zoom;
+- [ ] horizonte;
+- [ ] fullscreen;
+- [ ] movimentação horizontal;
+- [ ] feedback de destino;
+- [ ] rejeição/rollback;
+- [ ] edição;
+- [ ] divisão;
+- [ ] transporte;
+- [ ] equipe/capacidade;
+- [ ] dias extraordinários;
+- [ ] undo/redo;
+- [ ] descarte;
+- [ ] diagnósticos;
+- [ ] estoque por data;
+- [ ] save/reopen;
+- [ ] responsividade mínima web/mobile.
+
+---
+
+## FASE 3 — Criar fronteiras neutras antes de remover o V2
+
+**Objetivo:** retirar do pacote V2 tudo que é usado como base do produto.
+
+### Missão REF-020 — Extrair identidade visual de produção
+
+**Status:** `[ ] PENDENTE`
+
+#### Situação atual
+
+Cores e helpers vivem em `shared/production-calendar/productionDisplayColor.js`, e o Gantt importa cor por meio de `ProductionCalendarCard.js`.
+
+#### Destino sugerido
+
+```text
+shared/planning-presentation/
+├── productionDisplayColor.js
+├── productionIdentity.js
+└── index.js
+```
+
+#### Tarefas
+
+- [ ] mover helpers neutros de cor;
+- [ ] mover cálculo neutro de cor da allocation;
+- [ ] remover import do Gantt vindo de `ProductionCalendarCard.js`;
+- [ ] manter re-export temporário no caminho antigo, se necessário;
+- [ ] migrar PlanningPage, Gantt, Fluxo e testes;
+- [ ] preservar cores persistidas;
+- [ ] preservar fallback determinístico;
+- [ ] provar que nenhuma cor do draft é mutada.
+
+#### Gate
+
+O Gantt não importa nenhum componente visual do V2 para resolver cor.
+
+---
+
+### Missão REF-021 — Renomear e extrair adapter neutro do schedule
+
+**Status:** `[ ] PENDENTE`
+
+#### Situação atual
+
+`adaptPlanningResultToProductionCalendar` é usado para construir alocações que alimentam também o Gantt.
+
+#### Destino sugerido
+
+```text
+services/planningScheduleAdapter.service.js
+```
+
+ou
+
+```text
+shared/planning-schedule/planningSchedule.adapter.js
+```
+
+A localização final deve respeitar se o adapter é domínio ou projeção de UI.
+
+#### Tarefas
+
+- [ ] definir contrato neutro de snapshot;
+- [ ] preservar todos os IDs e memberships;
+- [ ] criar nome neutro, por exemplo `adaptPlanningResultToScheduleSnapshot`;
+- [ ] manter re-export temporário compatível;
+- [ ] migrar consumidores;
+- [ ] renomear testes por comportamento, não por V2;
+- [ ] confirmar que o retorno continua aceito pelo view model.
+
+---
+
+### Missão REF-022 — Extrair utilitários neutros de calendário/dia
+
+**Status:** `[ ] PENDENTE`
+
+#### Candidatos atuais
+
+- `buildProductionCalendarDayPresentation`;
+- `buildProductionCalendarDayProductivity`;
+- `extendProductionCalendarDayRange`;
+- `fillProductionCalendarDayRange`;
+- normalização de dia útil;
+- formatação que não dependa do DOM do V2.
+
+#### Destino sugerido
+
+```text
+shared/planning-schedule/
+├── planningScheduleDay.js
+├── planningScheduleRange.js
+└── planningSchedulePresentation.js
+```
+
+#### Regra
+
+Não mover regra de calendário produtivo de services para shared. Helpers de apresentação podem ser neutros; decisão produtiva continua nos services canônicos.
+
+---
+
+### Missão REF-023 — Separar editor operacional do renderer V2
+
+**Status:** `[ ] PENDENTE`
+
+#### Situação atual
+
+`ProductionCalendarEditor` e `ProductionCalendarSplitEditor` são usados pela página para editar dados que também aparecem no Gantt.
+
+#### Decisão necessária
+
+- renomear como UI neutra de edição de alocação;
+- ou substituir por modais próprios do planejamento/Gantt;
+- nunca manter o nome V2 como dependência permanente.
+
+#### Destino sugerido
+
+```text
+features/planning/schedule-editor/
+├── PlanningAllocationEditor.js
+├── PlanningAllocationSplitEditor.js
+└── planningAllocationEditor.css
+```
+
+#### Gate
+
+A edição operacional pode ser aberta a partir do fluxo do Gantt sem importar `shared/production-calendar/`.
+
+---
+
+## FASE 4 — Consolidar Gantt APS como calendário único
+
+**Objetivo:** garantir funcionamento sem fallback antes de excluir o legado.
+
+### Missão REF-030 — Fechar paridade operacional prioritária
+
+**Status:** `[ ] PENDENTE`
+
+Executar somente as capacidades marcadas como necessárias na matriz REF-012.
+
+#### Regras
+
+- Gantt emite intenções; não executa regras produtivas.
+- `PlanningPage`/controller encaminha intenção para services canônicos.
+- Ação manual passa por transação e rollback.
+- Erro deve aparecer ao usuário.
+- Nenhum fallback para V2 será usado para “esconder” problema.
+
+#### Gate
+
+Todas as ações essenciais do PCP definidas para a versão 1 são acessíveis usando o Gantt.
+
+---
+
+### Missão REF-031 — Corrigir lifecycle, foco, zoom e fullscreen
+
+**Status:** `[ ] PENDENTE`
+
+#### Tarefas
+
+- [ ] `mount` seguro;
+- [ ] `update` sem duplicar listeners;
+- [ ] `focusAllocation` por identidade canônica;
+- [ ] `getViewportState` completo;
+- [ ] `destroy` remove listeners/timers/overlays;
+- [ ] fullscreen preserva estado visual;
+- [ ] zoom não recalcula o APS;
+- [ ] horizonte não chama API/simulação;
+- [ ] foco Fluxo → Gantt decidido e testado;
+- [ ] erro de renderer exibido de forma controlada.
+
+---
+
+### Missão REF-032 — Ativar Gantt-only sem apagar V2
+
+**Status:** `[ ] PENDENTE`
+
+#### Alterações esperadas
+
+- [ ] remover seleção `auto` da página de produção;
+- [ ] montar explicitamente `gantt-aps`;
+- [ ] impedir fallback para V2;
+- [ ] manter arquivos V2 temporariamente no repositório, sem runtime;
+- [ ] exibir estado de erro quando o Gantt falhar;
+- [ ] executar regressão completa;
+- [ ] homologar com o Gu.
+
+#### Período de segurança
+
+O V2 fica fisicamente presente, porém desligado, durante o gate de homologação. Nenhuma correção deve reativá-lo silenciosamente.
+
+#### Gate
+
+- [ ] fluxo completo realizado sem V2;
+- [ ] nenhuma montagem do V2 em runtime;
+- [ ] Gu aprova a operação essencial;
+- [ ] regressão sem bloqueios.
+
+---
+
+## FASE 5 — Remoção definitiva do Calendário V2
+
+**Objetivo:** eliminar o legado ativo somente depois da prova Gantt-only.
+
+### Missão REF-040 — Remover renderer e fallback V2
+
+**Status:** `[ ] PENDENTE`
+
+- [ ] remover `PRODUCTION_CALENDAR_V2` do enum ativo;
+- [ ] remover `createProductionCalendarV2Renderer`;
+- [ ] remover `productionCalendarV2.renderer.js`;
+- [ ] simplificar renderer host para um renderer ou host genérico sem fallback legado;
+- [ ] remover mensagem de rollback V2;
+- [ ] remover `USE_PRODUCTION_CALENDAR_V2`;
+- [ ] remover `globalThis.PLANNING_SCHEDULE_RENDERER` se não houver outro uso válido;
+- [ ] atualizar testes de lifecycle.
+
+---
+
+### Missão REF-041 — Remover componentes visuais V2
+
+**Status:** `[ ] PENDENTE`
+
+Candidatos a remoção após neutralização:
+
+- [ ] `ProductionCalendar.js`;
+- [ ] `ProductionCalendarGrid.js`;
+- [ ] `ProductionCalendarToolbar.js`;
+- [ ] `ProductionCalendarCard.js`;
+- [ ] `ProductionCalendarDetails.js`;
+- [ ] `ProductionCalendarDrag.js`;
+- [ ] `ProductionCalendarState.js`;
+- [ ] `productionCalendar.validation.js` se for apenas visual;
+- [ ] `production-calendar.css`;
+- [ ] `shared/production-calendar/index.js`.
+
+`ProductionCalendarEditor`, split, cores, adapter e utils só podem ser removidos depois de migrados ou substituídos.
+
+---
+
+### Missão REF-042 — Remover testes e nomes exclusivos do V2
+
+**Status:** `[ ] PENDENTE`
+
+- [ ] converter testes úteis para nomes neutros/Gantt;
+- [ ] excluir testes que validam apenas DOM do V2;
+- [ ] preservar testes de regra movendo-os para módulo neutro;
+- [ ] renomear variáveis `productionCalendar*` que hoje representam schedule geral;
+- [ ] renomear CSS/classes onde ainda forem parte do produto ativo;
+- [ ] atualizar documentação normativa;
+- [ ] arquivar histórico antigo sem tratá-lo como arquitetura atual.
+
+#### Verificação de saída
+
+Executar busca controlada:
+
+```bash
+rg -n "USE_PRODUCTION_CALENDAR_V2|PRODUCTION_CALENDAR_V2|production-calendar-v2|createProductionCalendarV2Renderer|Calendário V2|Calendar V2" . \
+  --glob '!node_modules/**' \
+  --glob '!.git/**'
+```
+
+Resultado esperado:
+
+- zero ocorrências no código ativo;
+- apenas ocorrências históricas explicitamente arquivadas, se mantidas.
+
+---
+
+## FASE 6 — Divisão progressiva da `PlanningPage.js`
+
+**Objetivo:** transformar a página em orquestradora sem mudar o comportamento.
+
+### 6.1 Estrutura-alvo inicial
+
+A estrutura final pode ser ajustada pela auditoria, mas deve seguir uma organização próxima desta:
+
+```text
+pages/
+└── planning/
+    ├── PlanningPage.js
+    ├── planningPage.state.js
+    ├── planningPage.lifecycle.js
+    ├── planningPage.api.js
+    ├── planningPage.draft.js
+    └── planningPage.constants.js
+
+features/
+└── planning/
+    ├── production-builder/
+    │   ├── planningProductionBuilder.js
+    │   ├── planningProductionDetailsModal.js
+    │   └── planningProductionShortage.js
+    ├── flow/
+    │   ├── planningFlowGraph.js
+    │   ├── planningFlowRenderer.js
+    │   └── planningFlowDetailsModal.js
+    ├── schedule/
+    │   ├── planningScheduleController.js
+    │   ├── planningScheduleSnapshot.js
+    │   ├── planningScheduleMove.js
+    │   ├── planningScheduleEditor.js
+    │   ├── planningScheduleTransport.js
+    │   ├── planningScheduleOptimization.js
+    │   └── planningScheduleFullscreen.js
+    ├── stock/
+    │   ├── planningStockProjection.js
+    │   ├── planningStockProjectionModal.js
+    │   └── planningManualStockMove.js
+    ├── simulation/
+    │   ├── planningSimulationController.js
+    │   ├── planningSimulationRenderer.js
+    │   └── planningLaunch.js
+    └── history/
+        ├── planningHistoryController.js
+        └── planningPlanDetails.js
+
+shared/
+├── planning-presentation/
+├── planning-schedule/
+└── formatters/
+```
+
+Esta árvore é uma direção, não autorização para criar tudo de uma vez.
+
+### 6.2 Regra de dependências
+
+```text
+PlanningPage
+  → features de planejamento
+  → services canônicos
+  → shared neutro
+
+features de UI
+  → services canônicos
+  → shared neutro
+
+services
+  NÃO importam pages/features visuais
+
+Gantt renderer
+  → view model + utilitários visuais neutros
+  NÃO importa services produtivos
+  NÃO importa pacote V2
+```
+
+### 6.3 Estratégia de estado
+
+Evitar substituir a closure atual por um “contexto gigante” sem contrato.
+
+Preferência:
+
+1. estado explícito da página;
+2. getters/setters limitados;
+3. módulos de feature criados por factory com dependências claras;
+4. ações retornando resultados, não mutando estado distante de forma invisível;
+5. funções puras sempre que possível;
+6. lifecycle `mount/update/destroy` para componentes com listeners.
+
+Exemplo conceitual:
+
+```js
+const scheduleFeature = createPlanningScheduleFeature({
+  page,
+  api,
+  services: {
+    applyManualScheduleTransaction,
+    reoptimizePlanningFuture
+  },
+  getState: () => state,
+  updateState
+});
+```
+
+Não criar um objeto `context` com centenas de campos apenas para transportar todo o monólito.
+
+---
+
+### Missão REF-050 — Extrair constantes, formatadores e funções puras
+
+**Status:** `[ ] PENDENTE`
+
+#### Candidatos iniciais
+
+- datas e formatação;
+- parsing pt-BR;
+- `escapeHtml` e normalização textual, se não houver equivalente shared;
+- helpers de cor já neutralizados;
+- helpers de período/duração;
+- validação de data civil;
+- helpers puros de estoque modal;
+- helpers puros do grafo de fluxo;
+- comparadores e cálculos de apresentação.
+
+#### Regras
+
+- [ ] teste antes/depois;
+- [ ] sem acesso a DOM;
+- [ ] sem acesso a variáveis da closure;
+- [ ] sem side effects;
+- [ ] não duplicar helper existente.
+
+---
+
+### Missão REF-051 — Extrair estado, draft e autosave da página
+
+**Status:** `[ ] PENDENTE`
+
+#### Tarefas
+
+- [ ] identificar todas as variáveis mutáveis da `PlanningPage`;
+- [ ] classificar estado de domínio, estado de UI, cache e estado de viewport;
+- [ ] separar persistência local do draft;
+- [ ] separar normalização do draft;
+- [ ] separar autosave/debounce;
+- [ ] preservar chave legada local quando necessário;
+- [ ] impedir que refresh reconstrua estado manual silenciosamente;
+- [ ] criar teste para save/load do estado local relevante.
+
+---
+
+### Missão REF-052 — Extrair acesso a APIs e lookups
+
+**Status:** `[ ] PENDENTE`
+
+- [ ] carregamento de materiais;
+- [ ] máquinas;
+- [ ] matriz;
+- [ ] locais;
+- [ ] estoque;
+- [ ] históricos;
+- [ ] endpoints de planejamento;
+- [ ] tratamento de loading/erro;
+- [ ] nenhuma regra produtiva na camada de API;
+- [ ] nenhuma mudança de payload.
+
+---
+
+### Missão REF-053 — Extrair Production Builder e decisões de estoque
+
+**Status:** `[ ] PENDENTE`
+
+#### Escopo
+
+- formulário de produções;
+- prioridade e cores;
+- detalhes de produção;
+- modelos produtivos;
+- sugestões de materiais;
+- decisões de estoque parcial/zero;
+- cascade de produções ignoradas;
+- avisos de produção importada.
+
+#### Proteções
+
+- preservar payload de simulação;
+- preservar decisões por produção/material;
+- preservar estoque selecionado;
+- não mover regra do `planning.service.js` para UI.
+
+---
+
+### Missão REF-054 — Extrair Fluxo Produtivo
+
+**Status:** `[ ] PENDENTE`
+
+#### Escopo
+
+- construção do grafo visual;
+- merge de nós;
+- níveis;
+- conectores;
+- legenda;
+- detalhes do nó;
+- vínculo com produção e cores;
+- foco no Gantt, se aprovado.
+
+#### Regra
+
+O fluxo é projeção visual. Não deve recalcular necessidade produtiva de forma divergente do resultado da simulação.
+
+---
+
+### Missão REF-055 — Extrair projeção e modais de estoque
+
+**Status:** `[ ] PENDENTE`
+
+#### Escopo
+
+- projeção por data;
+- separação venda/produção;
+- alertas PCP;
+- modal de estoque;
+- estoque para movimento manual;
+- datas de restante;
+- apresentação de insuficiência.
+
+#### Proteções
+
+- ledger manual e projeção analítica continuam distintos;
+- regra de piso zero continua canônica;
+- alertas visuais não viram bloqueios automaticamente;
+- não duplicar cálculo do service.
+
+---
+
+### Missão REF-056 — Extrair controller do schedule/Gantt
+
+**Status:** `[ ] PENDENTE`
+
+#### Escopo
+
+- construção de snapshot;
+- build do view model;
+- renderer lifecycle;
+- estado visual;
+- fullscreen;
+- foco;
+- alertas de calendário;
+- refresh somente visual;
+- callbacks do Gantt.
+
+#### Resultado esperado
+
+A página chama algo próximo de:
+
+```js
+scheduleController.render({ simulation, draft, permissions });
+```
+
+A página não deve conhecer detalhes de DOM interno do Gantt.
+
+---
+
+### Missão REF-057 — Extrair movimento, edição, split e transporte
+
+**Status:** `[ ] PENDENTE`
+
+#### Submódulos sugeridos
+
+- `planningScheduleMove.js`;
+- `planningScheduleAllocationEditor.js`;
+- `planningScheduleSplit.js`;
+- `planningScheduleTransport.js`.
+
+#### Proteções
+
+- movimento passa por `applyManualScheduleTransaction`;
+- candidato recusado não substitui draft;
+- split preserva quantidade e IDs;
+- transporte preserva dependências;
+- edição de recursos usa matriz canônica;
+- nenhuma ação dispara simulação global sem decisão explícita.
+
+---
+
+### Missão REF-058 — Extrair reotimização e otimização de utilização
+
+**Status:** `[ ] PENDENTE`
+
+#### Proteções
+
+- cutoff data+hora;
+- passado congelado;
+- decisões `pinned` e overrides;
+- comparação por delta;
+- aceite/rejeição explícitos;
+- sem reotimização global desnecessária.
+
+A UI só coordena e apresenta; o service continua dono da regra.
+
+---
+
+### Missão REF-059 — Extrair simulação, lançamento e resumo final
+
+**Status:** `[ ] PENDENTE`
+
+- [ ] montagem do payload;
+- [ ] execução da simulação;
+- [ ] aplicação de resultado;
+- [ ] baseline automático;
+- [ ] descarte;
+- [ ] resumo;
+- [ ] autorização de estoque;
+- [ ] lançamento do planejamento;
+- [ ] preservação de diagnósticos.
+
+---
+
+### Missão REF-060 — Extrair histórico e abertura de planejamento
+
+**Status:** `[ ] PENDENTE`
+
+- [ ] tabela do histórico;
+- [ ] abrir plano;
+- [ ] reabrir plano salvo;
+- [ ] cancelar;
+- [ ] PDF;
+- [ ] detalhes;
+- [ ] refresh/reopen sem simulação silenciosa;
+- [ ] compatibilidade legada;
+- [ ] revisão manual preservada.
+
+---
+
+### Missão REF-061 — Reduzir `PlanningPage.js` a orquestradora
+
+**Status:** `[ ] PENDENTE`
+
+#### Critérios de aceite
+
+A página final deve principalmente:
+
+- criar o container;
+- inicializar estado;
+- inicializar features;
+- montar abas;
+- coordenar lifecycle;
+- encaminhar eventos de alto nível;
+- destruir listeners/recursos.
+
+Ela não deve conter:
+
+- cálculo produtivo;
+- construção completa de grafos;
+- modais extensos;
+- adapters complexos;
+- lógica detalhada de movimento;
+- regras de estoque;
+- implementação do renderer.
+
+#### Métrica orientativa
+
+Não existe meta rígida de linhas. Como referência, espera-se redução substancial, preferencialmente para uma faixa em que a responsabilidade da página seja legível. A qualidade da fronteira vale mais que atingir um número artificial.
+
+---
+
+## FASE 7 — CSS e apresentação sem redesign amplo
+
+**Objetivo:** remover CSS morto do V2 e organizar somente o necessário.
+
+### Missão REF-070 — Remover CSS do V2 e modularizar CSS do planejamento
+
+**Status:** `[ ] PENDENTE`
+
+- [ ] remover `production-calendar.css` quando não houver consumidor;
+- [ ] garantir que Gantt usa CSS próprio;
+- [ ] extrair do `style.css` apenas blocos claramente pertencentes ao planejamento;
+- [ ] não alterar aparência sem necessidade;
+- [ ] preservar responsividade atual;
+- [ ] eliminar seletores mortos comprovados;
+- [ ] não introduzir Tailwind nesta fase.
+
+#### Estrutura sugerida
+
+```text
+styles/
+├── planning-page.css
+├── planning-flow.css
+├── planning-stock.css
+├── planning-modals.css
+└── planning-history.css
+```
+
+A estrutura final depende da auditoria de CSS.
+
+---
+
+## FASE 8 — Auditoria e possível divisão de outros arquivos
+
+**Objetivo:** decidir com evidência, não por ansiedade com tamanho.
+
+### Missão REF-080 — Aplicar decisões da auditoria de arquivos grandes
+
+**Status:** `[ ] PENDENTE`
+
+#### Regra
+
+Cada divisão adicional precisa de missão própria e não pode acontecer em paralelo com a PlanningPage.
+
+#### Prioridade provável
+
+1. [ ] `ganttAps.renderer.js`, se lifecycle, toolbar, inspector e rendering estiverem excessivamente misturados;
+2. [ ] `AnalysisPage.js`, se houver novas alterações frequentes e baixa coesão;
+3. [ ] `ImportHistoryPage.js`, se houver responsabilidades independentes;
+4. [ ] `planning.routes.js`, somente com testes de rota/persistência;
+5. [ ] `planning.service.js`, somente em projeto específico do motor;
+6. [ ] `planningReoptimization.service.js`, somente com skill e testes de reotimização;
+7. [ ] `style.css`, por módulos visuais, não por reescrita.
+
+### Critério de não ação
+
+Se um arquivo grande for coeso e estável, registrar “não dividir agora” é uma decisão válida.
+
+---
+
+## FASE 9 — Regressão técnica e homologação operacional
+
+### Missão REF-090 — Regressão técnica completa
+
+**Status:** `[ ] PENDENTE`
+
+#### Comandos mínimos
+
+```bash
+node --check pages/planning/PlanningPage.js
+node --test tests/*.js
+git diff --check
+```
+
+A lista final de `node --check` deve incluir todos os arquivos alterados.
+
+#### Cenários obrigatórios
+
+- [ ] simular;
+- [ ] editar produção;
+- [ ] usar/ignorar estoque;
+- [ ] renderizar fluxo;
+- [ ] renderizar Gantt;
+- [ ] focar allocation;
+- [ ] mover;
+- [ ] rejeitar movimento;
+- [ ] dividir;
+- [ ] editar máquina/pessoas;
+- [ ] transportar;
+- [ ] undo/redo;
+- [ ] descartar;
+- [ ] reotimizar;
+- [ ] salvar;
+- [ ] refresh;
+- [ ] reabrir;
+- [ ] abrir plano antigo;
+- [ ] projetar estoque;
+- [ ] verificar conflito de revisão;
+- [ ] verificar permissões.
+
+#### Resultado
+
+Todos os testes devem estar verdes ou cada exceção deve ser explicitamente aprovada pelo Gu, com risco e plano de correção.
+
+---
+
+### Missão REF-091 — Homologação operacional com Gu
+
+**Status:** `[ ] PENDENTE`
+
+#### Roteiro mínimo
+
+1. abrir Simulação;
+2. criar múltiplas produções;
+3. gerar fluxo;
+4. gerar Gantt;
+5. verificar cores e separação;
+6. mover uma allocation válida;
+7. tentar uma inválida;
+8. dividir uma allocation;
+9. editar máquina/pessoas;
+10. configurar dia/equipe quando aplicável;
+11. usar transporte;
+12. abrir estoque de uma data;
+13. desfazer/refazer;
+14. salvar;
+15. atualizar navegador;
+16. reabrir plano;
+17. confirmar que nada foi recalculado silenciosamente;
+18. validar histórico;
+19. validar fullscreen/zoom;
+20. validar uso mínimo em tela móvel.
+
+#### Veredito permitido
+
+- `HOMOLOGADO`;
+- `HOMOLOGADO COM RESTRIÇÕES`;
+- `REPROVADO`.
+
+Somente o Gu ou homologador independente pode dar o veredito operacional final.
+
+---
+
+## FASE 10 — Encerramento da reestruturação V1
+
+### Missão REF-100 — Limpeza e documentação final
+
+**Status:** `[ ] PENDENTE`
+
+- [ ] atualizar `AGENTS.md` para Gantt-only;
+- [ ] atualizar arquitetura normativa;
+- [ ] atualizar árvore de fontes canônicas;
+- [ ] arquivar documentos do V2 como históricos;
+- [ ] remover código morto comprovado;
+- [ ] registrar estrutura final;
+- [ ] registrar testes finais;
+- [ ] registrar riscos residuais;
+- [ ] registrar itens adiados para V2/Line;
+- [ ] criar checkpoint aprovado pelo Gu;
+- [ ] marcar status geral deste documento.
+
+#### Critérios finais
+
+- [ ] Gantt APS é o único calendário ativo.
+- [ ] `PlanningPage.js` é orquestradora.
+- [ ] nenhum comportamento produtivo mudou sem requisito.
+- [ ] planejamentos antigos continuam abrindo.
+- [ ] save/reopen continua preservando o draft.
+- [ ] suíte técnica estável.
+- [ ] homologação concluída.
+- [ ] nenhuma credencial exposta.
+
+---
+
+# 8. Critérios de qualidade para a divisão dos arquivos
+
+Cada novo módulo deve atender aos itens aplicáveis:
+
+- [ ] nome descreve responsabilidade;
+- [ ] export público pequeno;
+- [ ] dependências explícitas;
+- [ ] sem acesso a global quando evitável;
+- [ ] sem regra produtiva duplicada;
+- [ ] sem mutação escondida de input;
+- [ ] sem circularidade;
+- [ ] teste focado;
+- [ ] tratamento de lifecycle quando possui listeners;
+- [ ] compatibilidade temporária documentada;
+- [ ] comentários explicam motivo, não repetem o código;
+- [ ] UTF-8 preservado;
+- [ ] nenhuma correção de encoding fora do escopo;
+- [ ] nenhuma abstração genérica sem consumidor real.
+
+### Sinais de divisão ruim
+
+- arquivo novo com centenas de parâmetros;
+- objeto `context` com quase todo o estado da aplicação;
+- imports circulares;
+- módulo chamado `utils.js` com funções de vários domínios;
+- UI chamando diretamente SQL/route interna;
+- service importando DOM;
+- Gantt importando regra produtiva;
+- função movida, mas ainda dependente de variáveis globais implícitas;
+- re-export permanente mantendo dois nomes para sempre;
+- testes que só procuram regex em código-fonte quando seria possível testar comportamento.
+
+---
+
+# 9. Matriz de invariantes a proteger
+
+| Domínio | Invariante | Teste/evidência necessária |
+|---|---|---|
+| Draft manual | Após criado, é fonte de verdade do calendário editado. | Save/load, refresh/reopen e transação. |
+| Movimento | Não chama simulação/scheduler automático. | Teste de integração do comando. |
+| Rollback | Candidato rejeitado não substitui o aceito. | Teste transacional. |
+| Identidade | `allocationId` é estável e persistente. | Split, move, save/reopen. |
+| Quantidade | Split conserva total e resíduo determinístico. | Testes de precisão e recursão. |
+| Estoque | Ledger e projeção seguem fontes canônicas. | Cenários parcial, zero e produção disponível. |
+| Precedência | Componente não é consumido antes de disponível. | Teste de dependência. |
+| Capacidade | Respeita turnos, pessoas, dias úteis e matriz. | Recurso por data e overrides. |
+| Reotimização | Passado congelado; futuro limitado ao cutoff. | Testes de cutoff/delta. |
+| Persistência | Draft manual não sobrescreve snapshot automático. | Save/reopen e payload. |
+| Concorrência | `manual_schedule_revision` impede sobrescrita silenciosa. | Teste 409/revision. |
+| Legado | Planejamentos antigos são normalizados sem conversão destrutiva. | Fixtures legadas. |
+| UI | Gantt apresenta e emite intenção; não calcula domínio. | Auditoria de imports e callbacks. |
+| Renderer | Falha é visível; não há fallback V2. | Lifecycle/error state. |
+| Segurança | `.env` e credenciais não entram em pacote/commit. | Revisão Git e pacote. |
+
+---
+
+# 10. Estratégia de testes por tipo de mudança
+
+### Movimento de função pura
+
+- teste unitário do módulo novo;
+- comparação com comportamento antigo;
+- `node --check`;
+- `git diff --check`.
+
+### Movimento de UI/DOM
+
+- teste do callback/evento;
+- teste de lifecycle;
+- roteiro manual curto;
+- homologação visual quando houver diferença aparente.
+
+### Movimento de adapter/snapshot
+
+- deep equality ou comparação dos campos canônicos;
+- IDs, datas, horários, quantidades, memberships e cores;
+- não mutação do input.
+
+### Mudança de schedule/manual
+
+- draft;
+- transação;
+- validação;
+- estoque;
+- persistência;
+- integração na PlanningPage/Gantt.
+
+### Remoção de arquivo legado
+
+- busca de imports;
+- suíte completa;
+- smoke de página;
+- busca por nomes legados;
+- verificação de CSS morto;
+- homologação operacional.
+
+---
+
+# 11. Modelo de prompt para qualquer missão do Codex
+
+Copiar e adaptar somente os campos entre colchetes.
+
+```text
+Leia primeiro, nesta ordem:
+1. AGENTS.md
+2. PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md
+3. As skills do domínio exigidas pela missão
+4. Os documentos/arquivos canônicos citados na missão
+
+Execute somente a missão [ID E NOME DA MISSÃO].
+
+Objetivo único:
+[OBJETIVO]
+
+Regras obrigatórias:
+- preserve todas as alterações existentes do usuário;
+- não faça commit nem push;
+- não use comandos destrutivos de Git;
+- não amplie escopo;
+- não misture refatoração com mudança de regra produtiva;
+- não altere banco/migrations;
+- não altere payload persistido nem IDs;
+- antes de editar, apresente o preflight exigido pelo plano;
+- execute testes focados e registre comandos/resultados;
+- atualize somente os checkboxes realmente concluídos e adicione o registro da execução no log do plano;
+- se encontrar bloqueio arquitetural ou regra divergente, pare e registre evidências.
+
+Arquivos prováveis:
+[ARQUIVOS]
+
+Invariantes prioritárias:
+[INVARIANTES]
+
+Testes mínimos:
+[TESTES]
+
+Fora de escopo:
+[FORA DE ESCOPO]
+
+Ao final, entregue exatamente as seções exigidas no plano.
+```
+
+---
+
+# 12. Primeiro prompt recomendado para o Codex
+
+Este é o primeiro trabalho a ser executado. Ele é **read-only** e não deve alterar código funcional.
+
+```text
+Leia primeiro, nesta ordem:
+1. AGENTS.md
+2. PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md
+3. $acofer-investigation
+4. docs/APS_GANTT_ARCHITECTURE.md
+5. docs/APS_GANTT_TASKS.md
+6. docs/APS_GANTT_EVOLUTION_LOG.md
+
+Execute somente as missões REF-000, REF-001, REF-002 e REF-003 em modo de auditoria, sem alterar código produtivo.
+
+Objetivos:
+- registrar baseline seguro da árvore de trabalho atual;
+- mapear responsabilidades, estado e dependências de pages/PlanningPage.js;
+- classificar todo o acoplamento entre Calendário V2, PlanningPage e Gantt APS;
+- auditar os demais arquivos grandes e recomendar se devem ou não ser divididos.
+
+Regras:
+- preserve todas as alterações existentes;
+- não faça commit, push, reset, clean ou checkout destrutivo;
+- não corrija testes ainda;
+- não mova arquivos;
+- não renomeie símbolos;
+- não remova V2;
+- não altere banco/migrations;
+- atualize no plano apenas os itens de auditoria efetivamente concluídos;
+- crie, se necessário, documentos de evidência em docs/refactor/, mas não altere comportamento.
+
+Entregue:
+- status do Git e baseline;
+- mapa por faixa de linhas e funções da PlanningPage;
+- inventário de estado mutável;
+- grafo textual de dependências;
+- tabela símbolo atual → categoria → consumidores → destino proposto;
+- auditoria dos arquivos grandes;
+- ordem recomendada das primeiras missões de implementação;
+- riscos bloqueantes;
+- registro no log do plano.
+```
+
+---
+
+# 13. Registro de execução
+
+O Codex deve acrescentar novas entradas no topo desta seção, sem apagar entradas anteriores.
+
+## Modelo
+
+```text
+### AAAA-MM-DD HH:MM — [MISSÃO]
+
+Status: CONCLUÍDA | PARCIAL | BLOQUEADA | REPROVADA
+Executor/agent:
+Skills usadas:
+Branch/commit de referência:
+Objetivo:
+Arquivos lidos:
+Arquivos alterados:
+Resumo do diff:
+Testes/comandos:
+Resultado:
+Homologação:
+Checkboxes atualizados:
+Riscos/pendências:
+Próxima missão sugerida:
+```
+
+## Entradas
+
+### 2026-08-07 00:00 — REF-020 — Checkpoint tecnico e validacao do gate de refatoracao
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de auditoria/checkpoint, sem alteracao produtiva
+Skills usadas: `acofer-investigation`, `acofer-testing`; skill Git especifica nao estava disponivel nesta sessao
+Branch/commit de referencia: `rebuild-production-calendar` / `73b261a5f10a2c33e29995e0bdc6c18190c15a40`
+Objetivo: congelar conceitualmente o worktree funcional atual, confirmar baseline 51/51, identificar todos os arquivos necessarios e validar o gate antes da primeira extracao da `PlanningPage.js`.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-000_BASELINE.md`, `docs/refactor/REF-001_PLANNING_PAGE_MAP.md`, `docs/refactor/REF-002_V2_GANTT_COUPLING.md`, `docs/refactor/REF-003_LARGE_FILES_AUDIT.md`, `docs/refactor/REF-010_BASELINE_FAILURE_INVESTIGATION.md`, `docs/refactor/REF-011_PLANNING_CONSTRAINT_DATE_FIX.md`, `docs/refactor/REF-012_MANUAL_SCHEDULE_EDIT_ORDER_FIX.md`, `docs/refactor/REF-013_FLOW_TO_GANTT_FOCUS.md`, `docs/refactor/REF-014_MANUAL_STOCK_PARTIAL_MODAL_TEST.md`, `docs/refactor/REF-015_PRODUCTION_CALENDAR_DAY_HEADER_HARNESS.md`, `package.json`, `.gitignore` e inventarios Git do worktree.
+Arquivos alterados: `docs/refactor/REF-020_TECHNICAL_CHECKPOINT.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: criado documento de evidencia do checkpoint tecnico, com baseline, inventario completo, classificacao do worktree, sensiveis, residuos, analise do `.gitignore`, proveniencia, estrategia de checkpoint, comandos recomendados ao Gu, criterios do gate e primeira extracao recomendada. Plano Mestre atualizado com checkboxes do checkpoint e entrada no historico.
+Testes/comandos: `git branch --show-current`, `git rev-parse HEAD`, `git status --short`, `git status --porcelain=v1`, `git diff --stat`, `git diff --name-status`, `git ls-files --others --exclude-standard`, `node --version`, `node --test tests/*.js`, checagens nao destrutivas de `.gitignore`, sensiveis por nome e residuos em `tmp/`.
+Resultado: Node `v24.16.0`; suite `node --test tests/*.js` com 51 testes, 51 aprovados e 0 falhos; 41 arquivos rastreados modificados; 68 arquivos nao rastreados antes do documento de evidencia e 69 no estado final da missao; `.env` ignorado e nao aberto; nenhum sensivel rastreado identificado; `tmp/` classificado como residuo.
+Homologacao: nenhuma homologacao manual executada ou marcada. REF-013 permanece pendente.
+Checkboxes atualizados: checkpoint tecnico registrado, baseline 51/51 registrado, checkpoint manual pendente, gate liberado com condicao de checkpoint manual, primeira extracao recomendada registrada sem iniciar.
+Riscos/pendencias: estado funcional depende de arquivos nao rastreados ate o checkpoint manual; avisos LF -> CRLF observados; V2 ainda legado/fallback; REF-013 ainda requer homologacao manual.
+Proxima missao sugerida: executar somente a primeira extracao aprovada pelo gate: helpers puros de formatacao/normalizacao da `PlanningPage.js` para `shared/planning-presentation/planningFormatters.js`, apos o checkpoint manual do Gu.
+
+---
+
+### 2026-08-06 19:40 — REF-015 — Corrigir harness DOM do productionCalendarDayHeader
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de correcao pequena e delimitada; validacao tecnica por suite automatizada
+Skills usadas: `acofer-investigation`, `acofer-manual-calendar`, `acofer-production-calendar-ui`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `73b261a5f10a2c33e29995e0bdc6c18190c15a40`
+Objetivo: corrigir somente o harness DOM de `tests/productionCalendarDayHeader.test.js`, preservando o comportamento produtivo do Calendario V2.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `CALENDAR_V2_ARCHITECTURE.md`, `docs/refactor/REF-010_BASELINE_FAILURE_INVESTIGATION.md`, `docs/refactor/REF-014_MANUAL_STOCK_PARTIAL_MODAL_TEST.md`, `tests/productionCalendarDayHeader.test.js`, `shared/production-calendar/ProductionCalendarGrid.js`, `shared/production-calendar/productionCalendar.utils.js` e testes relacionados de grid, horizonte, stage, edit button, split editor, memberships, configuracao e Gantt.
+Arquivos alterados: `tests/productionCalendarDayHeader.test.js`, `docs/refactor/REF-015_PRODUCTION_CALENDAR_DAY_HEADER_HARNESS.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: `FakeElement` passou a implementar `querySelector`, `querySelectorAll`, `remove`, `setAttribute` para `class`/`data-*` e `document.createElementNS`; seletores suportados ficaram explicitos e restritos ao contrato usado pelo grid. Nenhum codigo produtivo foi alterado.
+Testes/comandos: antes, `node --test tests/productionCalendarDayHeader.test.js` falhou em `ProductionCalendarGrid.js:72` por ausencia de `grid.querySelector`; depois, o teste isolado passou. Testes relacionados de calendario V2 e Gantt passaram. `node --test tests/*.js` executado.
+Resultado anterior: 51 testes, 50 aprovados e 1 falho.
+Resultado novo: 51 testes, 51 aprovados e 0 falhos.
+Contrato registrado: `HTMLElement.querySelector` remove SVG antigo de conectores por `.production-calendar-transport-connectors`; no caminho com transporte tambem ha seletores `.production-calendar-card[data-allocation-id="..."]` e `.production-calendar-transport-connector`. O teste atual nao valida transporte como intencao principal; os conectores fazem parte da montagem do grid.
+Homologacao: nao marcada; teste verde nao homologa o Calendario V2 nem substitui homologacao manual. Homologacao manual da REF-013 permanece pendente.
+Checkboxes atualizados: `Day Header DOM` marcado como corrigido; `Suite base sem falhas inexplicadas` marcada; baseline automatizado registrado como verde em 51/51.
+Gate: primeira extracao da `PlanningPage.js` nao liberada automaticamente; proximo passo deve ser checkpoint tecnico e validacao explicita do gate.
+Riscos/pendencias: teste e legado temporario enquanto o V2 existir; deve ser removido ou migrado no gate de exclusao do V2; harness nao cobre navegador real, pixels, medidas reais de SVG, drag, backend, banco ou persistencia.
+Proxima missao sugerida: checkpoint tecnico e validacao do gate antes da primeira extracao da PlanningPage.js.
+
+---
+
+### 2026-08-06 19:25 — REF-014 — Corrigir teste comportamental do modal de estoque parcial
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de correcao pequena e delimitada; revisao tecnica por Toto Wolff; leitura operacional por Max Verstappen
+Skills usadas: `acofer-investigation`, `acofer-manual-calendar`, `acofer-stock`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `73b261a5f10a2c33e29995e0bdc6c18190c15a40`
+Objetivo: corrigir `tests/planningManualStockPartialModal.test.js` para validar comportamento real do fluxo parcial de estoque sem depender de recorte textual fragil.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-010_BASELINE_FAILURE_INVESTIGATION.md`, `docs/refactor/REF-013_FLOW_TO_GANTT_FOCUS.md`, `tests/planningManualStockPartialModal.test.js`, trecho de `pages/PlanningPage.js` relativo a `openManualStockPartialMoveModal`, `openManualStockUnavailableModal` e `productionCalendarMoveRunner`, `services/manualScheduleTransaction.service.js`, `services/manualScheduleDraft.service.js`, services de estoque/validacao/projecao e testes relacionados a estoque parcial, transacao manual e validacao.
+Arquivos alterados: `tests/planningManualStockPartialModal.test.js`, `docs/refactor/REF-014_MANUAL_STOCK_PARTIAL_MODAL_TEST.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: teste antigo deixou de recortar `productionCalendarMoveRunner` ate `focusCalendarCardFromFlow`; o novo teste usa extracao balanceada do runner para contrato estrutural e harness controlado para sucesso, rejeicao total, parcial com data viavel/inviavel e erro controlado. Nenhum codigo produtivo foi alterado.
+Testes/comandos: antes, `node --test tests/planningManualStockPartialModal.test.js` falhou por slice vazando para codigo posterior com `simulateCurrent`; depois, o teste isolado passou. Testes relacionados de transacao, integracao manual, estoque/projecao, validacao, draft, historico, persistencia e batch stock passaram. `node --test tests/*.js` executado.
+Resultado anterior: 51 testes, 49 aprovados e 2 falhos.
+Resultado novo: 51 testes, 50 aprovados e 1 falho.
+Contrato registrado: fluxo parcial de estoque passa por `applyManualScheduleTransaction`, usa `manualMovePolicy: 'stock_only_independent'`, encaminha contexto fresco de estoque, aplica somente transacao aceita, preserva ultimo draft aceito em rejeicao/erro e nao chama solver, `simulateCurrent`, `scheduleOperations` ou `reoptimizePlanningFuture`.
+Homologacao: teste tecnico aprovado por Toto; Max validou o fluxo em leitura com restricoes. Homologacao manual em navegador nao executada; homologacao manual da REF-013 permanece pendente.
+Checkboxes atualizados: `Stock Partial Modal` marcado como corrigido; correcao REF-014 registrada em `Correcoes concluidas apos REF-010`.
+Gate: gate de correcao por falha segue liberado; gate de extracao da `PlanningPage.js` permanece bloqueado enquanto houver 1 falha na suite base.
+Riscos/pendencias: permanece `productionCalendarDayHeader.test.js`; o harness nao substitui drag real no browser, console visual, backend, banco, refresh/reopen ou persistencia server-side; homologacao manual REF-013 segue pendente.
+Proxima missao sugerida: corrigir `productionCalendarDayHeader.test.js` como ultima falha pendente da suite, completando o harness DOM do V2 ou isolando o cabecalho em helper testavel sem alterar comportamento produtivo.
+
+---
+
+### 2026-08-06 19:07 — REF-013 — Restaurar foco Fluxo Produtivo -> Gantt APS por allocationId
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de correcao pequena e delimitada
+Skills usadas: `acofer-investigation`, `acofer-manual-calendar`, `acofer-production-calendar-ui`, `acofer-testing`, `acofer-implementation`
+Branch/commit de referencia: `rebuild-production-calendar` / `73b261a5f10a2c33e29995e0bdc6c18190c15a40`
+Objetivo: restaurar a ponte Fluxo Produtivo -> Gantt APS por `allocationId`, preservando detalhes do no e usando somente o lifecycle neutro do renderer host.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-001_PLANNING_PAGE_MAP.md`, `docs/refactor/REF-002_V2_GANTT_COUPLING.md`, `docs/refactor/REF-010_BASELINE_FAILURE_INVESTIGATION.md`, `docs/refactor/REF-012_MANUAL_SCHEDULE_EDIT_ORDER_FIX.md`, `pages/PlanningPage.js`, `shared/planning-schedule-view/planningScheduleRenderer.js`, `shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js`, `shared/planning-schedule-view/planningScheduleViewModel.js`, `shared/planning-schedule-view/productionCalendarV2.renderer.js`, `tests/planningManualScheduleIntegration.test.js`, `tests/planningScheduleRenderer.test.js` e testes relacionados a Gantt, view model, allocation, memberships, foco, viewport e selecao.
+Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-schedule-view/planningScheduleRenderer.js`, `tests/planningManualScheduleIntegration.test.js`, `tests/planningScheduleRenderer.test.js`, `docs/refactor/REF-013_FLOW_TO_GANTT_FOCUS.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: `PlanningPage.js` ganhou helpers para resolver/focar allocation do fluxo por ID direto, operacao, material/producao e multiplas partes deterministicas; nos do fluxo passaram a carregar operation/producao; click/teclado abrem detalhes e solicitam foco ao host; host aceita renderer sem `focusAllocation`; testes foram migrados de regex fragil para harness comportamental de resolucao/delegacao.
+Testes/comandos: antes da alteracao, `node --test tests/planningManualScheduleIntegration.test.js` falhou com `harness do movimento manual deve existir` e `node --test tests/planningScheduleRenderer.test.js` falhou por regex de foco ausente; depois, ambos passaram. Testes relacionados executados: `ganttApsRenderer`, `planningScheduleViewModel`, `planningAllocation`, `productionCalendarMemberships`, `productionCalendarEditButton`, `productionCalendarGrid`, `productionCalendarHorizon`, `productionCalendarSplitEditor`, `productionCalendarStage`, `productionDisplayColor`, alem de `node --check` nos arquivos produtivos tocados.
+Resultado anterior: 51 testes, 47 aprovados e 4 falhos.
+Resultado novo: 51 testes, 49 aprovados e 2 falhos.
+Contrato registrado: Fluxo Produtivo -> detalhes + `planningScheduleRendererHost.focusAllocation(allocationId)`; foco usa `allocationId` canonico; `PlanningPage.js` nao acessa DOM interno do Gantt.
+Homologacao: manual pendente para o Gu executar; roteiro registrado em `docs/refactor/REF-013_FLOW_TO_GANTT_FOCUS.md`.
+Checkboxes atualizados: `Manual Schedule Integration` e `Renderer focus` marcados como corrigidos; correcao REF-013 registrada em `Correcoes concluidas apos REF-010`.
+Gate: gate de correcao por falha segue liberado; gate de extracao da `PlanningPage.js` permanece bloqueado enquanto houver 2 falhas na suite base.
+Riscos/pendencias: permanecem `planningManualStockPartialModal.test.js` e `productionCalendarDayHeader.test.js`; fallback material/producao e conservador quando no legado nao tiver operationId; homologacao manual nao executada.
+Proxima missao sugerida: corrigir `planningManualStockPartialModal.test.js` por comportamento/harness do fluxo parcial de estoque.
+
+---
+
+### 2026-08-06 18:50 — REF-012 — Preservar posicao ao editar allocation no draft manual
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de correcao pequena e delimitada
+Skills usadas: `acofer-investigation`, `acofer-manual-calendar`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `73b261a5f10a2c33e29995e0bdc6c18190c15a40`
+Objetivo: formalizar e implementar o contrato de que a edicao de uma allocation existente substitui essa allocation na mesma posicao do array do draft manual.
+Arquivos lidos: `AGENTS.md`, este plano, `.agents/skills/acofer-investigation/SKILL.md`, `.agents/skills/acofer-manual-calendar/SKILL.md`, `.agents/skills/acofer-testing/SKILL.md`, `docs/refactor/REF-010_BASELINE_FAILURE_INVESTIGATION.md`, `docs/refactor/REF-011_PLANNING_CONSTRAINT_DATE_FIX.md`, `services/manualScheduleDraft.service.js`, `tests/manualScheduleAllocationSplit.service.test.js` e testes relacionados a draft, split, transacao, persistencia, reotimizacao, memberships e etapas.
+Arquivos alterados: `services/manualScheduleDraft.service.js`, `tests/manualScheduleAllocationSplit.service.test.js`, `docs/refactor/REF-012_MANUAL_SCHEDULE_EDIT_ORDER_FIX.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: `editDraftAllocation` passou a substituir a allocation alvo por `allocationId` no mesmo indice via `map`, preservando a ordem dos demais itens; o teste de split/edicao passou a validar indice, ordem, identidade, linhagem, quantidade, componentes, parte irma e duplicidade de IDs.
+Testes/comandos: `node --test tests/manualScheduleAllocationSplit.service.test.js` reproduziu a falha 30.25 !== 42.35 antes da alteracao; depois passou com 13 testes, 13 aprovados e 0 falhos; testes relacionados de draft/transacao/persistencia/reotimizacao/memberships passaram, exceto `planningManualScheduleIntegration.test.js`, ja listado como falha remanescente; `node --test tests/*.js` retornou 51 testes, 47 aprovados e 4 falhos.
+Resultado anterior: 51 testes, 46 aprovados e 5 falhos.
+Resultado novo: 51 testes, 47 aprovados e 4 falhos.
+Contrato registrado: edicao de allocation existente preserva posicao no array do draft manual; nao houve ordenacao global.
+Checkboxes atualizados: tarefa `Split localizado` marcada; correcao REF-012 registrada em `Correcoes concluidas apos REF-010`.
+Gate: gate de correcao por falha segue liberado; gate de extracao da `PlanningPage.js` permanece bloqueado enquanto houver 4 falhas na suite base.
+Riscos/pendencias: permanecem `planningManualScheduleIntegration.test.js`, `planningManualStockPartialModal.test.js`, `planningScheduleRenderer.test.js` e `productionCalendarDayHeader.test.js`.
+Proxima missao sugerida: corrigir `planningScheduleRenderer.test.js`/foco Fluxo -> Gantt.
+
+---
+
+### 2026-08-06 — REF-010/Recalculation — Correção temporal do planningConstraintRecalculation
+
+Status: CONCLUÍDA
+Executor/agent: Codex em missão de correção de teste
+Skills usadas: `acofer-investigation`, `acofer-testing`
+Branch/commit de referência: `rebuild-production-calendar` / `73b261a`
+Objetivo: corrigir exclusivamente `tests/planningConstraintRecalculation.service.test.js` para remover dependência de datas fixas envelhecíveis, preservando a regra produtiva de passado somente leitura.
+Arquivos lidos: `AGENTS.md`, este plano, `.agents/skills/acofer-investigation/SKILL.md`, `.agents/skills/acofer-testing/SKILL.md`, `docs/refactor/REF-000_BASELINE.md`, `docs/refactor/REF-010_BASELINE_FAILURE_INVESTIGATION.md`, `tests/planningConstraintRecalculation.service.test.js` e trechos executados de `services/planning.service.js`.
+Arquivos alterados: `tests/planningConstraintRecalculation.service.test.js`, `docs/refactor/REF-011_PLANNING_CONSTRAINT_DATE_FIX.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: fixture temporal relativa em `America/Sao_Paulo`, data-base futura em sexta-feira, offsets derivados para quinta/sabado/domingo/segunda/terca/fim do plano e helper de recalc diferenciado para edicao de equipe versus restricao de capacidade.
+Testes/comandos: `node --test tests/planningConstraintRecalculation.service.test.js` reproduziu a falha temporal antes da alteracao; depois passou com 1 teste, 1 aprovado e 0 falhos; `node --test tests/*.js` passou para 51 testes, 46 aprovados e 5 falhos.
+Resultado anterior: 51 testes, 45 aprovados e 6 falhos.
+Resultado novo: 51 testes, 46 aprovados e 5 falhos.
+Regra produtiva: protecao de producoes anteriores a hoje nao foi alterada.
+Checkboxes atualizados: tarefa `Recalculation: eliminar dependencia da data atual` marcada; REF-010/Recalculation registrado como corrigido por evidencia REF-011.
+Gate: gate de correcao por falha segue liberado; gate de extracao da `PlanningPage.js` permanece bloqueado enquanto houver cinco falhas na suite base.
+Riscos/pendencias: cinco falhas restantes continuam pendentes; baseline geral ainda nao esta verde.
+Proxima missao sugerida: corrigir `planningScheduleRenderer.test.js`/foco Fluxo -> Gantt, por combinar divergencia funcional pontual com teste estatico fragil.
+
+---
+
+### 2026-08-06 18:27 — REF-010 — Investigação das seis falhas de baseline
+
+Status: CONCLUÍDA
+Executor/agent: Codex coordenador em modo de investigação
+Skills usadas: `acofer-investigation`, `acofer-manual-calendar`, `acofer-stock`, `acofer-production-calendar-ui`, `acofer-reoptimization`, `acofer-testing`
+Branch/commit de referência: `rebuild-production-calendar` / `73b261a5f10a2c33e29995e0bdc6c18190c15a40`
+Objetivo: reproduzir isoladamente e classificar as seis falhas do baseline, sem alterar código produtivo, testes ou snapshots.
+Arquivos lidos: `AGENTS.md`, este plano, `.agents/skills/acofer-investigation/SKILL.md`, `docs/refactor/REF-000_BASELINE.md`, `docs/refactor/REF-001_PLANNING_PAGE_MAP.md`, `docs/refactor/REF-002_V2_GANTT_COUPLING.md`, `docs/refactor/REF-003_LARGE_FILES_AUDIT.md`, documentos APS, `CALENDAR_V2_ARCHITECTURE.md`, seis testes falhos, `pages/PlanningPage.js`, services de draft/transação/planejamento e renderers/calendário envolvidos.
+Arquivos alterados: `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`, `docs/refactor/REF-010_BASELINE_FAILURE_INVESTIGATION.md`, `docs/refactor/REF-001_PLANNING_PAGE_MAP.md`.
+Resumo do diff: novo relatório de evidências REF-010, log/checklist do Plano Mestre e correção factual da contagem da `PlanningPage.js` para 7097 linhas.
+Testes/comandos: seis `node --test tests/<arquivo>.js` isolados; inspeção direta por `rg`, `git log`, `git blame`, `git show`; checagens de contagem por `rg`, Node e `Get-Content -Raw`.
+Resultado: as seis falhas foram reproduzidas e classificadas: split com contrato de ordem indefinido/possível defeito; recalculation dependente da data atual; integration e stock modal com testes estáticos frágeis; renderer focus com divergência funcional de foco; day header com harness DOM incompleto/V2 legado.
+Homologação: não aplicável; investigação sem mudança operacional.
+Checkboxes atualizados: REF-010 marcado como investigação concluída; seis diagnósticos adicionados e marcados; gate de justificativa registrado; gate de suíte verde permanece pendente.
+Riscos/pendências: correções ainda não implementadas; suíte base continua falha; extração da `PlanningPage.js` segue bloqueada; foco Fluxo → Gantt e contrato de ordem de split precisam de decisão/correção.
+Próxima missão sugerida: corrigir primeiro `planningConstraintRecalculation.service.test.js` com relógio/fixture determinística, sem alterar regra produtiva.
+
+---
+
+### 2026-08-06 — REF-000 a REF-003 — Auditoria read-only inicial
+
+Status: CONCLUÍDA
+Executor/agent: Codex coordenador em modo de auditoria
+Skills usadas: `acofer-investigation`
+Branch/commit de referência: `rebuild-production-calendar` / `73b261a5f10a2c33e29995e0bdc6c18190c15a40`
+Objetivo: registrar baseline seguro, mapear `pages/PlanningPage.js`, auditar acoplamento Calendário V2 -> Gantt APS e auditar os arquivos grandes listados.
+Arquivos lidos: `AGENTS.md`, este plano, `.agents/skills/acofer-investigation/SKILL.md`, `docs/APS_GANTT_ARCHITECTURE.md`, `docs/APS_GANTT_TASKS.md`, `docs/APS_GANTT_EVOLUTION_LOG.md`, `pages/PlanningPage.js`, `shared/production-calendar/*`, `shared/planning-schedule-view/*`, `services/planning.service.js`, `pages/AnalysisPage.js`, `pages/ImportHistoryPage.js`, `server/routes/planning.routes.js`, `services/planningReoptimization.service.js`, `shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js`, `style.css`, `shared/CalendarTimeline.js`, `package.json` e `tests/*`.
+Arquivos alterados: `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`, `docs/refactor/REF-000_BASELINE.md`, `docs/refactor/REF-001_PLANNING_PAGE_MAP.md`, `docs/refactor/REF-002_V2_GANTT_COUPLING.md`, `docs/refactor/REF-003_LARGE_FILES_AUDIT.md`.
+Resumo do diff: apenas documentos de auditoria e checkboxes/log do Plano Mestre; nenhum código produtivo foi alterado.
+Testes/comandos: `git branch --show-current`, `git rev-parse HEAD`, `git status --short`, `git diff --stat`, `node --version`, leitura de `package.json`, busca segura de `.env`, `node --test tests/*.js` no sandbox e reteste autorizado fora do sandbox.
+Resultado: baseline registrado; suíte completa fora do sandbox repetiu 51 testes, 45 aprovados e 6 falhos; `PlanningPage.js` mapeada em 7097 linhas após correção factual da REF-010; matriz V2/Gantt criada; arquivos grandes classificados.
+Homologação: não aplicável; auditoria sem mudança operacional.
+Checkboxes atualizados: REF-000, REF-001, REF-002 e REF-003 marcados como concluídos.
+Riscos/pendências: árvore de trabalho ampla sem commit; `.env` presente e não lido; documentação APS diverge do runtime atual sobre `auto` em trechos históricos; Gantt ainda mantém V2 como fallback e usa nomes/ponte `productionCalendar*`; 6 testes falhos permanecem sem correção nesta missão.
+Próxima missão sugerida: REF-010 — Corrigir ou reclassificar falhas da suíte base.
+
+---
+
+### 2026-08-06 — Criação do plano mestre
+
+Status: CONCLUÍDA
+
+Objetivo: consolidar a estratégia da Opção 2, o baseline técnico observado, as fases, gates, checklists, regras para Codex e critérios de aceite.
+
+Evidências de baseline:
+
+- `PlanningPage.js`: aproximadamente 7.097 linhas;
+- `style.css`: aproximadamente 8.108 linhas;
+- Gantt com renderer próprio e movimento horizontal;
+- V2 ainda registrado como fallback;
+- dependências diretas de `shared/production-calendar/` na página e no Gantt;
+- árvore de trabalho com muitas mudanças não commitadas;
+- suíte em 06/08/2026: 51 testes, 45 aprovados e 6 falhas.
+
+Alterações de código produtivo: nenhuma.
+
+Próxima missão: REF-000 a REF-003 em auditoria read-only.
+
+---
+
+# 14. Quadro de status geral
+
+| Fase | Estado |
+|---|---|
+| Fase 0 — Preservação e baseline | `[x]` |
+| Fase 1 — Auditoria arquitetural | `[x]` |
+| Fase 2 — Testes de caracterização | `[ ]` |
+| Fase 3 — Fronteiras neutras | `[ ]` |
+| Fase 4 — Gantt-only | `[ ]` |
+| Fase 5 — Remoção V2 | `[ ]` |
+| Fase 6 — Divisão PlanningPage | `[ ]` |
+| Fase 7 — CSS necessário | `[ ]` |
+| Fase 8 — Outros arquivos grandes | `[ ]` |
+| Fase 9 — Regressão e homologação | `[ ]` |
+| Fase 10 — Encerramento | `[ ]` |
+
+---
+
+# 15. Condição de conclusão do projeto
+
+A reestruturação só termina quando todas as afirmações abaixo forem verdadeiras:
+
+- [ ] O sistema continua executando as regras atuais do APS.
+- [ ] O Gantt APS é a única interface de calendário ativa.
+- [ ] Não existe fallback funcional para o Calendário V2.
+- [ ] O Gantt não depende de componente visual V2.
+- [ ] A `PlanningPage.js` não é mais um monólito de múltiplos domínios.
+- [ ] Features possuem fronteiras claras e testes focados.
+- [ ] Nenhum ID ou contrato persistido foi quebrado.
+- [ ] Planejamentos antigos abrem normalmente.
+- [ ] Draft manual sobrevive a save, refresh e reopen.
+- [ ] Movimento, split, transporte e reotimização preservam invariantes.
+- [ ] Testes técnicos estão aprovados.
+- [ ] Homologação operacional está aprovada pelo Gu.
+- [ ] Documentação e `AGENTS.md` refletem a arquitetura final.
+- [ ] O projeto está preparado para iniciar futuramente a V2/Line em uma cópia controlada.
+
+---
+
+## Nota final para Codex
+
+Este trabalho não é uma corrida para criar muitos arquivos. O objetivo é reduzir o risco do sistema sem mudar sua inteligência produtiva.
+
+Antes de mover qualquer função, responda:
+
+1. qual responsabilidade ela possui;
+2. de quais estados ela depende;
+3. quem é a fonte canônica da regra;
+4. quais consumidores existem;
+5. qual teste protege seu comportamento;
+6. como reverter a alteração;
+7. por que o novo módulo melhora a arquitetura.
+
+Se essas respostas não estiverem claras, a missão ainda está em fase de investigação.

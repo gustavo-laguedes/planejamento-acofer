@@ -139,15 +139,17 @@ export function createProductionCalendarDragController({
     }
 
     const occupiedAllocationIds = getCellAllocationIds(cell);
+    const otherAllocationIds = occupiedAllocationIds
+      .filter(id => String(id) !== String(intent?.allocation?.allocationId ?? ''));
     const kind = isSameOrigin(cell)
-      ? 'same-origin'
+      ? (otherAllocationIds.length ? 'reorder' : 'same-origin')
       : occupiedAllocationIds.length ? 'occupied' : 'empty';
 
     return {
       date: cell.dataset.date || null,
       machineId: cell.dataset.machineId || null,
       kind,
-      occupiedAllocationIds
+      occupiedAllocationIds: kind === 'reorder' ? otherAllocationIds : occupiedAllocationIds
     };
   }
 

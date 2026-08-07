@@ -2,6 +2,11 @@ import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
 import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
+import {
+  catalogMaterialForProductivityRow,
+  productivityRowsForCatalogGroup,
+  summarizeProductivityCatalog
+} from '../services/productivityMatrixCatalog.service.js';
 
 const DAILY_PRODUCTIVITY_SECONDS = 24 * 60 * 60;
 
@@ -46,12 +51,6 @@ function formatPtBrDecimal(value) {
     minimumFractionDigits: hasDecimals ? 2 : 0,
     maximumFractionDigits: 3
   });
-}
-
-function materialMatchesRow(material, row) {
-  const codes = new Set((material.codes || []).map(code => String(code).toLowerCase()));
-  return String(material.name || '').toLowerCase() === String(row.material_name || '').toLowerCase()
-    || rowCodes(row).some(code => codes.has(String(code).toLowerCase()));
 }
 
 export function ProductivityMatrixPage() {
@@ -109,6 +108,7 @@ export function ProductivityMatrixPage() {
   let materials = [];
   let machines = [];
   let deletedLineIds = [];
+  let activeModalLines = [];
 
   const columns = [
     { label: 'Material', key: 'material_name' },
@@ -124,38 +124,8 @@ export function ProductivityMatrixPage() {
     return materials.find(material => String(material.id) === String(form.elements.materialId.value));
   }
 
-  function materialKeyForRow(row) {
-    return String(materialForRow(row)?.id || row.material_name || row.id);
-  }
-
-  function materialForRow(row) {
-    return materials.find(material => materialMatchesRow(material, row));
-  }
-
   function groupedRows() {
-    const groups = new Map();
-    rows.filter(row => row.active !== false).forEach(row => {
-      const material = materialForRow(row);
-      const key = String(material?.id || row.material_name || row.id);
-      if (!groups.has(key)) {
-        groups.set(key, {
-          material_key: key,
-          material_name: material?.name || row.material_name,
-          material_codes: material?.codes || rowCodes(row),
-          output_unit: material?.primary_unit || row.output_unit || 'un',
-          machines: [],
-          line_count: 0,
-          active_count: 0,
-          max_output_qty: 0
-        });
-      }
-      const group = groups.get(key);
-      group.line_count += 1;
-      group.active_count += 1;
-      if (row.machine_name && !group.machines.includes(row.machine_name)) group.machines.push(row.machine_name);
-      group.max_output_qty = Math.max(group.max_output_qty, Number(row.output_qty || 0));
-    });
-    return [...groups.values()].sort((left, right) => left.material_name.localeCompare(right.material_name));
+    return summarizeProductivityCatalog({ materials, productivityMatrix: rows });
   }
 
   function updateMaterialPreview() {
@@ -226,14 +196,21 @@ export function ProductivityMatrixPage() {
     form.reset();
     linesTarget.innerHTML = '';
     deletedLineIds = [];
+    activeModalLines = [];
   }
 
-  function openModal(materialId = null) {
+  function openModal(materialKey = null) {
     form.reset();
     deletedLineIds = [];
-    form.elements.materialId.value = materialId || materials[0]?.id || '';
+    const groupLines = materialKey
+      ? productivityRowsForCatalogGroup({ groupKey: materialKey, materials, productivityMatrix: rows })
+      : [];
+    activeModalLines = groupLines;
+    const material = groupLines.length ? catalogMaterialForProductivityRow(groupLines[0], materials) : null;
+    form.elements.materialId.value = groupLines.length ? material?.id || '' : materials[0]?.id || '';
+    form.elements.materialId.disabled = groupLines.length > 0;
     updateMaterialPreview();
-    renderLines(rows.filter(row => materialKeyForRow(row) === String(form.elements.materialId.value)));
+    renderLines(groupLines);
     modalBackdrop.hidden = false;
     form.elements.materialId.focus();
   }
@@ -259,7 +236,7 @@ export function ProductivityMatrixPage() {
   form.elements.materialId.addEventListener('change', () => {
     updateMaterialPreview();
     deletedLineIds = [];
-    renderLines(rows.filter(row => materialKeyForRow(row) === String(form.elements.materialId.value)));
+    renderLines([]);
   });
 
   addLineButton?.addEventListener('click', () => {
@@ -289,22 +266,28 @@ export function ProductivityMatrixPage() {
     event.preventDefault();
     if (!canWriteMatrix) return;
     const material = selectedMaterial();
+    const groupAnchor = activeModalLines[0] || null;
     const lineForms = [...linesTarget.querySelectorAll('.productivity-line')];
     if (!lineForms.length) return;
     normalizeLinePriorities();
-    const payloads = lineForms.map((line, index) => ({
-      id: line.dataset.lineId || '',
-      active: true,
-      materialId: Number(form.elements.materialId.value),
-      materialName: material?.name || '',
-      materialCodes: material?.codes || [],
-      machineName: line.querySelector('[name="machineName"]').value,
-      machinePriority: index + 1,
-      peopleCount: Number(line.querySelector('[name="peopleCount"]').value),
-      outputQty: Number(line.querySelector('[name="outputQty"]').value),
-      outputUnit: material?.primary_unit || 'un',
-      timeSeconds: DAILY_PRODUCTIVITY_SECONDS
-    }));
+    const payloads = lineForms.map((line, index) => {
+      const id = line.dataset.lineId || '';
+      const persistedLine = id ? activeModalLines.find(item => String(item.id) === String(id)) : null;
+      const materialSource = persistedLine || groupAnchor;
+      return {
+        id,
+        active: true,
+        materialId: Number(persistedLine?.material_id ?? form.elements.materialId.value),
+        materialName: materialSource?.material_name || material?.name || '',
+        materialCodes: materialSource ? rowCodes(materialSource) : material?.codes || [],
+        machineName: line.querySelector('[name="machineName"]').value,
+        machinePriority: index + 1,
+        peopleCount: Number(line.querySelector('[name="peopleCount"]').value),
+        outputQty: Number(line.querySelector('[name="outputQty"]').value),
+        outputUnit: materialSource?.output_unit || material?.primary_unit || 'un',
+        timeSeconds: DAILY_PRODUCTIVITY_SECONDS
+      };
+    });
     if (payloads.some(item => !item.machineName || !Number.isInteger(item.peopleCount) || item.peopleCount < 0 || !(item.outputQty > 0))) {
       form.reportValidity();
       return;

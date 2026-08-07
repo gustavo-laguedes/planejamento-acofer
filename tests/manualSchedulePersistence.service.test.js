@@ -77,7 +77,7 @@ const persisted = serializeManualScheduleDraft({
     manualWorkDates: ['2026-07-18'],
     dailyTeamOverrides: { '2026-07-15': { teamAvailable: 8 } },
     setupMinutes: 30,
-    minimumStartRatio: 0.30,
+    minimumStartRatio: 1,
     dependencyCompletionBufferMinutes: 60
   },
   now: '2026-07-13T12:00:00.000Z'

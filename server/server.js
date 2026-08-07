@@ -76,7 +76,15 @@ app.use('/api/machines', requireAuth, requirePermission('registrations:read'), m
 app.use('/api/materials', requireAuth, requirePermission('registrations:read'), materialsRoutes);
 app.use('/api/audit', requireAuth, requirePermission('log:read'), auditRoutes);
 
-app.use(express.static(frontendDir));
+app.use(express.static(frontendDir, {
+  setHeaders(res, filePath) {
+    if (/\.(html|js|css)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
 app.get('*', (req, res) => {
   res.sendFile(path.join(frontendDir, 'index.html'));
 });

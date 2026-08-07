@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireDb } from '../db.js';
-import { buildPlan, rescheduleSavedPlan } from '../../services/planning.service.js';
+import { buildPlan, buildStoredAutomaticPlanningSnapshot, rescheduleSavedPlan } from '../../services/planning.service.js';
 import { createPlanningPdf } from '../../services/pdf.service.js';
 import { requirePermission } from './middleware.js';
 import { recordAuditLog } from '../audit.js';
@@ -12,6 +12,10 @@ import {
   serializeManualScheduleDraft
 } from '../../services/manualSchedulePersistence.service.js';
 import { applyManualScheduleTransaction } from '../../services/manualScheduleTransaction.service.js';
+import {
+  buildPlanningDemandContext,
+  buildPlanningOpeningStock
+} from '../../services/planningStockProjection.service.js';
 
 const router = Router();
 const DEFAULT_TEAM_AVAILABLE = 6;
@@ -105,7 +109,12 @@ function normalizeJsonArray(value) {
 
 function manualScheduleValidationMetadata(payload = {}) {
   const validation = payload.manualScheduleValidation || payload.manualScheduleDraft?.validation || {};
-  const blocking = (Array.isArray(validation.errors) ? validation.errors : []).filter(issue => issue?.blocking !== false);
+  const incrementalAcceptance = validation.incrementallyAccepted === true
+    && Array.isArray(validation.blockingRegressions)
+    && validation.blockingRegressions.length === 0;
+  const blocking = incrementalAcceptance
+    ? []
+    : (Array.isArray(validation.errors) ? validation.errors : []).filter(issue => issue?.blocking !== false);
   if (blocking.length) {
     const error = new Error(blocking[0]?.message || 'O calendário manual possui erros bloqueantes.');
     error.status = 422;
@@ -133,40 +142,69 @@ async function insertPlanningAudit(tx, { user, action, description, recordRef })
 
 function validateManualScheduleForSave(draft, plan, context, payload = {}) {
   const shifts = Array.isArray(payload.shifts) ? payload.shifts : [];
-  const transaction = applyManualScheduleTransaction({
+  const validationContext = {
+    operations: plan.operations || [],
+    materials: context.materials || [],
+    machines: context.machineRows || [],
+    productivityMatrix: context.matrixRows || [],
+    stock: currentValidationStock(context),
+    stockMinimums: (context.materials || []).flatMap(material => {
+      const minimumQuantity = Number(material.minimum_quantity ?? material.minimumQuantity);
+      return Number.isFinite(minimumQuantity) ? [{ materialId: String(material.id), minimumQuantity }] : [];
+    }),
+    stockLocations: [
+      { locationId: '__default__' },
+      ...(context.inventoryRows || []).map(row => ({
+        materialId: String(row.material_id),
+        locationId: String(row.location_id),
+        quantity: Number(row.adjustment_qty || 0)
+      }))
+    ],
+    dependencies: plan.dependencies || [],
+    transports: plan.transports || [],
+    shifts,
+    dailyTeamOverrides: payload.dailyTeamOverrides || payload.settings?.dailyTeamOverrides || {},
+    manualWorkDates: payload.manualWorkDates || payload.settings?.manualWorkDates || [],
+    setupMinutes: Number(payload.setupMinutes ?? payload.settings?.setupMinutes ?? 0),
+    minimumStartRatio: 1,
+    dependencyCompletionBufferMinutes: Number(payload.dependencyCompletionBufferMinutes ?? payload.settings?.dependencyCompletionBufferMinutes ?? 60),
+    holidays: payload.holidays || [],
+    timezone: payload.timezone || 'America/Sao_Paulo'
+  };
+  let transaction = applyManualScheduleTransaction({
     currentDraft: draft,
     intent: { type: 'VALIDATE_DRAFT' },
     draftContext: { validatedAt: new Date().toISOString() },
-    validationContext: {
-      operations: plan.operations || [],
-      materials: context.materials || [],
-      machines: context.machineRows || [],
-      productivityMatrix: context.matrixRows || [],
-      stock: currentValidationStock(context),
-      stockMinimums: (context.materials || []).flatMap(material => {
-        const minimumQuantity = Number(material.minimum_quantity ?? material.minimumQuantity);
-        return Number.isFinite(minimumQuantity) ? [{ materialId: String(material.id), minimumQuantity }] : [];
-      }),
-      stockLocations: [
-        { locationId: '__default__' },
-        ...(context.inventoryRows || []).map(row => ({
-          materialId: String(row.material_id),
-          locationId: String(row.location_id),
-          quantity: Number(row.adjustment_qty || 0)
-        }))
-      ],
-      dependencies: plan.dependencies || [],
-      transports: plan.transports || [],
-      shifts,
-      dailyTeamOverrides: payload.dailyTeamOverrides || payload.settings?.dailyTeamOverrides || {},
-      manualWorkDates: payload.manualWorkDates || payload.settings?.manualWorkDates || [],
-      setupMinutes: Number(payload.setupMinutes ?? payload.settings?.setupMinutes ?? 0),
-      minimumStartRatio: Number(payload.minimumStartRatio ?? payload.settings?.minimumStartRatio ?? 0.30),
-      dependencyCompletionBufferMinutes: Number(payload.dependencyCompletionBufferMinutes ?? payload.settings?.dependencyCompletionBufferMinutes ?? 60),
-      holidays: payload.holidays || [],
-      timezone: payload.timezone || 'America/Sao_Paulo'
-    }
+    validationContext
   });
+  const previous = normalizePersistedManualScheduleDraft(plan.manual_schedule_draft);
+  const eligibleIncrementalSave = !transaction.accepted
+    && draft?.validation?.incrementallyAccepted === true
+    && draft?.schedulerState && typeof draft.schedulerState === 'object'
+    && draft?.frozenThrough?.date
+    && previous.status === 'ok';
+  if (eligibleIncrementalSave) {
+    const previousValidation = applyManualScheduleTransaction({
+      currentDraft: previous.draft,
+      intent: { type: 'VALIDATE_DRAFT' },
+      draftContext: { validatedAt: new Date().toISOString() },
+      validationContext
+    }).validation;
+    transaction = applyManualScheduleTransaction({
+      currentDraft: previous.draft,
+      intent: {
+        type: 'SET_DAILY_TEAM_OVERRIDES',
+        date: draft.frozenThrough.date,
+        overrides: {},
+        cutoffDate: draft.frozenThrough.date,
+        candidateAllocations: draft.allocations,
+        candidateDraft: { ...draft, validation: transaction.validation },
+        previousDiagnostics: previousValidation
+      },
+      draftContext: { validatedAt: new Date().toISOString() },
+      validationContext
+    });
+  }
   if (!transaction.accepted) {
     const error = new Error(transaction.blockingIssues?.[0]?.message || 'O calendário manual possui erros bloqueantes.');
     error.status = 422;
@@ -192,6 +230,27 @@ function currentValidationStock(context = {}) {
       .reduce((sum, row) => sum + Number(row.correction_qty || 0), 0);
     return { materialId: String(material.id), quantity: snapshotQuantity + correctionQuantity, unit: material.primary_unit || '' };
   });
+}
+
+function planningStockProjectionContext(context = {}) {
+  const stock = buildPlanningOpeningStock({
+    materials: context.materials || [],
+    locations: context.locations || [],
+    stockRows: context.stockRows || [],
+    correctionRows: context.correctionRows || []
+  });
+  return {
+    stockContext: {
+      source: 'stock.materials-overview.totalLocationsQty',
+      stock,
+      materials: stock
+    },
+    demandContext: buildPlanningDemandContext({
+      materials: context.materials || [],
+      stockRows: context.stockRows || [],
+      businessDays: context.businessDays
+    })
+  };
 }
 
 function normalizeText(value) {
@@ -514,10 +573,10 @@ async function planningContext(db, payload = {}) {
   const materialCode = String(payload.materialCode || '').trim();
   const scheduleStartDate = normalizeDateOnly(payload.planningStartDate, payload.selectedDate, payload.startDate);
   const scheduleEndDate = normalizeDateOnly(payload.planningEndDate, payload.endDate, scheduleStartDate ? addDateDays(scheduleStartDate, 120) : null);
-  const [materials, inputs, stockRows, inventoryRows, correctionRows, productionRows, matrixRows, locations, machineRows, existingPlans] = await Promise.all([
+  const [materials, inputs, stockRows, inventoryRows, correctionRows, productionRows, matrixRows, locations, machineRows, existingPlans, importRows] = await Promise.all([
     db`SELECT * FROM materials WHERE active = true ORDER BY name`,
     db`SELECT * FROM material_inputs`,
-    db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit FROM stock_snapshot`,
+    db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit, sales_unit FROM stock_snapshot`,
     db`
       SELECT DISTINCT ON (material_id, location_id)
              material_id, location_id, adjustment_qty, updated_at
@@ -543,7 +602,14 @@ async function planningContext(db, payload = {}) {
             AND end_date >= ${scheduleStartDate}
             AND (${payload.planId || null}::bigint IS NULL OR id <> ${payload.planId || null})
         `
-      : Promise.resolve([])
+      : Promise.resolve([]),
+    db`
+      SELECT business_days
+      FROM import_history
+      WHERE status = 'success'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `
   ]);
   const materialsById = new Map(materials.map(material => [String(material.id), material]));
   const locationsById = new Map(locations.map(location => [String(location.id), location]));
@@ -566,13 +632,14 @@ async function planningContext(db, payload = {}) {
       planningCode: plan.code || plan.id
     }))
   );
-  return { material, materials, materialsById, inputsByMaterialId, locations, locationsById, machineRows, stockRows, inventoryRows, correctionRows, productionRows, matrixRows, existingOperations };
+  return { material, materials, materialsById, inputsByMaterialId, locations, locationsById, machineRows, stockRows, inventoryRows, correctionRows, productionRows, matrixRows, existingOperations, businessDays: Number(importRows[0]?.business_days || 0) };
 }
 
 router.post('/simulate', async (req, res, next) => {
   try {
     const db = requireDb();
-    res.json(buildPlan(req.body, await planningContext(db, req.body)));
+    const context = await planningContext(db, req.body);
+    res.json({ ...buildPlan(req.body, context), ...planningStockProjectionContext(context) });
   } catch (error) {
     next(error);
   }
@@ -617,17 +684,17 @@ router.post('/plans', requirePermission('planning:write'), async (req, res, next
             shifts: req.body.shifts || [],
             parameters: {
               setupMinutes: Number(req.body.setupMinutes ?? (Number(req.body.setupHours || 0) * 60)),
-              minimumStartRatio: Number(req.body.minimumStartRatio ?? 0.30),
+              minimumStartRatio: 1,
               dependencyCompletionBufferMinutes: Number(req.body.dependencyCompletionBufferMinutes ?? 60)
             },
             referenceStock: context.stockRows
           },
           settings: {
-            manualWorkDates: req.body.manualWorkDates || [],
-            dailyTeamOverrides: req.body.dailyTeamOverrides || {},
-            setupMinutes: Number(req.body.setupMinutes ?? (Number(req.body.setupHours || 0) * 60)),
-            minimumStartRatio: Number(req.body.minimumStartRatio ?? 0.30),
-            dependencyCompletionBufferMinutes: Number(req.body.dependencyCompletionBufferMinutes ?? 60)
+            manualWorkDates: req.body.settings?.manualWorkDates || req.body.manualWorkDates || [],
+            dailyTeamOverrides: req.body.settings?.dailyTeamOverrides || req.body.dailyTeamOverrides || {},
+            setupMinutes: Number(req.body.settings?.setupMinutes ?? req.body.setupMinutes ?? (Number(req.body.setupHours || 0) * 60)),
+            minimumStartRatio: 1,
+            dependencyCompletionBufferMinutes: Number(req.body.settings?.dependencyCompletionBufferMinutes ?? req.body.dependencyCompletionBufferMinutes ?? 60)
           }
         })
       : null;
@@ -856,9 +923,15 @@ router.get('/plans/:id', async (req, res, next) => {
     if (!plan) return res.status(404).json({ error: 'Plano não encontrado.' });
     const days = await db`SELECT * FROM production_plan_days WHERE plan_id = ${req.params.id} ORDER BY planned_date, id`;
     const operations = normalizeJsonArray(plan.operations);
+    const automaticSnapshot = buildStoredAutomaticPlanningSnapshot(plan, operations);
     const manualSchedule = normalizePersistedManualScheduleDraft(plan.manual_schedule_draft);
     const meta = operations.find(operation => operation?._planningMeta)?._planningMeta || {};
     const period = operationPeriod(operations, plan.start_date, plan.end_date);
+    const projectionContext = planningStockProjectionContext(await planningContext(db, {
+      planId: plan.id,
+      planningStartDate: period.startDate,
+      planningEndDate: period.endDate
+    }));
     res.json({
       plan: {
         ...plan,
@@ -871,9 +944,12 @@ router.get('/plans/:id', async (req, res, next) => {
       days,
       tree: normalizeJsonObject(plan.schedule_tree),
       operations,
+      automaticCalendarOperations: automaticSnapshot.calendarOperations,
+      automaticDays: automaticSnapshot.days,
       manualScheduleDraft: manualSchedule.draft,
       manualScheduleStatus: manualSchedule.status,
       manualScheduleDiagnostics: manualSchedule.diagnostics,
+      ...projectionContext,
       summary: {
         planningStartDate: period.startDate,
         planningEndDate: period.endDate,
@@ -883,6 +959,92 @@ router.get('/plans/:id', async (req, res, next) => {
         setupHours: Number(meta.setupHours || 0),
         productions: meta.productions || []
       }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/plans/:id/manual-schedule', requirePermission('planning:write'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    const expectedRevision = Number(req.body.expectedRevision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      return res.status(400).json({ error: 'A revisão esperada do planejamento é obrigatória.' });
+    }
+    const result = await db.begin(async tx => {
+      const [plan] = await tx`SELECT * FROM production_plans WHERE id = ${req.params.id} FOR UPDATE`;
+      if (!plan) {
+        const error = new Error('Plano não encontrado.');
+        error.status = 404;
+        throw error;
+      }
+      if (plan.status === 'canceled') {
+        const error = new Error('Planejamento cancelado não pode ser editado.');
+        error.status = 400;
+        throw error;
+      }
+      if (Number(plan.manual_schedule_revision || 0) !== expectedRevision) {
+        const error = new Error('Este planejamento foi alterado por outro usuário. Recarregue antes de descartar as alterações.');
+        error.status = 409;
+        throw error;
+      }
+      const automaticSnapshot = buildStoredAutomaticPlanningSnapshot(plan, normalizeJsonArray(plan.operations));
+      await tx`DELETE FROM production_plan_days WHERE plan_id = ${plan.id}`;
+      for (const day of automaticSnapshot.days) {
+        await tx`
+          INSERT INTO production_plan_days (
+            plan_id, planned_date, material_name, material_code, machine_name, people_count,
+            planned_qty, planned_unit, start_time, end_time
+          ) VALUES (
+            ${plan.id}, ${day.planned_date}, ${day.material_name}, ${day.material_code}, ${day.machine_name || ''},
+            ${Number(day.people_count || 0)}, ${day.planned_qty}, ${day.planned_unit}, ${day.start_time}, ${day.end_time}
+          )
+        `;
+      }
+      const dates = automaticSnapshot.days.map(day => day.planned_date).sort();
+      const [updated] = await tx`
+        UPDATE production_plans
+        SET manual_schedule_draft = NULL,
+            manual_schedule_version = NULL,
+            manual_schedule_base_hash = NULL,
+            manual_schedule_updated_at = NULL,
+            manual_schedule_validation_version = NULL,
+            manual_schedule_validation_fingerprint = NULL,
+            manual_schedule_validated_at = NULL,
+            manual_schedule_is_dirty = false,
+            manual_schedule_revision = manual_schedule_revision + 1,
+            start_date = ${dates[0] || plan.start_date},
+            end_date = ${dates.at(-1) || plan.end_date},
+            updated_at = now()
+        WHERE id = ${plan.id}
+          AND manual_schedule_revision = ${expectedRevision}
+        RETURNING *
+      `;
+      if (!updated) {
+        const error = new Error('Este planejamento foi alterado por outro usuário. Recarregue antes de descartar as alterações.');
+        error.status = 409;
+        throw error;
+      }
+      await insertPlanningAudit(tx, {
+        user: req.user,
+        action: 'Descarte de alterações manuais',
+        description: 'Removeu integralmente o calendário manual e restaurou a baseline automática persistida.',
+        recordRef: plan.id
+      });
+      return { updated, automaticSnapshot };
+    });
+    res.json({
+      plan: {
+        ...result.updated,
+        schedule_tree: normalizeJsonObject(result.updated.schedule_tree),
+        operations: result.automaticSnapshot.operations
+      },
+      tree: normalizeJsonObject(result.updated.schedule_tree),
+      operations: result.automaticSnapshot.operations,
+      calendarOperations: result.automaticSnapshot.calendarOperations,
+      days: result.automaticSnapshot.days,
+      manualScheduleDraft: null
     });
   } catch (error) {
     next(error);
@@ -997,8 +1159,8 @@ router.post('/plans/:id/reschedule', requirePermission('planning:write'), async 
   try {
     const db = requireDb();
     const [plan] = await db`SELECT * FROM production_plans WHERE id = ${req.params.id}`;
-    if (!plan) return res.status(404).json({ error: 'Plano nÃ£o encontrado.' });
-    if (plan.status === 'canceled') return res.status(400).json({ error: 'Planejamento cancelado nÃ£o pode ser editado.' });
+    if (!plan) return res.status(404).json({ error: 'Plano não encontrado.' });
+    if (plan.status === 'canceled') return res.status(400).json({ error: 'Planejamento cancelado não pode ser editado.' });
     const matrixRows = await db`SELECT * FROM productivity_matrix WHERE active = true`;
     const result = rescheduleSavedPlan(plan, normalizeJsonArray(plan.operations), req.body || {}, matrixRows);
     const updated = await db.begin(async tx => {
@@ -1021,7 +1183,7 @@ router.post('/plans/:id/reschedule', requirePermission('planning:write'), async 
     });
     await recordAuditLog(db, {
       user: req.user,
-      action: 'EdiÃ§Ã£o de planejamento',
+      action: 'Edição de planejamento',
       module: 'Planejamento',
       description: `Atualizou cronograma do planejamento ${updated.code || updated.id}`,
       recordRef: updated.id

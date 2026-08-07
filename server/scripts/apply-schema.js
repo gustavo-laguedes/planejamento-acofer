@@ -26,6 +26,7 @@ const files = [
   '018_productivity_machine_priority.sql',
   '019_productivity_people_zero.sql',
   '020_manual_schedule_persistence.sql',
+  '021_manual_transport_status.sql',
   '002_indexes.sql',
   '003_seed_optional.sql'
 ];

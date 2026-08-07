@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { requireDb } from '../db.js';
 import { businessDaysInclusive } from '../../services/workingDays.service.js';
-import { requirePermission } from './middleware.js';
+import { requirePermission, requireSuperAdmin } from './middleware.js';
 import { auditUser, recordAuditLog } from '../audit.js';
+import { resolveMaterialStockMetrics } from '../../services/materialStockMetrics.service.js';
 
 const router = Router();
 
@@ -62,27 +63,13 @@ function emptyCodeBreakdown(code, locations) {
   };
 }
 
-function salesProjection(material, currentBalance, salesPeriodQty, businessDays) {
-  if (material.permits_sales === false) {
-    return { salesPeriodQty, salesPerDayQty: null, stockDurationDays: null, blocked: true };
-  }
-  const days = Number(businessDays || 0);
-  if (days <= 0) return { salesPeriodQty, salesPerDayQty: null, stockDurationDays: null, notEstimated: true };
-  const salesPerDayQty = Math.max(toNumber(salesPeriodQty) / days, 0);
-  return {
-    salesPeriodQty,
-    salesPerDayQty,
-    stockDurationDays: salesPerDayQty > 0 ? currentBalance / salesPerDayQty : null,
-    notEstimated: salesPerDayQty <= 0
-  };
-}
-
 function summarizeMaterial(material, locations, stockRows, correctionRows, businessDays = 0, latestInventory = null) {
   const codes = Array.isArray(material.codes) ? material.codes.map(String) : [];
   const codeSet = new Set(codes.map(normalizeText));
   const codeBreakdown = new Map(codes.map(code => [normalizeText(code), emptyCodeBreakdown(code, locations)]));
   const stockByLocation = Object.fromEntries(locations.map(location => [String(location.id), emptyLocation(location)]));
-  const correctionQty = toNumber(correctionRows[0]?.correction_qty);
+  const metrics = resolveMaterialStockMetrics({ material, locations, stockRows, correctionRows, businessDays });
+  const correctionQty = metrics.correctionQty;
   const inventoryByLocation = Object.fromEntries(
     correctionRows
       .filter(row => row.location_id)
@@ -90,8 +77,6 @@ function summarizeMaterial(material, locations, stockRows, correctionRows, busin
   );
 
   let unmappedNasajonQty = 0;
-  let salesPeriodQty = 0;
-
   for (const row of stockRows) {
     const productCode = normalizeText(row.product_code);
     const oldProductCode = normalizeText(row.old_product_code);
@@ -103,8 +88,6 @@ function summarizeMaterial(material, locations, stockRows, correctionRows, busin
 
     const nasajonQty = toNumber(row.fiscal_balance_unit);
     const errorQty = toNumber(row.error_balance_unit);
-    salesPeriodQty += toNumber(row.sales_unit);
-
     const establishment = normalizeText(row.establishment);
     const location = locations.find(item => normalizeText(item.code) === establishment || normalizeText(item.name) === establishment);
     if (!location) {
@@ -119,10 +102,6 @@ function summarizeMaterial(material, locations, stockRows, correctionRows, busin
     stockByLocation[locationKey].errorQty += errorQty;
   }
 
-  const totalLocationsQty = Object.values(stockByLocation)
-    .reduce((sum, location) => sum + toNumber(location.nasajonQty) + toNumber(location.errorQty), 0) + correctionQty;
-  const projection = salesProjection(material, totalLocationsQty, salesPeriodQty, businessDays);
-
   return {
     material: {
       id: material.id,
@@ -135,14 +114,14 @@ function summarizeMaterial(material, locations, stockRows, correctionRows, busin
     stockByLocation,
     inventoryByLocation,
     latestInventory,
-    totalLocationsQty,
+    totalLocationsQty: metrics.totalLocationsQty,
     correctionQty,
     unmappedNasajonQty,
-    salesPeriodQty: projection.salesPeriodQty,
-    salesPerDayQty: projection.salesPerDayQty,
-    stockDurationDays: projection.stockDurationDays,
-    salesBlocked: projection.blocked === true,
-    salesNotEstimated: projection.notEstimated === true
+    salesPeriodQty: metrics.salesPeriodQty,
+    salesPerDayQty: metrics.salesPerDayQty,
+    stockDurationDays: metrics.stockDurationDays,
+    salesBlocked: metrics.blocked === true,
+    salesNotEstimated: metrics.notEstimated === true
   };
 }
 
@@ -187,6 +166,12 @@ async function ensureManualLaunchTables(db) {
       user_id BIGINT,
       created_at TIMESTAMPTZ DEFAULT now()
     )
+  `;
+  await db`
+    ALTER TABLE stock_transport_records
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active',
+      ADD COLUMN IF NOT EXISTS canceled_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS cancel_reason TEXT
   `;
   await db`
     CREATE TABLE IF NOT EXISTS material_purchase_records (
@@ -649,8 +634,11 @@ router.get('/manual-transports', requirePermission('launches:read'), async (req,
     const db = requireDb();
     await ensureManualLaunchTables(db);
     const rows = await db`
-      SELECT r.id, r.transport_date, r.quantity, r.invoice_number, r.notes, r.user_id, r.created_at,
-             m.name AS material_name, m.codes AS material_codes,
+      SELECT r.id, r.transport_date, r.material_id, r.origin_location_id, r.destination_location_id,
+             r.quantity, r.invoice_number, r.notes, r.user_id, r.created_at,
+             r.status, r.canceled_at, r.cancel_reason,
+             m.name AS material_name, m.codes AS material_codes, m.primary_unit,
+             m.secondary_unit, m.primary_to_secondary_factor,
              origin.name AS origin_location_name,
              destination.name AS destination_location_name
       FROM stock_transport_records r
@@ -671,13 +659,71 @@ router.post('/manual-transports', requirePermission('launches:write'), async (re
     const db = requireDb();
     await ensureManualLaunchTables(db);
     const transportDate = String(req.body.transportDate || '').slice(0, 10);
+    const originLocationId = Number(req.body.originLocationId);
+    const destinationLocationId = Number(req.body.destinationLocationId);
+    const invoiceNumber = String(req.body.invoiceNumber || '').trim() || null;
+    const notes = String(req.body.notes || '').trim() || null;
+    const userId = req.user?.id || null;
+    const items = Array.isArray(req.body.items) && req.body.items.length
+      ? req.body.items
+      : [{ materialId: req.body.materialId, quantity: req.body.quantity }];
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(transportDate) || !originLocationId || !destinationLocationId || !items.length) {
+      return res.status(400).json({ error: 'Data, material, locais e quantidade sao obrigatorios.' });
+    }
+    if (originLocationId === destinationLocationId) {
+      return res.status(400).json({ error: 'Local de origem e destino devem ser diferentes.' });
+    }
+    const normalizedItems = items.map(item => ({
+      materialId: Number(item.materialId),
+      quantity: toNumber(item.quantity)
+    }));
+    if (normalizedItems.some(item => !item.materialId || item.quantity <= 0)) {
+      return res.status(400).json({ error: 'Material e quantidade sao obrigatorios.' });
+    }
+
+    const rows = await db.begin(async tx => {
+      const inserted = [];
+      for (const item of normalizedItems) {
+        const [row] = await tx`
+          INSERT INTO stock_transport_records (
+            transport_date, material_id, origin_location_id, destination_location_id,
+            quantity, invoice_number, notes, user_id
+          )
+          VALUES (
+            ${transportDate}, ${item.materialId}, ${originLocationId}, ${destinationLocationId},
+            ${item.quantity}, ${invoiceNumber}, ${notes}, ${userId}
+          )
+          RETURNING *
+        `;
+        inserted.push(row);
+      }
+      await recordAuditLog(tx, {
+        user: req.user,
+        action: 'Transporte registrado',
+        module: 'Lancamentos',
+        description: `Registrou transporte com ${inserted.length} material(is), nota ${invoiceNumber || '-'}, em ${transportDate}.`,
+        recordRef: inserted.map(row => row.id).join(',')
+      });
+      return inserted;
+    });
+    res.status(201).json(rows.length === 1 ? rows[0] : rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/manual-transports/:id', requirePermission('launches:write'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    await ensureManualLaunchTables(db);
+    const transportDate = String(req.body.transportDate || '').slice(0, 10);
     const materialId = Number(req.body.materialId);
     const originLocationId = Number(req.body.originLocationId);
     const destinationLocationId = Number(req.body.destinationLocationId);
     const quantity = toNumber(req.body.quantity);
     const invoiceNumber = String(req.body.invoiceNumber || '').trim() || null;
     const notes = String(req.body.notes || '').trim() || null;
-    const userId = req.user?.id || null;
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(transportDate) || !materialId || !originLocationId || !destinationLocationId || quantity <= 0) {
       return res.status(400).json({ error: 'Data, material, locais e quantidade sao obrigatorios.' });
@@ -687,17 +733,76 @@ router.post('/manual-transports', requirePermission('launches:write'), async (re
     }
 
     const [row] = await db`
-      INSERT INTO stock_transport_records (
-        transport_date, material_id, origin_location_id, destination_location_id,
-        quantity, invoice_number, notes, user_id
-      )
-      VALUES (
-        ${transportDate}, ${materialId}, ${originLocationId}, ${destinationLocationId},
-        ${quantity}, ${invoiceNumber}, ${notes}, ${userId}
-      )
+      UPDATE stock_transport_records
+      SET transport_date = ${transportDate},
+          material_id = ${materialId},
+          origin_location_id = ${originLocationId},
+          destination_location_id = ${destinationLocationId},
+          quantity = ${quantity},
+          invoice_number = ${invoiceNumber},
+          notes = ${notes}
+      WHERE id = ${req.params.id}
       RETURNING *
     `;
-    res.status(201).json(row);
+    if (!row) return res.status(404).json({ error: 'Transporte nao encontrado.' });
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Transporte editado',
+      module: 'Lancamentos',
+      description: `Editou transporte ${row.id}, nota ${invoiceNumber || '-'}, em ${transportDate}.`,
+      recordRef: row.id
+    });
+    res.json(row);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/manual-transports/:id/cancel', requirePermission('launches:write'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    await ensureManualLaunchTables(db);
+    const reason = String(req.body.reason || 'Cancelado pelo usuario').trim();
+    const [row] = await db`
+      UPDATE stock_transport_records
+      SET status = 'canceled',
+          canceled_at = now(),
+          cancel_reason = ${reason}
+      WHERE id = ${req.params.id}
+      RETURNING *
+    `;
+    if (!row) return res.status(404).json({ error: 'Transporte nao encontrado.' });
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Transporte cancelado',
+      module: 'Lancamentos',
+      description: `Cancelou transporte ${row.id}, nota ${row.invoice_number || '-'}. Motivo: ${reason}.`,
+      recordRef: row.id
+    });
+    res.json(row);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/manual-transports/:id', requirePermission('launches:write'), requireSuperAdmin, async (req, res, next) => {
+  try {
+    const db = requireDb();
+    await ensureManualLaunchTables(db);
+    const [row] = await db`
+      DELETE FROM stock_transport_records
+      WHERE id = ${req.params.id}
+      RETURNING *
+    `;
+    if (!row) return res.status(204).end();
+    await recordAuditLog(db, {
+      user: req.user,
+      action: 'Exclusao de transporte',
+      module: 'Lancamentos',
+      description: `Excluiu definitivamente transporte ${row.id}, nota ${row.invoice_number || '-'}.`,
+      recordRef: row.id
+    });
+    res.json(row);
   } catch (error) {
     next(error);
   }

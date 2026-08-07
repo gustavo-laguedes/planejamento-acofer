@@ -78,6 +78,22 @@ function unitTotals(rows, quantityKey, unitKey) {
   return formatted.length ? formatted.join(' / ') : formatQuantityUnit(0, '');
 }
 
+function realWeightTotals(rows) {
+  const totals = rows.reduce((acc, row) => {
+    producedLots(row).forEach(lot => {
+      const quantity = lotRealWeight(lot);
+      const unit = lotRealWeightUnit(lot, row.secondary_unit);
+      if (!(quantity > 0) || !unit) return;
+      acc.set(unit, (acc.get(unit) || 0) + quantity);
+    });
+    return acc;
+  }, new Map());
+  const formatted = [...totals.entries()]
+    .filter(([, quantity]) => quantity > 0)
+    .map(([unit, quantity]) => formatQuantityUnit(quantity, unit));
+  return formatted.length ? formatted.join(' / ') : formatQuantityUnit(0, '');
+}
+
 function chips(values = [], emptyText = 'Sem informação') {
   const items = values.filter(value => value !== null && value !== undefined && String(value) !== '');
   return items.length
@@ -164,6 +180,7 @@ export function ProductionPage(options = {}) {
   const user = getCurrentUser();
   const canWriteProduction = canAccess(user, 'launches:write');
   const isOperator = normalizeRole(user?.role) === ROLES.OPERADOR;
+  const isSuperAdmin = normalizeRole(user?.role) === ROLES.SUPER_ADMIN;
   const page = document.createElement('section');
   page.className = 'stack launches-page production-page';
   page.innerHTML = `
@@ -210,6 +227,26 @@ export function ProductionPage(options = {}) {
     if (!normalized) return true;
     return [material.name, ...(material.codes || [])]
       .some(value => String(value || '').toLowerCase().includes(normalized));
+  }
+
+  function normalizeConsumedMaterialKey(value) {
+    return String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+  }
+
+  function consumedInputMatchesMaterial(input, material) {
+    if (!input || !material) return false;
+    if (input.materialId && String(input.materialId) === String(material.id)) return true;
+    if (input.inputMaterialId && String(input.inputMaterialId) === String(material.id)) return true;
+    const materialName = normalizeConsumedMaterialKey(material.name);
+    const inputNames = [input.materialName, input.material_name, input.name].map(normalizeConsumedMaterialKey);
+    if (materialName && inputNames.includes(materialName)) return true;
+    const lookupCodes = materialCodes(material).map(normalizeConsumedMaterialKey);
+    const inputCodes = [input.materialCode, input.material_code, input.code].map(normalizeConsumedMaterialKey);
+    return inputCodes.some(code => code && lookupCodes.includes(code));
   }
 
   function matrixRowsForMaterial(material) {
@@ -284,8 +321,22 @@ export function ProductionPage(options = {}) {
     await openProductionModal(row);
   }
 
+  function productionLaunchesPath(options = {}) {
+    const includeMaterialIds = options.includeMaterialIds !== false;
+    const params = new URLSearchParams();
+    if (productionFilters.startDate) params.set('startDate', productionFilters.startDate);
+    if (productionFilters.endDate) params.set('endDate', productionFilters.endDate);
+    if (productionFilters.machineName) params.set('machineName', productionFilters.machineName);
+    if (includeMaterialIds && productionFilters.materialIds?.length) params.set('materialIds', productionFilters.materialIds.join(','));
+    const query = params.toString();
+    return query ? `/actuals/launches?${query}` : '/actuals/launches';
+  }
+
   async function loadProductionTable() {
-    const rows = await api('/actuals/launches');
+    let rows = await api(productionLaunchesPath());
+    let filterRows = productionFilters.materialIds?.length
+      ? await api(productionLaunchesPath({ includeMaterialIds: false }))
+      : rows;
     const tableTarget = target.querySelector('.table-target');
     const filtersTarget = target.querySelector('.production-filters-target');
     const indicatorsTarget = target.querySelector('.production-indicators-target');
@@ -329,8 +380,19 @@ export function ProductionPage(options = {}) {
       productionTable.classList.add('production-launch-table-wrap');
       tableTarget.appendChild(productionTable);
     };
+    const refreshProductionRows = async (options = {}) => {
+      rows = await api(productionLaunchesPath());
+      if (options.refreshFilterRows || !filterRows.length) {
+        filterRows = productionFilters.materialIds?.length
+          ? await api(productionLaunchesPath({ includeMaterialIds: false }))
+          : rows;
+      }
+      renderProductionTable();
+      renderProductionFilters(filtersTarget, filterRows, options);
+      renderProductionIndicators(indicatorsTarget, filteredProductionRows(rows));
+    };
     renderProductionTable();
-    renderProductionFilters(filtersTarget, rows);
+    renderProductionFilters(filtersTarget, filterRows);
     renderProductionIndicators(indicatorsTarget, filteredProductionRows(rows));
     tableTarget.onclick = event => {
       if (!canWriteProduction) return;
@@ -339,7 +401,7 @@ export function ProductionPage(options = {}) {
       const row = rows.find(item => String(item.id) === String(button.dataset.editProduction));
       if (row) openProductionModal(row).catch(toast);
     };
-    filtersTarget.onsubmit = event => {
+    filtersTarget.onsubmit = async event => {
       event.preventDefault();
       const form = event.target;
       productionFilters = {
@@ -348,10 +410,9 @@ export function ProductionPage(options = {}) {
         startDate: form.elements.filterStartDate.value,
         endDate: form.elements.filterEndDate.value
       };
-      renderProductionTable();
-      renderProductionIndicators(indicatorsTarget, filteredProductionRows(rows));
+      await refreshProductionRows({ refreshFilterRows: true });
     };
-    filtersTarget.onclick = event => {
+    filtersTarget.onclick = async event => {
       if (!event.target.closest('.clear-production-filters')) return;
       productionFilters = {
         materialIds: [],
@@ -365,20 +426,16 @@ export function ProductionPage(options = {}) {
         form.elements.filterStartDate.value = '';
         form.elements.filterEndDate.value = '';
       }
-      renderProductionTable();
-      renderProductionFilters(filtersTarget, rows);
-      renderProductionIndicators(indicatorsTarget, filteredProductionRows(rows));
+      await refreshProductionRows({ refreshFilterRows: true });
     };
-    filtersTarget.addEventListener('change', event => {
+    filtersTarget.addEventListener('change', async event => {
       if (!event.target.matches('[name="filterMaterialId"]')) return;
       const searchValue = filtersTarget.querySelector('[name="filterMaterialSearch"]')?.value || '';
       const value = String(event.target.value);
       productionFilters.materialIds = event.target.checked
         ? [...new Set([...productionFilters.materialIds, value])]
         : productionFilters.materialIds.filter(id => id !== value);
-      renderProductionTable();
-      renderProductionFilters(filtersTarget, rows, { keepOpen: true, searchValue });
-      renderProductionIndicators(indicatorsTarget, filteredProductionRows(rows));
+      await refreshProductionRows({ keepOpen: true, searchValue });
     });
     filtersTarget.addEventListener('input', event => {
       if (!event.target.matches('[name="filterMaterialSearch"]')) return;
@@ -395,21 +452,19 @@ export function ProductionPage(options = {}) {
       filterMaterialOptions(wrapper, event.target.value);
     });
     bindMaterialFilterDismissal(filtersTarget);
-    filtersTarget.addEventListener('click', event => {
+    filtersTarget.addEventListener('click', async event => {
       const allButton = event.target.closest('[data-material-filter-all]');
       const clearButton = event.target.closest('[data-material-filter-clear]');
       const removeButton = event.target.closest('[data-remove-material-filter]');
       if (!allButton && !clearButton && !removeButton) return;
       const searchValue = filtersTarget.querySelector('[name="filterMaterialSearch"]')?.value || '';
-      const availableIds = materialIdsForRows(rows);
+      const availableIds = materialIdsForRows(filterRows);
       if (allButton) productionFilters.materialIds = availableIds;
       if (clearButton) productionFilters.materialIds = [];
       if (removeButton) {
         productionFilters.materialIds = productionFilters.materialIds.filter(id => id !== String(removeButton.dataset.removeMaterialFilter));
       }
-      renderProductionTable();
-      renderProductionFilters(filtersTarget, rows, { keepOpen: Boolean(allButton || clearButton), searchValue: allButton || clearButton ? searchValue : '' });
-      renderProductionIndicators(indicatorsTarget, filteredProductionRows(rows));
+      await refreshProductionRows({ keepOpen: Boolean(allButton || clearButton), searchValue: allButton || clearButton ? searchValue : '' });
     });
   }
 
@@ -559,7 +614,8 @@ export function ProductionPage(options = {}) {
       <div class="summary-grid production-summary-grid">
         <article class="metric-card compact"><span>Total de produ&ccedil;&otilde;es</span><strong>${formatNumber(activeRows.length)}</strong></article>
         <article class="metric-card compact"><span>Total produzido unidade principal</span><strong>${unitTotals(activeRows, 'quantity', 'primaryUnit')}</strong></article>
-        <article class="metric-card compact"><span>Total produzido unidade secund&aacute;ria</span><strong>${unitTotals(activeRows, 'secondaryQty', 'secondaryUnit')}</strong></article>
+        <article class="metric-card compact"><span>Total produzido unidade secund&aacute;ria (fator)</span><strong>${unitTotals(activeRows, 'secondaryQty', 'secondaryUnit')}</strong></article>
+        <article class="metric-card compact"><span>Peso real produzido unidade secund&aacute;ria</span><strong>${realWeightTotals(activeRows)}</strong></article>
         <article class="metric-card compact"><span>Quantidade de lotes gerados</span><strong>${formatNumber(totals.lots)}</strong></article>
         <article class="metric-card compact"><span>Produ&ccedil;&otilde;es pendentes de beneficiamento</span><strong>${formatNumber(totals.pendingBenefit)}</strong></article>
         <article class="metric-card compact"><span>Produ&ccedil;&otilde;es canceladas</span><strong>${formatNumber(totals.canceled)}</strong></article>
@@ -618,6 +674,7 @@ export function ProductionPage(options = {}) {
             ${canDecideCancellation ? '<button class="danger-button confirm-cancel-request" type="button">Confirmar cancelamento</button>' : ''}
             ${canDecideCancellation ? '<button class="primary-button approve-production-request" type="button">Aprovar produ&ccedil;&atilde;o</button>' : ''}
             ${!readOnlyMode && row && !isCanceledProduction(row) ? '<button class="danger-button cancel-production" type="button">Cancelar produ&ccedil;&atilde;o</button>' : ''}
+            ${isSuperAdmin && row ? '<button class="danger-button icon-danger-button delete-production" type="button" title="Excluir produ&ccedil;&atilde;o" aria-label="Excluir produ&ccedil;&atilde;o"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg></button>' : ''}
             <button class="secondary-button close-modal" type="button">Cancelar</button>
             ${readOnlyMode ? '' : '<button class="primary-button" type="submit">Salvar produ&ccedil;&atilde;o</button>'}
           </div>
@@ -695,13 +752,18 @@ export function ProductionPage(options = {}) {
     }
 
     function renderConsumedInputs() {
-      const previous = new Map(collectConsumedInputs().map(input => [String(input.materialId), input.lot]));
+      const storedInputs = consumedInputs.map(input => ({ ...input }));
+      const visibleInputs = [...inputsTarget.querySelectorAll('[data-consumed-material-id]')].map(input => ({
+        materialId: Number(input.dataset.consumedMaterialId),
+        lot: input.value.trim()
+      }));
+      const previous = new Map(visibleInputs.map(input => [String(input.materialId), input.lot]));
       const modelInputs = modelInputsFor(form.elements.materialId.value, form.elements.productionModelName.value);
       consumedInputs = modelInputs.map(input => ({
         materialId: Number(input.material.id),
         materialName: input.material.name,
         materialCode: firstCode(input.material),
-        lot: previous.get(String(input.material.id)) ?? consumedInputs.find(current => String(current.materialId) === String(input.material.id))?.lot ?? ''
+        lot: previous.get(String(input.material.id)) ?? storedInputs.find(current => consumedInputMatchesMaterial(current, input.material))?.lot ?? ''
       }));
       inputsTarget.innerHTML = consumedInputs.length
         ? consumedInputs.map(input => `
@@ -863,6 +925,22 @@ export function ProductionPage(options = {}) {
       await api(`/actuals/launches/${row.id}/cancel`, { method: 'POST', body: { reason: 'Cancelado pelo usuário' } });
       backdrop.remove();
       await loadProductionTable();
+    });
+    backdrop.querySelector('.delete-production')?.addEventListener('click', async () => {
+      const label = [row.material_name, formatDateOnly(row.production_date)].filter(Boolean).join(' em ');
+      if (!confirm(`Excluir definitivamente esta produção${label ? ` (${label})` : ''}?`)) return;
+      try {
+        await api(`/actuals/launches/${row.id}`, { method: 'DELETE' });
+        backdrop.remove();
+        await loadProductionTable();
+      } catch (error) {
+        if (error.status === 404) {
+          backdrop.remove();
+          await loadProductionTable();
+          return;
+        }
+        toast(error);
+      }
     });
     backdrop.querySelector('.confirm-cancel-request')?.addEventListener('click', async () => {
       if (!confirm('Confirma o cancelamento desta produção?')) return;

@@ -3,6 +3,7 @@ import { signOut } from './clerkAuth.js';
 import { UserManagementModal } from './UserManagementModal.js';
 import { ROLES, canAccess, normalizeRole } from './rbac.js';
 import { clearBrowserSession } from './browserSession.js';
+import { resetPlanningBrowserCache } from './browserCacheReset.js';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -213,6 +214,13 @@ export function Topbar() {
 
     actions.appendChild(userBlock(user));
     actions.appendChild(logout);
+
+    const cacheButton = document.createElement('button');
+    cacheButton.className = 'ghost-button topbar-cache-reset';
+    cacheButton.type = 'button';
+    cacheButton.textContent = 'Limpar cache';
+    cacheButton.addEventListener('click', resetPlanningBrowserCache);
+    actions.appendChild(cacheButton);
   };
 
   const cachedUser = getCurrentUser();

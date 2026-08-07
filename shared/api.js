@@ -36,7 +36,9 @@ export async function api(path, options = {}) {
       throw new Error('Sess\u00e3o expirada. Fa\u00e7a login novamente.');
     }
     const payload = await response.json().catch(() => ({ error: 'Falha na requisição.' }));
-    throw new Error(payload.error || 'Falha na requisição.');
+    const error = new Error(payload.error || 'Falha na requisição.');
+    error.status = response.status;
+    throw error;
   }
 
   if (response.headers.get('content-type')?.includes('application/pdf')) {

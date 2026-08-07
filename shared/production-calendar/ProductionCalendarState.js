@@ -6,9 +6,14 @@ export const PRODUCTION_CALENDAR_ZOOM_LEVELS = [
 ];
 
 export const PRODUCTION_CALENDAR_DEFAULT_ZOOM_ID = 'normal';
+export const PRODUCTION_CALENDAR_DEFAULT_VISIBLE_DAY_COUNT = 8;
 
 const DEFAULT_STATE = {
   zoom: PRODUCTION_CALENDAR_DEFAULT_ZOOM_ID,
+  visibleDayCount: null,
+  totalDayCount: 0,
+  visibleEndDate: null,
+  productionLimitDate: null,
   scroll: {
     left: 0,
     top: 0
@@ -64,6 +69,33 @@ export function stepProductionCalendarZoom(state, direction) {
 
 export function resetProductionCalendarZoom(state) {
   return setProductionCalendarZoom(state, PRODUCTION_CALENDAR_DEFAULT_ZOOM_ID);
+}
+
+export function resolveProductionCalendarVisibleDayCount(visibleDayCount, totalDayCount) {
+  const total = Math.max(0, Number(totalDayCount) || 0);
+  if (!total) return 0;
+  const requested = Number(visibleDayCount);
+  const initial = Number.isFinite(requested) && requested > 0
+    ? Math.floor(requested)
+    : PRODUCTION_CALENDAR_DEFAULT_VISIBLE_DAY_COUNT;
+  return Math.min(total, Math.max(1, initial));
+}
+
+export function setProductionCalendarHorizon(state, visibleDayCount, totalDayCount) {
+  if (!state) return 0;
+  state.totalDayCount = Math.max(0, Number(totalDayCount) || 0);
+  state.visibleDayCount = resolveProductionCalendarVisibleDayCount(visibleDayCount, state.totalDayCount);
+  return state.visibleDayCount;
+}
+
+export function expandProductionCalendarHorizon(state, additionalDays, totalDayCount = state?.totalDayCount) {
+  const current = resolveProductionCalendarVisibleDayCount(state?.visibleDayCount, totalDayCount);
+  const expanded = current + Math.max(0, Number(additionalDays) || 0);
+  return setProductionCalendarHorizon(state, expanded, Math.max(Number(totalDayCount) || 0, expanded));
+}
+
+export function showAllProductionCalendarDays(state, totalDayCount = state?.totalDayCount) {
+  return setProductionCalendarHorizon(state, totalDayCount, totalDayCount);
 }
 
 export function openProductionCalendarDetails(state, allocation, opener = null) {

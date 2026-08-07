@@ -13,7 +13,11 @@ globalThis.addEventListener = () => {};
 globalThis.removeEventListener = () => {};
 const {
   buildManualScheduleValidationContext,
-  buildProductionCalendarValidationSnapshot
+  buildProductionCalendarValidationSnapshot,
+  applyAcceptedPlanningReoptimization,
+  normalizeManualScheduleStockLocations,
+  focusPlanningFlowAllocation,
+  resolvePlanningFlowAllocation
 } = await import('../pages/PlanningPage.js');
 const { createManualScheduleDraft } = await import('../services/manualScheduleDraft.service.js');
 const {
@@ -54,7 +58,7 @@ const input = {
   dailyTeamOverrides: { '2026-07-13': { teamAvailable: 8 } },
   manualWorkDates: ['2026-07-18'],
   setupMinutes: 45,
-  minimumStartRatio: 0.30,
+  minimumStartRatio: 1,
   dependencyCompletionBufferMinutes: 60,
   holidays: ['2026-09-07'],
   timezone: 'America/Sao_Paulo'
@@ -73,11 +77,44 @@ assert.deepEqual(context.operations, simulation.operations);
 assert.deepEqual(context.stock.find(item => item.materialId === 'RAW'), { materialId: 'RAW', quantity: 7, unit: 'kg' });
 assert.deepEqual(context.stockMinimums, [{ materialId: 'RAW', minimumQuantity: 2 }]);
 assert.equal(context.transports[0].transportId, 'transport-1');
-assert.deepEqual(context.stockLocations, input.stockLocations);
+assert.deepEqual(context.stockLocations.map(item => item.locationId), ['L1', 'L2', '__default__']);
+
+// Estoque agregado usa o local técnico internamente; locais explícitos continuam estritos.
+{
+  const aggregated = normalizeManualScheduleStockLocations({
+    stock: [{ materialId: 'MAT', quantity: 100, unit: 'kg' }],
+    stockMinimums: [],
+    stockLocations: []
+  });
+  assert.deepEqual(aggregated, [{ locationId: '__default__' }]);
+
+  const explicit = normalizeManualScheduleStockLocations({
+    stock: [{ materialId: 'MAT', locationId: 'L1', quantity: 100, unit: 'kg' }],
+    stockMinimums: [{ materialId: 'MAT', location_id: 'L2', minimumQuantity: 10 }],
+    stockLocations: [
+      { location_id: 'L1', name: 'Almoxarifado' },
+      { id: 'L1' },
+      'L2',
+      '',
+      { locationId: '' }
+    ]
+  });
+  assert.deepEqual(explicit.map(item => item.locationId), ['L1', 'L2']);
+  assert.ok(!explicit.some(item => item.locationId === '__default__'));
+  assert.equal(explicit[0].name, 'Almoxarifado');
+}
 
 const source = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
+assert.match(source, /productionIndexesToRemove/, 'cortar cadeia deve remover a producao do builder');
+assert.match(source, /rerenderProductionsBuilder\(\);\s*lastPayload = payload\(\);/, 'builder deve renumerar producoes antes de simular novamente');
+assert.match(source, /buildProductionShortageCascade/, 'modal de falta deve calcular saldo em cascata');
+assert.match(source, /availableAfter/, 'preview de falta deve mostrar saldo depois do consumo');
+assert.match(source, /data-production-drag-handle/, 'produções devem expor alça de reordenação');
+assert.match(source, /moveProductionPriority/, 'builder deve permitir alterar prioridade por ordem');
+assert.match(source, /closeCalendarAfterProductionPriorityChange/, 'alterar prioridade deve fechar o calendário atual');
+assert.match(source, /draft\.operationOverrides\s*=\s*\{\}/, 'alterar prioridade deve limpar decisões dependentes da ordem');
 const runnerStart = source.indexOf('productionCalendarMoveRunner = async');
-const runnerEnd = source.indexOf('function focusCalendarCardFromFlow', runnerStart);
+const runnerEnd = source.indexOf('function openFlowNodeDetailsModal', runnerStart);
 assert.ok(runnerStart > 0 && runnerEnd > runnerStart, 'harness do movimento manual deve existir');
 const runner = source.slice(runnerStart, runnerEnd);
 
@@ -85,16 +122,140 @@ assert.match(runner, /applyManualScheduleTransaction\s*\(/, 'todos os movimentos
 assert.doesNotMatch(runner, /simulateCurrent\s*\(/, 'movimento manual não pode simular novamente');
 assert.doesNotMatch(runner, /scheduleOperations\s*\(/, 'movimento manual não pode chamar o scheduler');
 assert.doesNotMatch(source, /applyDraftMove\s*\(/, 'PlanningPage não pode aplicar allocations diretamente');
-assert.match(runner, /if \(!transaction\.accepted\)/, 'bloqueio deve impedir troca do draft ativo');
+const manualWorkDateStart = source.indexOf('async function handleProductionCalendarManualWorkDate');
+const manualWorkDateEnd = source.indexOf('async function handleProductionCalendarDailyTeam', manualWorkDateStart);
+const manualWorkDateHandler = source.slice(manualWorkDateStart, manualWorkDateEnd);
+assert.match(manualWorkDateHandler, /reoptimizeProductionCalendarConstraints\s*\(/, 'alterar dia útil deve chamar o reotimizador oficial');
+assert.match(manualWorkDateHandler, /candidateDraft:\s*recalculated\.manualScheduleDraft/, 'liberação deve transacionar o candidato completo');
+assert.match(manualWorkDateHandler, /currentDraft:\s*manualScheduleDraft/, 'liberação deve comparar contra o draft aceito');
+const dailyTeamStart = manualWorkDateEnd;
+const dailyTeamEnd = source.indexOf('function daysWithDraftAllocations', dailyTeamStart);
+const dailyTeamHandler = source.slice(dailyTeamStart, dailyTeamEnd);
+assert.match(dailyTeamHandler, /cutoffDate:\s*date/);
+assert.match(dailyTeamHandler, /reoptimizeProductionCalendarConstraints\s*\(/, 'alterar equipe deve usar o mesmo reotimizador');
+assert.match(dailyTeamHandler, /candidateAllocations/);
+assert.match(dailyTeamHandler, /currentDraft:\s*manualScheduleDraft/, 'recálculo de equipe deve manter o draft aceito como origem transacional');
+const payloadStart = source.indexOf('function payload()');
+const payloadEnd = source.indexOf('function productionColorByIndex', payloadStart);
+assert.match(source.slice(payloadStart, payloadEnd), /manualWorkDates:\s*manualScheduleDraft\?\.manualWorkDates\s*\|\|\s*draft\.manualWorkDates/, 'nova simulação deve enviar dias manuais persistidos');
+const simulateStart = source.indexOf('async function simulateCurrent(');
+const simulateEnd = source.indexOf('function openManualDraftChoiceModal', simulateStart);
+const simulateHandler = source.slice(simulateStart, simulateEnd);
+assert.ok(simulateHandler.indexOf('preservedManualWorkDates') < simulateHandler.indexOf('manualScheduleDraft = null'), 'restrições devem ser preservadas antes de descartar movimentos manuais');
+assert.match(simulateHandler, /draft\.manualWorkDates\s*=\s*preservedManualWorkDates/);
+assert.match(runner, /const installAcceptedMove = transaction => \{[\s\S]*manualScheduleDraft = transaction\.draft[\s\S]*saveDraftNow\(\)/, 'bloqueio deve impedir troca do draft ativo');
+assert.match(runner, /if \(fullTransaction\.accepted\) \{[\s\S]*installAcceptedMove\(fullTransaction\);[\s\S]*return;[\s\S]*\}/, 'movimento integral aceito deve instalar o candidato e encerrar');
+assert.match(runner, /if \(!\(maxQuantity > 0\)\) \{[\s\S]*openManualStockUnavailableModal[\s\S]*return;[\s\S]*\}/, 'bloqueio total de estoque deve retornar sem trocar o draft ativo');
 assert.ok(
   runner.indexOf('manualScheduleDraft = transaction.draft') < runner.indexOf('saveDraftNow()'),
   'localStorage só pode ser atualizado após aceitar o candidato'
 );
-const rejectionBranch = runner.slice(runner.indexOf('if (!transaction.accepted)'), runner.indexOf('manualScheduleDraft = transaction.draft'));
+const rejectionBranch = runner.slice(runner.indexOf('const analysis ='), runner.indexOf('const acceptedQuantity ='));
 assert.doesNotMatch(rejectionBranch, /saveDraftNow\s*\(/, 'candidato recusado não pode ir ao localStorage');
+assert.doesNotMatch(rejectionBranch, /manualScheduleDraft\s*=/, 'candidato recusado não pode trocar o draft ativo');
 assert.match(runner, /transaction\.warnings\.length/, 'warning deve confirmar movimento com alertas');
 assert.match(runner, /selectedAllocationId:\s*null/, 'seleção deve limpar no sucesso');
 assert.match(runner, /finally\s*\{[\s\S]*setOperationLoading\(false\)/, 'loading sempre deve encerrar');
+const replaceModalStart = source.indexOf("if (error?.code === 'CONFIRM_REPLACE')");
+const replaceModalEnd = source.indexOf("return choice === 'confirm';", replaceModalStart);
+const replaceModal = source.slice(replaceModalStart, replaceModalEnd);
+assert.match(replaceModal, /sourceDate/);
+assert.match(replaceModal, /destinationDate/);
+assert.match(replaceModal, /destinationMachine/);
+assert.match(replaceModal, /próximo período válido/);
+assert.doesNotMatch(replaceModal, /occupant\.materialId|proposed\.productionId|source\.operationId/);
+assert.doesNotMatch(source, /production-calendar-card\[data-allocation-id/, 'PlanningPage nao deve conhecer seletor DOM do calendario');
+assert.doesNotMatch(source, /gantt-aps__bar/, 'PlanningPage nao deve conhecer seletor DOM do Gantt');
+
+{
+  const allocations = [
+    {
+      allocationId: 'direct-allocation',
+      operationId: 'op-direct',
+      parentOperationId: 'parent-direct',
+      materialId: 'MAT-DIRECT',
+      productionIndex: 0,
+      date: '2026-07-22',
+      startTime: '10:00',
+      status: 'planned'
+    },
+    {
+      allocationId: 'split-completed',
+      operationId: 'op-split',
+      parentOperationId: 'parent-split',
+      materialId: 'MAT-SPLIT',
+      productionIndex: 1,
+      date: '2026-07-20',
+      startTime: '07:00',
+      splitPartOrder: 1,
+      status: 'completed'
+    },
+    {
+      allocationId: 'split-open-late',
+      operationId: 'op-split',
+      parentOperationId: 'parent-split',
+      materialId: 'MAT-SPLIT',
+      productionIndex: 1,
+      date: '2026-07-21',
+      startTime: '07:00',
+      splitPartOrder: 1,
+      status: 'planned'
+    },
+    {
+      allocationId: 'split-open-first',
+      operationId: 'op-split',
+      parentOperationId: 'parent-split',
+      materialId: 'MAT-SPLIT',
+      productionIndex: 1,
+      date: '2026-07-21',
+      startTime: '07:00',
+      splitPartOrder: 0,
+      status: 'planned'
+    },
+    {
+      allocationId: 'shared-membership',
+      operationId: 'op-shared',
+      parentOperationId: 'parent-shared',
+      materialId: 'MAT-SHARED',
+      date: '2026-07-19',
+      startTime: '08:00',
+      productionMemberships: [{ productionIndex: 2, productionId: 'production-2' }]
+    }
+  ];
+  assert.equal(resolvePlanningFlowAllocation({ flowAllocationId: 'direct-allocation' }, allocations).allocationId, 'direct-allocation');
+  assert.equal(
+    resolvePlanningFlowAllocation({ flowOperationIds: 'op-shared', flowProductionIndexes: '2' }, allocations).allocationId,
+    'shared-membership',
+    'matching deve respeitar memberships de producao compartilhada'
+  );
+  assert.equal(
+    resolvePlanningFlowAllocation({ flowOperationIds: 'op-split', flowProductionIndexes: '1' }, allocations).allocationId,
+    'split-open-first',
+    'multiplas partes devem priorizar nao concluida, inicio e splitPartOrder'
+  );
+  assert.equal(
+    resolvePlanningFlowAllocation({ flowMaterialId: 'MAT-SHARED', flowProductionIndexes: '2' }, allocations).allocationId,
+    'shared-membership',
+    'fallback conservador usa material e producao quando nao ha operationId no no'
+  );
+  assert.equal(resolvePlanningFlowAllocation({ flowOperationIds: 'missing' }, allocations), null);
+
+  const calls = [];
+  assert.equal(focusPlanningFlowAllocation({
+    node: { dataset: { flowOperationIds: 'op-split', flowProductionIndexes: '1' } },
+    allocations,
+    rendererHost: { focusAllocation: allocationId => {
+      calls.push(allocationId);
+      return true;
+    } }
+  }), true);
+  assert.deepEqual(calls, ['split-open-first']);
+  assert.equal(focusPlanningFlowAllocation({
+    node: { dataset: { flowOperationIds: 'missing' } },
+    allocations,
+    rendererHost: { focusAllocation: () => { throw new Error('nao deveria focar'); } }
+  }), false);
+}
 
 // Harness sem DOM/localStorage real: persiste somente o último candidato aceito.
 {
@@ -152,7 +313,7 @@ assert.match(runner, /finally\s*\{[\s\S]*setOperationLoading\(false\)/, 'loading
     dailyTeamOverrides: {},
     manualWorkDates: [],
     setupMinutes: 0,
-    minimumStartRatio: 0.30,
+    minimumStartRatio: 1,
     dependencyCompletionBufferMinutes: 60,
     holidays: [],
     timezone: 'America/Sao_Paulo'
@@ -232,6 +393,34 @@ assert.match(runner, /finally\s*\{[\s\S]*setOperationLoading\(false\)/, 'loading
   assert.equal(v2Snapshot.validation.summary.warningCount, 1);
   assert.equal(v2Snapshot.allocations[0].date, '2026-07-14', 'candidato recusado nunca chega ao snapshot V2');
 }
+
+const futureAllocation = {
+  allocationId: 'future-1', operationId: 'operation-1', parentOperationId: 'operation-1',
+  machineId: 'M1', machineName: 'M1', date: '2026-07-20', quantity: 10, durationMinutes: 60
+};
+const previousFutureDraft = { allocations: [futureAllocation], dailyTeamOverrides: {}, manualWorkDates: [] };
+const acceptedFutureDraft = {
+  ...previousFutureDraft,
+  allocations: [{ ...futureAllocation, allocationId: 'reopt:operation-1:001', peopleCount: 4 }],
+  dailyTeamOverrides: { '2026-07-20': { day: 4 } },
+  manualWorkDates: ['2026-07-18'],
+  frozenThrough: { date: '2026-07-18', time: '00:00' }
+};
+const appliedReoptimization = applyAcceptedPlanningReoptimization({
+  currentSimulation: { operations: [{ operationId: 'operation-1' }], calendarOperations: [{ operationId: 'stale' }], days: [{ date: '2026-07-20' }], summary: {} },
+  currentDraft: previousFutureDraft,
+  recalculated: { operations: [{ operationId: 'operation-1', peopleCount: 4 }], cutoffSnapshot: { cutoff: { date: '2026-07-18' } } },
+  transaction: { accepted: true, draft: acceptedFutureDraft }
+});
+assert.equal(appliedReoptimization.manualScheduleDraft.allocations.length, 1, 'aplicação atômica mantém allocations futuras');
+assert.deepEqual(appliedReoptimization.manualWorkDates, ['2026-07-18']);
+assert.deepEqual(appliedReoptimization.currentSimulation.calendarOperations, [], 'operações diárias antigas não podem sobrescrever o candidato');
+assert.throws(() => applyAcceptedPlanningReoptimization({
+  currentSimulation: { operations: [], days: [], summary: {} },
+  currentDraft: previousFutureDraft,
+  recalculated: { operations: [], cutoffSnapshot: { cutoff: { date: '2026-07-18' } } },
+  transaction: { accepted: true, draft: { ...acceptedFutureDraft, allocations: [] } }
+}), error => error?.code === 'ACCEPTED_REOPTIMIZATION_LOST_FUTURE_WORK');
 
 console.log('planningManualScheduleIntegration.test.js ok');
 process.exit(0);

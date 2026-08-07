@@ -6,7 +6,6 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 const MINUTES_PER_DAY = 24 * 60;
 const QUANTITY_EPSILON = 0.001;
-const DEFAULT_MINIMUM_START_RATIO = 0.30;
 const DEFAULT_DEPENDENCY_COMPLETION_BUFFER_MINUTES = 60;
 const EVENT_ORDER = {
   ALLOCATION_END: 0,
@@ -30,6 +29,29 @@ function timeToMinutes(value) {
   if (typeof value !== 'string' || !TIME_PATTERN.test(value)) return null;
   const [hours, minutes] = value.split(':').map(Number);
   return (hours * 60) + minutes;
+}
+
+function productiveMinutes(value) {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    const match = text.match(/^(\d+)(?:[,.](\d{1,2}))?$/);
+    if (match) {
+      const hours = Number(match[1]);
+      const fraction = match[2] || '';
+      if (fraction.length === 2 && Number(fraction) < 60) return (hours * 60) + Number(fraction);
+      const parsed = Number(`${match[1]}.${fraction}`);
+      if (Number.isFinite(parsed)) return Math.round(parsed * 60);
+    }
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 60) : null;
+}
+
+function minutesToTime(minutes) {
+  const normalized = ((Math.round(minutes) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+  const hours = Math.floor(normalized / 60);
+  const mins = normalized % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
 }
 
 function civilDayNumber(date) {
@@ -152,8 +174,13 @@ function makeDiagnostic(code, rule, message, values = {}) {
 
 function normalizeShift(shift, index) {
   const startTime = String(shift?.startTime ?? shift?.shiftStartTime ?? '');
-  const endTime = String(shift?.endTime ?? shift?.shiftEndTime ?? '');
   const startMinutes = timeToMinutes(startTime);
+  const suppliedEndTime = shift?.endTime ?? shift?.shiftEndTime;
+  const endTime = String(suppliedEndTime ?? (
+    startMinutes !== null && productiveMinutes(shift?.hoursPerDay)
+      ? minutesToTime(startMinutes + productiveMinutes(shift.hoursPerDay))
+      : ''
+  ));
   const endClockMinutes = timeToMinutes(endTime);
   const valid = startMinutes !== null && endClockMinutes !== null && startMinutes !== endClockMinutes;
   const shiftId = String(shift?.shiftId ?? shift?.id ?? `shift-${index + 1}`);
@@ -624,7 +651,6 @@ function evaluateDependencyRules({
   operations,
   dependencies,
   transports,
-  minimumStartRatio,
   dependencyCompletionBufferMinutes,
   allowStockSupply,
   diagnostics
@@ -642,11 +668,6 @@ function evaluateDependencyRules({
     });
   };
 
-  if (!Number.isFinite(minimumStartRatio) || minimumStartRatio < 0 || minimumStartRatio > 1) {
-    addIssue(makeDiagnostic('INVALID_DEPENDENCY_CONFIGURATION', 'dependency_configuration', 'minimumStartRatio deve estar entre 0 e 1.', {
-      details: { minimumStartRatio }
-    }), normalizedDependencies.map(item => item.dependencyId));
-  }
   if (!Number.isFinite(dependencyCompletionBufferMinutes) || dependencyCompletionBufferMinutes < 0) {
     addIssue(makeDiagnostic('INVALID_DEPENDENCY_CONFIGURATION', 'dependency_configuration', 'dependencyCompletionBufferMinutes deve ser maior ou igual a zero.', {
       details: { dependencyCompletionBufferMinutes }
@@ -744,7 +765,7 @@ function evaluateDependencyRules({
       dependency,
       profile,
       required: dependency.requiredQuantity * (profile.quantity / consumerTotal),
-      minimum: dependency.requiredQuantity * (profile.quantity / consumerTotal) * minimumStartRatio
+      minimum: dependency.requiredQuantity * (profile.quantity / consumerTotal)
     }));
     dependencyState.minimumRequired = requirements.reduce((sum, item) => sum + item.minimum, 0);
     dependencyState.fullRequired = requirements.reduce((sum, item) => sum + item.required, 0);
@@ -870,7 +891,7 @@ function evaluateDependencyRules({
         materialIds: batch.map(item => item.dependency.materialId),
         ...pointFields(batch[0]?.profile.allocation),
         details: {
-          minimumStartRatio,
+          requiresFullDailyInputBatch: true,
           totalRequiredAtStart: demand,
           availableQuantity: available,
           deficit: Math.max(demand - available, 0),
@@ -964,7 +985,6 @@ export function validateManualScheduleTemporalRules({
   operations = [],
   dependencies = [],
   transports = [],
-  minimumStartRatio = DEFAULT_MINIMUM_START_RATIO,
   dependencyCompletionBufferMinutes = DEFAULT_DEPENDENCY_COMPLETION_BUFFER_MINUTES,
   stock,
   stockMinimums,
@@ -1134,7 +1154,6 @@ export function validateManualScheduleTemporalRules({
     operations,
     dependencies,
     transports,
-    minimumStartRatio: Number(minimumStartRatio),
     dependencyCompletionBufferMinutes: Number(dependencyCompletionBufferMinutes),
     allowStockSupply: stock !== undefined || stockMinimums !== undefined || stockLocations !== undefined,
     diagnostics
@@ -1173,7 +1192,6 @@ export function validateManualScheduleTemporalRules({
       stock,
       stockMinimums,
       stockLocations,
-      minimumStartRatio: Number(minimumStartRatio),
       quantityPrecision
     });
     stockProjection = ledgerResult.stockProjection;

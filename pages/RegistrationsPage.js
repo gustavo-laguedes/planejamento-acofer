@@ -1,6 +1,5 @@
 import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
-import { InternalTabs } from '../shared/InternalTabs.js';
 import { CodeChipsInput } from '../shared/CodeChipsInput.js';
 import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
@@ -18,15 +17,13 @@ export function RegistrationsPage() {
   page.innerHTML = `
     <div class="page-header">
       <div>
-        <h1>Cadastros</h1>
-        <p>Organize locais, máquinas e materiais usados no planejamento.</p>
+        <h1>Cadastros / Locais</h1>
       </div>
     </div>
-    <div class="internal-tabs-target"></div>
     <div class="registrations-target"></div>
   `;
 
-  const tabsTarget = page.querySelector('.internal-tabs-target');
+  const pageTitle = page.querySelector('.page-header h1');
   const target = page.querySelector('.registrations-target');
   let activeTab = sessionStorage.getItem('planejamento_registration_tab') || 'locations';
   let locations = [];
@@ -37,13 +34,9 @@ export function RegistrationsPage() {
     window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message || error }));
   }
 
-  function renderTabs() {
-    tabsTarget.innerHTML = '';
-    tabsTarget.appendChild(InternalTabs(registrationTabs, activeTab, tab => {
-      activeTab = tab;
-      sessionStorage.setItem('planejamento_registration_tab', activeTab);
-      render().catch(toast);
-    }));
+  function updatePageTitle() {
+    const tab = registrationTabs.find(item => item.id === activeTab) || registrationTabs[0];
+    pageTitle.textContent = `Cadastros / ${tab.label}`;
   }
 
   async function refreshLookups() {
@@ -54,7 +47,7 @@ export function RegistrationsPage() {
   }
 
   async function render() {
-    renderTabs();
+    updatePageTitle();
     setInternalLoading(target, 'Carregando cadastros...');
     try {
       if (activeTab === 'locations') return await renderLocations();

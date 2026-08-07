@@ -143,6 +143,20 @@ function stockDiagnostic(code, values = {}) {
   };
 }
 
+function stockLocationDisplayName(item = {}) {
+  return String(item?.locationName ?? item?.location_name ?? item?.name ?? '').trim();
+}
+
+function unconfiguredStockLocationMessage(locationId, item = {}) {
+  if (locationId === DEFAULT_LOCATION_ID) {
+    return 'O estoque agregado do material não está configurado corretamente.';
+  }
+  const displayName = stockLocationDisplayName(item);
+  return displayName
+    ? `O local de estoque "${displayName}" não está configurado.`
+    : 'O local de estoque informado não está configurado.';
+}
+
 export function buildManualScheduleStockLedger({
   normalizedAllocations,
   normalizedDependencies,
@@ -151,7 +165,6 @@ export function buildManualScheduleStockLedger({
   stock,
   stockMinimums,
   stockLocations,
-  minimumStartRatio,
   quantityPrecision
 }) {
   const precisionNumber = Number(quantityPrecision ?? 6);
@@ -209,7 +222,10 @@ export function buildManualScheduleStockLedger({
       return;
     }
     if (configuredLocations.size && !configuredLocations.has(locationId)) diagnostics.push(stockDiagnostic('STOCK_LOCATION_MISMATCH', {
-      materialId, locationId, message: `O local ${locationId} não está configurado.`, details: { configuredLocations: [...configuredLocations].sort() }
+      materialId,
+      locationId,
+      message: unconfiguredStockLocationMessage(locationId, item),
+      details: { configuredLocations: [...configuredLocations].sort() }
     }));
     noteUnit(materialId, unit, `stock:${index}`);
     const key = `${materialId}\u0000${locationId}`;
@@ -276,7 +292,7 @@ export function buildManualScheduleStockLedger({
         materialId: dependency.materialId,
         locationId,
         required,
-        commitment: required * minimumStartRatio,
+        commitment: required,
         start: allocation.start,
         end: allocation.end,
         segments,

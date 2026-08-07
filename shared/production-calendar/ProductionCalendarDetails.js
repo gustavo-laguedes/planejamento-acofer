@@ -4,7 +4,12 @@ import {
   formatProductionCalendarPercent,
   formatProductionCalendarQuantity
 } from './productionCalendar.utils.js';
-import { getProductionCalendarAllocationColor } from './ProductionCalendarCard.js';
+import {
+  getProductionCalendarAllocationColor,
+  getProductionCalendarMembershipDisplayNumber,
+  getProductionCalendarMemberships,
+  getProductionCalendarStage
+} from './ProductionCalendarCard.js';
 
 function firstExisting(...values) {
   return values.find(value => value !== null && value !== undefined && value !== '');
@@ -89,6 +94,31 @@ function sourceLabel(source) {
   return source;
 }
 
+export function getProductionCalendarRelatedProductionLabel(membership) {
+  const displayNumber = getProductionCalendarMembershipDisplayNumber(membership);
+  const stage = getProductionCalendarStage(membership);
+  return [
+    displayNumber === '' ? 'Produção' : `Produção ${displayNumber}`,
+    stage ? `Etapa ${stage}` : '',
+    membership?.productionMaterialName || ''
+  ].filter(Boolean).join(' · ');
+}
+
+function appendRelatedProductions(parent, memberships) {
+  const section = document.createElement('section');
+  section.className = 'production-calendar-details-section production-calendar-details-memberships';
+  const heading = document.createElement('h3');
+  heading.textContent = 'Produções relacionadas';
+  const list = document.createElement('ul');
+  memberships.forEach(membership => {
+    const item = document.createElement('li');
+    item.textContent = getProductionCalendarRelatedProductionLabel(membership);
+    list.appendChild(item);
+  });
+  section.append(heading, list);
+  parent.appendChild(section);
+}
+
 /**
  * Read-only allocation details modal.
  *
@@ -103,6 +133,8 @@ export function ProductionCalendarDetails({ allocation, onClose } = {}) {
   overlay.setAttribute('role', 'presentation');
 
   const color = getProductionCalendarAllocationColor(allocation);
+  const memberships = getProductionCalendarMemberships(allocation);
+  const isShared = memberships.length > 1;
   const productionCode = firstExisting(
     allocation?.productionCode,
     allocation?.productionNumber,
@@ -117,6 +149,7 @@ export function ProductionCalendarDetails({ allocation, onClose } = {}) {
     allocation?.capacityMaxPerDay,
     allocation?.maxCapacityPerDay
   );
+  const productionStage = getProductionCalendarStage(allocation);
 
   const modal = document.createElement('div');
   modal.className = 'production-calendar-details-modal';
@@ -133,7 +166,9 @@ export function ProductionCalendarDetails({ allocation, onClose } = {}) {
 
   const title = document.createElement('h2');
   title.id = 'production-calendar-details-title';
-  title.textContent = productionCode ? `PRODUÇÃO ${productionCode}` : 'PRODUÇÃO';
+  title.textContent = isShared
+    ? 'PRODUÇÃO COMPARTILHADA'
+    : productionCode ? `PRODUÇÃO ${productionCode}` : 'PRODUÇÃO';
   titleGroup.appendChild(title);
 
   if (hasDisplayValue(allocation?.materialName)) {
@@ -155,17 +190,18 @@ export function ProductionCalendarDetails({ allocation, onClose } = {}) {
   const body = document.createElement('div');
   body.className = 'production-calendar-details-body';
 
+  if (isShared) appendRelatedProductions(body, memberships);
+
   appendSection(body, 'Identificação', grid => {
-    appendField(grid, 'Produção', productionCode);
+    if (!isShared) appendField(grid, 'Produção', productionCode);
     appendField(grid, 'Material', allocation?.materialName);
     appendField(grid, 'Unidade', allocation?.unit);
     appendField(grid, 'Origem', sourceLabel(allocation?.source));
   });
 
   appendSection(body, 'Programação', grid => {
+    if (!isShared) appendField(grid, 'Etapa', productionStage);
     appendField(grid, 'Data', allocation?.date ? formatProductionCalendarDate(allocation.date) : '');
-    appendField(grid, 'Horário inicial', allocation?.startTime);
-    appendField(grid, 'Horário final', allocation?.endTime);
     appendField(grid, 'Máquina', allocation?.machineName);
     appendField(grid, 'Pessoas', Number.isFinite(Number(allocation?.peopleCount)) ? Number(allocation.peopleCount) : '');
     appendField(grid, 'Sequência', shouldShowSequence(allocation?.sequence) ? Number(allocation.sequence) : '');
@@ -184,7 +220,7 @@ export function ProductionCalendarDetails({ allocation, onClose } = {}) {
     createField('planningId', allocation?.planningId)
   ].filter(Boolean);
 
-  if (technicalFields.length) {
+  if (!isShared && technicalFields.length) {
     const technical = document.createElement('details');
     technical.className = 'production-calendar-details-technical';
 

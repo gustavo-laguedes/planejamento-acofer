@@ -32,11 +32,22 @@ const MIN_DEPENDENCY_FINISH_BUFFER_MINUTES = 60;
 const DEFAULT_TEAM_AVAILABLE = 6;
 const MAX_WORKDAY_SEARCH_DAYS = 370;
 const MAX_SCHEDULE_ITERATIONS = 10000;
+const DAILY_BATCH_STOCK_EPSILON = 0.000001;
 
 function planningSimulationError(message, status = 400) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+function planningDiagnostic(code, values = {}) {
+  return {
+    code,
+    rule: 'planning_daily_batch_stock',
+    severity: 'error',
+    blocking: true,
+    ...values
+  };
 }
 
 function isDefaultShiftLabel(label = '') {
@@ -206,17 +217,10 @@ function resolveMatrix(material, matrixRows, requestedMachine, requestedPeople, 
   const rankedCandidates = () => [...candidates].sort(rankMatrixRows);
   const bestAvailable = () => rankedCandidates()[0] || null;
   if (requestedMachine || hasRequestedPeople) {
-    const hasRequestedMachine = !requestedMachine || candidates.some(row => row.machine_name === requestedMachine);
-    const requestedPeopleAvailable = !hasRequestedPeople || candidates.some(row => Number(row.people_count) === Number(requestedPeople));
-    if (!hasRequestedMachine || !requestedPeopleAvailable) {
-      return bestAvailable();
-    }
-    const requested = rankedCandidates().find(row =>
+    return rankedCandidates().find(row =>
       (!requestedMachine || row.machine_name === requestedMachine)
       && (!hasRequestedPeople || Number(row.people_count) === Number(requestedPeople))
-    );
-    if (requested) return requested;
-    return null;
+    ) || null;
   }
   return bestAvailable();
 }
@@ -234,7 +238,7 @@ function resolveMatrixCandidates(material, matrixRows, requestedMachine, request
       (!requestedMachine || row.machine_name === requestedMachine)
       && (!hasRequestedPeople || Number(row.people_count) === Number(requestedPeople))
     );
-    if (requested.length) return requested.sort(rankMatrixRows);
+    return requested.sort(rankMatrixRows);
   }
   return candidates.sort(rankMatrixRows);
 }
@@ -353,6 +357,19 @@ function stockOnlySet(payload = {}) {
   return new Set(source.map(item => stockOnlyKey(item.productionIndex ?? 0, item.materialId)));
 }
 
+function skipProductionSet(payload = {}) {
+  const source = Array.isArray(payload.skipProductionMaterials) ? payload.skipProductionMaterials : [];
+  return new Set(source.map(item => stockOnlyKey(item.productionIndex ?? 0, item.materialId)));
+}
+
+function stockChoiceMap(payload = {}) {
+  const source = Array.isArray(payload.stockOnlyMaterialChoices) ? payload.stockOnlyMaterialChoices : [];
+  return new Map(source.map(item => [
+    stockOnlyKey(item.productionIndex ?? 0, item.materialId),
+    item?.useStock === true
+  ]));
+}
+
 function selectedInputs(material, inputsByMaterialId, operationOverrides = {}, productionIndex = null) {
   const allInputs = inputsByMaterialId.get(String(material.id)) || [];
   const override = overrideForMaterial(operationOverrides, material, productionIndex);
@@ -410,8 +427,8 @@ function operationForMaterial(material, state, productionOrder, context, request
     isInitialRawMaterial: material.is_initial_raw_material === true,
     productionModelName,
     productionModelOptions: modelOptions,
-    machineName: matrix?.machine_name || null,
-    peopleCount: matrix?.people_count ?? null,
+    machineName: matrix?.machine_name || override?.machineName || requestedMachine || null,
+    peopleCount: matrix?.people_count ?? override?.peopleCount ?? requestedPeople ?? null,
     productivityOptions: productivityOptions(material, context.matrixRows),
     productionOrder,
     children: []
@@ -441,8 +458,8 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
     forceStockOnly: state.forceStockOnly === true,
     status: produceQty <= 0 ? 'Estoque suficiente' : 'Produzir diferença',
     isInitialRawMaterial: material.is_initial_raw_material === true,
-    machineName: matrix?.machine_name || null,
-    peopleCount: matrix?.people_count ?? null,
+    machineName: matrix?.machine_name || override?.machineName || requestedMachine || null,
+    peopleCount: matrix?.people_count ?? override?.peopleCount ?? requestedPeople ?? null,
     productivityOptions: productivityOptions(material, matrixRows),
     children: []
   };
@@ -493,7 +510,7 @@ function operationRank(material, context, operationOverrides = {}, stack = [], p
   ));
 }
 
-function buildAggregatedOperations({ material, quantity, context, requestedMachine, requestedPeople, operationOverrides = {}, stockLedger = makeStockLedger(context), productionIndex = 0, productionTitle = '', productionColor = null, forcedStockOnly = new Set() }) {
+function buildAggregatedOperations({ material, quantity, context, requestedMachine, requestedPeople, operationOverrides = {}, stockLedger = makeStockLedger(context), productionIndex = 0, productionTitle = '', productionColor = null, forcedStockOnly = new Set(), skippedProduction = new Set(), stockChoices = new Map() }) {
   const states = new Map();
   const MAX_REQUIREMENT_EXPANSIONS = 10000;
 
@@ -507,7 +524,8 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
         stockAvailable: 0,
         stockUsedQty: 0,
         produceQty: 0,
-        forceStockOnly: false
+        forceStockOnly: false,
+        skipProduction: false
       });
     }
     return states.get(key);
@@ -526,14 +544,20 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
     const state = stateFor(currentMaterial);
     state.requiredQty = Number((toNumber(state.requiredQty) + toNumber(item.quantity)).toFixed(6));
     const isFinalProduct = String(currentMaterial.id) === String(material.id);
-    const useStockBalance = !isFinalProduct && forcedStockOnly.has(stockOnlyKey(productionIndex, currentMaterial.id));
+    const productionKey = stockOnlyKey(productionIndex, currentMaterial.id);
+    const skipProduction = skippedProduction.has(productionKey);
     const stockQty = stockLedger.available(currentMaterial);
-    const stockUsedQty = useStockBalance ? Math.min(stockQty, toNumber(state.requiredQty)) : 0;
-    const produceQty = Math.max(toNumber(state.requiredQty) - stockUsedQty, 0);
+    const explicitStockChoice = stockChoices.has(productionKey) ? stockChoices.get(productionKey) : null;
+    const useStockBalance = !isFinalProduct
+      && explicitStockChoice !== false
+      && (forcedStockOnly.has(productionKey) || stockQty > 0);
+    const stockUsedQty = useStockBalance || skipProduction ? Math.min(Math.max(stockQty, 0), toNumber(state.requiredQty)) : 0;
+    const produceQty = skipProduction ? 0 : Math.max(toNumber(state.requiredQty) - stockUsedQty, 0);
     state.stockAvailable = stockQty;
     state.stockUsedQty = stockUsedQty;
     state.produceQty = produceQty;
-    state.forceStockOnly = useStockBalance;
+    state.forceStockOnly = useStockBalance || skipProduction;
+    state.skipProduction = skipProduction;
     const deltaProduceQty = Number((produceQty - state.expandedProduceQty).toFixed(6));
     if (deltaProduceQty <= 0 || currentMaterial.is_initial_raw_material === true) continue;
     state.expandedProduceQty = produceQty;
@@ -562,17 +586,34 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
     if (state.forceStockOnly) stockLedger.consume(state.material, state.stockUsedQty);
   }
 
+  const unavailableMaterialIds = new Set([...states.values()]
+    .filter(state => state.skipProduction && toNumber(state.requiredQty) > toNumber(state.stockUsedQty))
+    .map(state => String(state.material.id)));
+  const blockedByUnavailableDependency = (currentMaterial, stack = []) => {
+    const materialId = String(currentMaterial?.id ?? '');
+    if (!materialId || stack.includes(materialId)) return false;
+    if (unavailableMaterialIds.has(materialId)) return true;
+    if (currentMaterial?.is_initial_raw_material === true) return false;
+    const scopedMaterial = { ...currentMaterial, operationId: `${productionIndex}:${currentMaterial.id}`, productionIndex };
+    return selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex)
+      .map(input => context.materialsById.get(String(input.input_material_id)))
+      .filter(Boolean)
+      .some(inputMaterial => blockedByUnavailableDependency(inputMaterial, [...stack, materialId]));
+  };
+
   const operations = [...states.values()]
     .filter(state => state.material.is_initial_raw_material !== true)
+    .filter(state => !blockedByUnavailableDependency(state.material))
     .map(state => {
       const rank = operationRank(state.material, context, operationOverrides, [], productionIndex);
+      const isRootMaterial = String(state.material.id) === String(material.id);
       return operationForMaterial(
         state.material,
         state,
         rank,
         context,
-        requestedMachine,
-        requestedPeople,
+        isRootMaterial ? requestedMachine : null,
+        isRootMaterial ? requestedPeople : null,
         operationOverrides,
         productionIndex
       );
@@ -972,6 +1013,7 @@ function normalizeShift(shift = {}, index = 0) {
   const availableMinutes = Math.max(shiftEnd - shiftStart, 1);
   const label = shift.label || `Turno ${index + 1}`;
   return {
+    shiftId: String(shift.shiftId ?? shift.id ?? `shift-${index + 1}`),
     shiftStart,
     shiftEnd,
     lunchStart: shiftStart,
@@ -1017,7 +1059,9 @@ function normalizeDailyTeamOverrides(value = {}) {
 
 function teamAvailableForShift(shift, date, dailyTeamOverrides = {}) {
   const overrides = dailyTeamOverrides?.[date] || {};
-  const override = overrides[shift.label] ?? overrides[String(shift.label || '').replace(/^Turno\s*/i, 'T')];
+  const override = overrides[shift.shiftId]
+    ?? overrides[shift.label]
+    ?? overrides[String(shift.label || '').replace(/^Turno\s*/i, 'T')];
   return override == null ? shift.teamAvailable : Math.max(toNumber(override), 0);
 }
 
@@ -1127,6 +1171,23 @@ function scheduleBackward(cursor, durationMinutes, calendar) {
     if (remaining > 0) current = previousWorkEnd({ date: current.date, minutes: current.minutes }, calendar);
   }
   return { start: current, end };
+}
+
+function remainingWorkMinutesOnDate(cursor, calendar) {
+  if (!cursor?.date) return 0;
+  return workWindowsForDate(cursor.date, calendar)
+    .reduce((sum, window) => {
+      const start = Math.max(toNumber(cursor.minutes), window.start);
+      return sum + Math.max(window.end - start, 0);
+    }, 0);
+}
+
+function capacityForRemainingDay(cursor, capacity, calendar) {
+  const secondsPerUnit = toNumber(capacity?.secondsPerUnit);
+  if (!(secondsPerUnit > 0)) return 0;
+  const minutes = remainingWorkMinutesOnDate(cursor, calendar);
+  if (!(minutes > 0)) return 0;
+  return Math.floor(((minutes * 60) / secondsPerUnit) * 1000000) / 1000000;
 }
 
 function segmentsForOperation(operation, calendar) {
@@ -1264,21 +1325,262 @@ function operationDailyCalendarCards(operation, calendar) {
   });
 }
 
-function calendarOperationsForSchedule(operations, calendar) {
-  return (Array.isArray(operations) ? operations : []).flatMap(operation => operationDailyCalendarCards(operation, calendar));
+function makeDailyBatchStockLedger(context = {}, operations = []) {
+  const balances = new Map();
+  const futureReceipts = new Map();
+  const materialsById = context.materialsById instanceof Map ? context.materialsById : new Map();
+  const knownMaterialIds = new Set([
+    ...materialsById.keys(),
+    ...(operations || []).map(operation => String(operation?.materialId || '')).filter(Boolean)
+  ]);
+
+  function ensure(materialId) {
+    const key = String(materialId || '');
+    if (!key || balances.has(key)) return;
+    const material = materialsById.get(key);
+    balances.set(key, material ? stockForMaterial(material, context.stockRows || [], context.correctionRows || []) : 0);
+  }
+
+  knownMaterialIds.forEach(ensure);
+
+  return {
+    available(materialId, date) {
+      const key = String(materialId || '');
+      if (!key) return 0;
+      ensure(key);
+      for (const [receiptDate, entries] of [...futureReceipts.entries()].sort((left, right) => left[0].localeCompare(right[0]))) {
+        if (receiptDate > date) continue;
+        for (const entry of entries) {
+          const entryKey = String(entry.materialId || '');
+          ensure(entryKey);
+          balances.set(entryKey, Number((toNumber(balances.get(entryKey)) + toNumber(entry.quantity)).toFixed(6)));
+        }
+        futureReceipts.delete(receiptDate);
+      }
+      return toNumber(balances.get(key));
+    },
+    consume(materialId, quantity, date) {
+      const key = String(materialId || '');
+      const available = this.available(key, date);
+      const required = Math.max(toNumber(quantity), 0);
+      balances.set(key, Number(Math.max(available - required, 0).toFixed(6)));
+    },
+    receiveNextDay(materialId, quantity, date) {
+      const key = String(materialId || '');
+      const qty = Math.max(toNumber(quantity), 0);
+      if (!key || !(qty > 0)) return;
+      const receiptDate = addDays(date, 1);
+      const entries = futureReceipts.get(receiptDate) || [];
+      entries.push({ materialId: key, quantity: qty });
+      futureReceipts.set(receiptDate, entries);
+    }
+  };
 }
 
-function planningCalendarOperations(operations, calendar, payload) {
-  const calendarOperations = calendarOperationsForSchedule(operations, calendar);
+function dailyBatchRequirements(operation, dailyQuantity, context = {}) {
+  if (!context.materialsById || !context.inputsByMaterialId) return [];
+  const material = context.materialsById.get(String(operation.materialId));
+  if (!material) return [];
+  const scopedMaterial = {
+    ...material,
+    operationId: operation.splitParentOperationId || operation.calendarParentOperationId || operation.operationId || `${operation.productionIndex || 0}:${operation.materialId}`,
+    productionIndex: operation.productionIndex
+  };
+  const grouped = new Map();
+  for (const input of selectedInputs(scopedMaterial, context.inputsByMaterialId, context.operationOverrides || {}, operation.productionIndex)) {
+      const component = context.materialsById.get(String(input.input_material_id));
+      const ratio = toNumber(input.qty_per_output || 1);
+      const materialId = String(input.input_material_id);
+      const current = grouped.get(materialId) || {
+        materialId,
+        materialName: component?.name || `Material ${input.input_material_id}`,
+        materialCode: materialCode(component || {}),
+        unit: component?.primary_unit || '',
+        ratio: 0,
+        requiredQty: 0
+      };
+      current.ratio = Number((toNumber(current.ratio) + ratio).toFixed(6));
+      current.requiredQty = Number((toNumber(current.requiredQty) + (ratio * toNumber(dailyQuantity))).toFixed(6));
+      grouped.set(materialId, current);
+  }
+  return [...grouped.values()].filter(requirement => requirement.requiredQty > 0);
+}
+
+function dailyBatchStockBlock(operation, date, dailyQuantity, ledger, context) {
+  const requirements = dailyBatchRequirements(operation, dailyQuantity, context);
+  for (const requirement of requirements) {
+    const available = ledger.available(requirement.materialId, date);
+    if (available + DAILY_BATCH_STOCK_EPSILON < requirement.requiredQty) {
+      return {
+        requirement,
+        available
+      };
+    }
+  }
+  return null;
+}
+
+function consumeDailyBatchRequirements(operation, date, dailyQuantity, ledger, context) {
+  for (const requirement of dailyBatchRequirements(operation, dailyQuantity, context)) {
+    ledger.consume(requirement.materialId, requirement.requiredQty, date);
+  }
+}
+
+function buildDailyBatchDiagnostic(operation, date, dailyQuantity, remainingQuantity, capacity, block) {
+  const requirement = block?.requirement || {};
+  return planningDiagnostic('INSUFFICIENT_STOCK_FOR_FULL_DAILY_BATCH', {
+    message: `Estoque insuficiente para produzir a parcela diaria integral de ${operation.materialName || operation.materialId}.`,
+    productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
+    productionIndex: Number(operation.productionIndex || 0),
+    operationId: operation.operationId || null,
+    materialId: String(operation.materialId || ''),
+    materialName: operation.materialName || '',
+    materialCode: operation.materialCode || '',
+    machineName: operation.machineName || null,
+    peopleCount: operation.peopleCount == null ? null : Number(operation.peopleCount),
+    dailyCapacity: Number(toNumber(capacity?.capacityPerDay).toFixed(6)),
+    remainingQuantity: Number(toNumber(remainingQuantity).toFixed(6)),
+    dailyPlannedQuantity: Number(toNumber(dailyQuantity).toFixed(6)),
+    componentMaterialId: requirement.materialId || null,
+    componentMaterialName: requirement.materialName || '',
+    componentMaterialCode: requirement.materialCode || '',
+    requiredQuantity: Number(toNumber(requirement.requiredQty).toFixed(6)),
+    availableQuantity: Number(toNumber(block?.available).toFixed(6)),
+    date,
+    reason: 'INSUFFICIENT_STOCK_FOR_FULL_DAILY_BATCH'
+  });
+}
+
+function buildDailyBatchCards(operation, calendar, { stockLedger = null, context = {}, diagnostics = [] } = {}) {
+  if (!stockLedger || operation.operationType === 'transport' || operation._existingScheduleBlocker) {
+    return operationDailyCalendarCards(operation, calendar);
+  }
+  const capacity = productivityDailyCapacity({
+    output_qty: operation.outputQty,
+    time_seconds: operation.timeSeconds
+  }, calendar);
+  if (!(capacity.capacityPerDay > 0) || !(toNumber(operation.produceQty) > 0)) {
+    return operationDailyCalendarCards(operation, calendar);
+  }
+
+  const cards = [];
+  let remainingQty = toNumber(operation.produceQty);
+  let cursorDate = operation.startDate || operation.date || '';
+  const originalQty = Math.max(toNumber(operation.produceQty), 1);
+  const startTime = operation.startTime || minutesToTime(calendar.shiftStart);
+  let blockedGuard = 0;
+
+  while (remainingQty > DAILY_BATCH_STOCK_EPSILON && blockedGuard < MAX_WORKDAY_SEARCH_DAYS) {
+    if (!cursorDate) break;
+    const scheduleCalendar = calendar;
+    const dayStart = cards.length ? { date: cursorDate, minutes: scheduleCalendar.shiftStart } : {
+      date: cursorDate,
+      minutes: parseTime(startTime, minutesToTime(scheduleCalendar.shiftStart))
+    };
+    const workStart = nextWorkStart(dayStart, scheduleCalendar);
+    const remainingDayCapacity = Math.min(
+      toNumber(capacity.capacityPerDay),
+      capacityForRemainingDay(workStart, capacity, scheduleCalendar)
+    );
+    if (!(remainingDayCapacity > DAILY_BATCH_STOCK_EPSILON)) {
+      cursorDate = addDays(workStart.date, 1);
+      blockedGuard += 1;
+      continue;
+    }
+    const dailyPlannedQuantity = Number(Math.min(remainingQty, remainingDayCapacity).toFixed(6));
+    const block = dailyBatchStockBlock(operation, workStart.date, dailyPlannedQuantity, stockLedger, context);
+    if (block) {
+      diagnostics.push(buildDailyBatchDiagnostic(operation, workStart.date, dailyPlannedQuantity, remainingQty, capacity, block));
+      cursorDate = addDays(workStart.date, 1);
+      blockedGuard += 1;
+      continue;
+    }
+
+    const durationMinutes = Math.max(Math.ceil((dailyPlannedQuantity * capacity.secondsPerUnit) / 60), 1);
+    const slot = scheduleForward(workStart, durationMinutes, scheduleCalendar);
+    const dailyRatio = dailyPlannedQuantity / originalQty;
+    const index = cards.length;
+    consumeDailyBatchRequirements(operation, workStart.date, dailyPlannedQuantity, stockLedger, context);
+    stockLedger.receiveNextDay(operation.materialId, dailyPlannedQuantity, workStart.date);
+    cards.push({
+      ...operation,
+      operationId: `${operation.operationId || operation.materialId}:day-${index + 1}`,
+      productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
+      calendarParentOperationId: operation.operationId || operation.materialId,
+      calendarDayIndex: index + 1,
+      calendarDayCount: null,
+      calendarDailyCapacity: capacity,
+      capacityPercent: capacity.capacityPerDay ? Number(((dailyPlannedQuantity / capacity.capacityPerDay) * 100).toFixed(2)) : null,
+      maxDailyCapacity: Number(toNumber(capacity.capacityPerDay).toFixed(6)),
+      quantity: dailyPlannedQuantity,
+      duration: durationMinutes,
+      sequence: toNumber(operation.productionOrder) + (index / 100),
+      produceQty: dailyPlannedQuantity,
+      daysNeeded: 1,
+      startDate: slot.start.date,
+      startTime: minutesToTime(slot.start.minutes),
+      endDate: slot.end.date,
+      endTime: minutesToTime(slot.end.minutes),
+      segments: segmentsForOperation({ startDate: slot.start.date, startTime: minutesToTime(slot.start.minutes), endDate: slot.end.date, endTime: minutesToTime(slot.end.minutes) }, scheduleCalendar),
+      productionBreakdown: Array.isArray(operation.productionBreakdown)
+        ? operation.productionBreakdown.map(item => ({
+            ...item,
+            quantity: Number((toNumber(item.quantity) * dailyRatio).toFixed(6))
+          }))
+        : operation.productionBreakdown
+    });
+    remainingQty = Number(Math.max(remainingQty - dailyPlannedQuantity, 0).toFixed(6));
+    cursorDate = addDays(workStart.date, 1);
+    blockedGuard += 1;
+  }
+
+  if (remainingQty > DAILY_BATCH_STOCK_EPSILON) {
+    diagnostics.push(planningDiagnostic('INSUFFICIENT_STOCK_FOR_FULL_DAILY_BATCH', {
+      message: `Nao foi encontrada data com estoque suficiente para a parcela diaria integral de ${operation.materialName || operation.materialId}.`,
+      productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
+      productionIndex: Number(operation.productionIndex || 0),
+      operationId: operation.operationId || null,
+      materialId: String(operation.materialId || ''),
+      materialName: operation.materialName || '',
+      machineName: operation.machineName || null,
+      peopleCount: operation.peopleCount == null ? null : Number(operation.peopleCount),
+      dailyCapacity: Number(toNumber(capacity.capacityPerDay).toFixed(6)),
+      remainingQuantity: Number(remainingQty.toFixed(6)),
+      dailyPlannedQuantity: Number(Math.min(remainingQty, capacity.capacityPerDay).toFixed(6)),
+      date: cursorDate || null,
+      reason: 'INSUFFICIENT_STOCK_FOR_FULL_DAILY_BATCH'
+    }));
+  }
+
+  return cards.map((card, index) => ({ ...card, calendarDayCount: cards.length, calendarDayIndex: index + 1 }));
+}
+
+function calendarOperationsForSchedule(operations, calendar, context = null) {
+  if (!context) return (Array.isArray(operations) ? operations : []).flatMap(operation => operationDailyCalendarCards(operation, calendar));
+  const diagnostics = [];
+  const stockLedger = makeDailyBatchStockLedger(context, operations);
+  const source = (Array.isArray(operations) ? operations : []).sort((left, right) => compareOperationsByStart(left, right));
+  const calendarOperations = source.flatMap(operation => buildDailyBatchCards(operation, calendar, { stockLedger, context, diagnostics }));
+  return { calendarOperations, diagnostics };
+}
+
+function planningCalendarOperations(operations, calendar, payload, context = null) {
+  const result = calendarOperationsForSchedule(operations, calendar, context);
+  const calendarOperations = Array.isArray(result) ? result : result.calendarOperations;
   const machineNames = [...new Set((Array.isArray(operations) ? operations : [])
     .map(operation => operation.machineName)
     .filter(Boolean)
     .map(String))];
-  return buildPlanningDailyAllocations(calendarOperations, {
+  const built = buildPlanningDailyAllocations(calendarOperations, {
     planningId: payload?.planningCode || payload?.code || null,
     allocationOverrides: payload?.allocationOverrides || [],
     machines: machineNames.map(machineName => ({ machineId: machineName, machineName }))
-  }).operations;
+  });
+  const dailyOperations = built.operations;
+  if (!Array.isArray(result)) {
+    dailyOperations.diagnostics = result.diagnostics;
+  }
+  return dailyOperations;
 }
 
 function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, hoursPerDay, shiftStartTime, shiftEndTime, lunchHours, shifts, setupHours = 0, dailyTeamOverrides = {}, operationOverrides = {}, operationSplits = [], existingOperations = [], manualWorkDates = [] }) {
@@ -1324,6 +1626,23 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       const suffix = requested ? ` para ${requested}` : '';
       const error = new Error(`Nenhuma produtividade ativa encontrada para ${operation.materialName}${suffix}. Cadastre a matriz de produtividade ou selecione uma maquina/equipe valida.`);
       error.status = 404;
+      error.code = 'PRODUCTIVITY_MATRIX_CONFIGURATION_NOT_FOUND';
+      error.diagnostic = planningDiagnostic('PRODUCTIVITY_MATRIX_CONFIGURATION_NOT_FOUND', {
+        message: error.message,
+        productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
+        productionIndex: Number(operation.productionIndex || 0),
+        operationId: operation.operationId || null,
+        materialId: String(operation.materialId || ''),
+        materialName: operation.materialName || '',
+        materialCode: operation.materialCode || '',
+        machineName: requestedMachine || operation.machineName || null,
+        peopleCount: requestedPeople == null || requestedPeople === '' ? null : Number(requestedPeople),
+        dailyCapacity: 0,
+        remainingQuantity: Number(toNumber(operation.produceQty || operation.requiredQty).toFixed(6)),
+        dailyPlannedQuantity: 0,
+        date: null,
+        reason: 'PRODUCTIVITY_MATRIX_CONFIGURATION_NOT_FOUND'
+      });
       throw error;
     }
     if (!matrix.machine_name || !Number.isInteger(Number(matrix.people_count)) || Number(matrix.people_count) < 0 || !(toNumber(matrix.output_qty) > 0)) {
@@ -1352,6 +1671,7 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
   const byOperationId = new Map(enriched.map(operation => [String(operation.operationId || operation.materialId), operation]));
   const hasManualStart = enriched.some(operation => operation.startDate || overrideForMaterial(operationOverrides, operation)?.startDate);
   const scheduledByMaterialId = new Map();
+  const dependencyReservedQtyByOperationId = new Map();
 
   function cursorAfterProgress(operation, ratio) {
     if (!operation || operation.operationType === 'transport') {
@@ -1380,7 +1700,8 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     if (!(produceQty > 0)) {
       return { date: operation.endDate, minutes: parseTime(operation.endTime, minutesToTime(shiftStart)) };
     }
-    return cursorAfterProgress(operation, Math.min((requiredQty - stockAvailable) / produceQty, 1));
+    const producedReady = cursorAfterProgress(operation, Math.min((requiredQty - stockAvailable) / produceQty, 1));
+    return nextWorkStart({ date: addDays(producedReady.date, 1), minutes: 0 }, calendar);
   }
 
   function dependencyRequirementsFor(operation) {
@@ -1393,14 +1714,45 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       }));
   }
 
+  function dependencyStartQuantity(operation, requirement, dependency) {
+    const totalRequiredQty = toNumber(requirement.requiredQty || dependency?.produceQty || dependency?.requiredQty);
+    if (!(totalRequiredQty > 0)) return 0;
+    if (operation.operationType === 'transport' || dependency?.operationType === 'transport') return totalRequiredQty;
+
+    const consumerTotalQty = Math.max(toNumber(operation.produceQty || operation.requiredQty), 0);
+    const consumerDailyQty = Math.max(toNumber(operation.dailyCapacity?.capacityPerDay), 0);
+    if (!(consumerTotalQty > 0) || !(consumerDailyQty > 0)) return totalRequiredQty;
+
+    const oneDayBatchRatio = Math.min(consumerDailyQty, consumerTotalQty) / consumerTotalQty;
+    return Math.min(totalRequiredQty, totalRequiredQty * oneDayBatchRatio);
+  }
+
+  function dependencyReservationKey(requirement) {
+    return String(requirement.operationId || requirement.materialId || '');
+  }
+
+  function dependencyReservedQuantity(requirement) {
+    return toNumber(dependencyReservedQtyByOperationId.get(dependencyReservationKey(requirement)));
+  }
+
+  function reserveDependencies(operation) {
+    for (const requirement of dependencyRequirementsFor(operation)) {
+      const key = dependencyReservationKey(requirement);
+      if (!key) continue;
+      dependencyReservedQtyByOperationId.set(
+        key,
+        Number((dependencyReservedQuantity(requirement) + toNumber(requirement.requiredQty)).toFixed(6))
+      );
+    }
+  }
+
   function dependencyReadyCursor(operation) {
     return maxCursor(...dependencyRequirementsFor(operation)
       .map(requirement => {
         const item = scheduledByMaterialId.get(String(requirement.operationId || requirement.materialId));
         if (!item) return null;
-        const minimumQty = operation.operationType === 'transport' || item.operationType === 'transport'
-          ? toNumber(requirement.requiredQty || item.produceQty || item.requiredQty)
-          : toNumber(requirement.requiredQty || item.produceQty || item.requiredQty) * 0.3;
+        const minimumQty = dependencyReservedQuantity(requirement)
+          + dependencyStartQuantity(operation, requirement, item);
         return cursorAfterAvailableQty(item, minimumQty);
       })
       .filter(Boolean));
@@ -1409,7 +1761,8 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
   function dependencyCompleteCursor(requirement) {
     const item = scheduledByMaterialId.get(String(requirement.operationId || requirement.materialId));
     if (!item) return null;
-    return cursorAfterAvailableQty(item, toNumber(requirement.requiredQty || item.produceQty || item.requiredQty));
+    const requiredQty = toNumber(requirement.requiredQty || item.produceQty || item.requiredQty);
+    return cursorAfterAvailableQty(item, dependencyReservedQuantity(requirement) + requiredQty);
   }
 
   function dependencySafeFinishCursor(operation, scheduleCalendar) {
@@ -1580,7 +1933,8 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       const conflicts = [];
       for (const matrix of candidates) {
         const candidate = matrix ? applyMatrixToOperation(operation, matrix, scheduleCalendar) : operation;
-        const slot = scheduleForward(nextCursor, candidate.totalMinutes, scheduleCalendar);
+        const candidateCursor = maxCursor(nextCursor, dependencyReadyCursor(candidate));
+        const slot = scheduleForward(candidateCursor, candidate.totalMinutes, scheduleCalendar);
         const machineBlock = machineConflict(candidate, slot, scheduleCalendar);
         if (machineBlock) {
           conflicts.push(machineBlock);
@@ -1623,15 +1977,15 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       guard += 1;
       const index = pending.findIndex(predecessorsDone);
       const operation = pending.splice(index >= 0 ? index : 0, 1)[0];
-      const dependencyEnd = dependencyReadyCursor(operation);
       const override = overrideForMaterial(operationOverrides, operation);
       const operationCursor = operation.startDate ? { date: operation.startDate, minutes: parseTime(operation.startTime, minutesToTime(shiftStart)) } : null;
       const overrideCursor = overrideStartCursor(override, startCursor.date, shiftStart) || operationCursor;
-      const cursor = maxCursor(overrideCursor || startCursor, dependencyEnd);
+      const cursor = overrideCursor || startCursor;
       const operationCalendar = calendar;
       const scheduledSlot = scheduleForwardWithCapacity(cursor, operation, operationCalendar);
       const item = scheduledItem(scheduledSlot.operation, scheduledSlot.slot, operationCalendar);
       scheduledByMaterialId.set(String(operation.operationId || operation.materialId), item);
+      reserveDependencies(scheduledSlot.operation);
       scheduled.push(item);
     }
     if (pending.length) {
@@ -1724,6 +2078,26 @@ function buildDays(operations, plannedUnit) {
   });
 }
 
+export function buildStoredAutomaticPlanningSnapshot(plan = {}, operationsValue = []) {
+  const operations = JSON.parse(JSON.stringify(Array.isArray(operationsValue) ? operationsValue : []));
+  const meta = operations.find(operation => operation?._planningMeta)?._planningMeta || {};
+  const shifts = Array.isArray(meta.shifts) ? meta.shifts : [];
+  const calendar = calendarFromPayload({
+    shifts,
+    hoursPerDay: plan.hours_per_day,
+    shiftStartTime: shifts[0]?.shiftStartTime,
+    shiftEndTime: shifts.at(-1)?.shiftEndTime,
+    manualWorkDates: Array.isArray(meta.manualWorkDates) ? meta.manualWorkDates : []
+  });
+  return {
+    operations,
+    calendarOperations: planningCalendarOperations(operations, calendar, {
+      planningCode: plan.code || plan.id
+    }),
+    days: buildDays(operations, plan.planned_unit)
+  };
+}
+
 function operationCursorValue(operation) {
   return {
     date: operation.startDate || operation.endDate || '9999-12-31',
@@ -1780,10 +2154,12 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
       ? operations.findIndex(operation => String(operation.startDate || '') >= capacityStartDate)
       : 0;
   const meta = operations.find(operation => operation?._planningMeta)?.['_planningMeta'] || {};
-  const dailyTeamOverrides = normalizeDailyTeamOverrides({
-    ...(meta.dailyTeamOverrides || {}),
-    ...(change.dailyTeamOverrides || {})
-  });
+  const dailyTeamOverrides = normalizeDailyTeamOverrides(change.replaceDailyTeamOverrides === true
+    ? (change.dailyTeamOverrides || {})
+    : {
+        ...(meta.dailyTeamOverrides || {}),
+        ...(change.dailyTeamOverrides || {})
+      });
   const manualWorkDates = normalizeManualWorkDates(change.manualWorkDates || meta.manualWorkDates || []);
   if (change.capacityDate && change.capacityOverrides) {
     dailyTeamOverrides[change.capacityDate] = {
@@ -1800,6 +2176,11 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
         : operation);
       return {
         operations: scheduled,
+        calendarOperations: planningCalendarOperations(
+          scheduled,
+          calendarFromPayload({ shifts, manualWorkDates }),
+          { planningCode: plan.code || plan.id }
+        ),
         days: buildDays(scheduled, plan.planned_unit),
         summary: {
           planningStartDate: plan.start_date,
@@ -1817,7 +2198,7 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const targetDate = change.startDate || change.date || targetOperation.startDate;
+  const targetDate = change.startDate || change.date || capacityStartDate || targetOperation.startDate;
   if (targetOperation.startDate < today || targetDate < today) {
     const error = new Error('Produções anteriores a hoje são somente leitura.');
     error.status = 400;
@@ -1829,10 +2210,10 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
     machineName: change.machineName || targetOperation.machineName,
     peopleCount: change.peopleCount == null ? targetOperation.peopleCount : Number(change.peopleCount),
     productionModelName: change.productionModelName || targetOperation.productionModelName,
-    startDate: change.startDate || targetOperation.startDate,
-    startTime: change.startTime || targetOperation.startTime
+    startDate: change.startDate || capacityStartDate || targetOperation.startDate,
+    startTime: change.startTime || (capacityStartDate ? null : targetOperation.startTime)
   };
-  const movedBackward = compareCursor(
+  const movedBackward = !capacityStartDate && compareCursor(
     { date: changedOperation.startDate, minutes: parseTime(changedOperation.startTime, minutesToTime(calendarFromPayload({ shifts: meta.shifts || fallbackShiftsForSavedPlan(plan, operations) }).shiftStart)) },
     { date: targetOperation.startDate, minutes: parseTime(targetOperation.startTime, '00:00') }
   ) < 0;
@@ -1865,6 +2246,11 @@ export function rescheduleSavedPlan(plan, operationsValue, change = {}, matrixRo
   const days = buildDays(scheduled, plan.planned_unit);
   return {
     operations: scheduled,
+    calendarOperations: planningCalendarOperations(
+      scheduled,
+      calendarFromPayload({ shifts, manualWorkDates }),
+      { planningCode: plan.code || plan.id }
+    ),
     days,
     summary: {
       planningStartDate: plan.start_date,
@@ -1903,7 +2289,9 @@ function buildSinglePlan(payload, context) {
     stockLedger,
     productionIndex: 0,
     productionTitle: 'Produção 1',
-    forcedStockOnly: stockOnlySet(payload)
+    forcedStockOnly: stockOnlySet(payload),
+    skippedProduction: skipProductionSet(payload),
+    stockChoices: stockChoiceMap(payload)
   });
   const production = {
     ...payload,
@@ -1948,6 +2336,14 @@ function buildSinglePlan(payload, context) {
   });
   const manualWorkDates = normalizeManualWorkDates(payload.manualWorkDates);
   const days = buildDays(operations, material.primary_unit);
+  const calendarOperations = planningCalendarOperations(operations, scheduleCalendar, payload, {
+    ...context,
+    operationOverrides
+  });
+  const diagnostics = {
+    errors: calendarOperations.diagnostics || [],
+    warnings: []
+  };
   const hoursPerDay = shiftAvailableHours({
     hoursPerDay: payload.hoursPerDay,
     shiftStartTime: payload.shiftStartTime,
@@ -1994,7 +2390,8 @@ function buildSinglePlan(payload, context) {
     operations: operations.map((operation, index) => index === 0
       ? { ...operation, _planningMeta: { shifts: Array.isArray(payload.shifts) && payload.shifts.length ? payload.shifts : [{ hoursPerDay: payload.hoursPerDay, shiftStartTime: payload.shiftStartTime, shiftEndTime: payload.shiftEndTime, pauseHours: 0 }], setupHours: toOperationalHours(payload.setupHours || 0), dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides), manualWorkDates } }
       : operation),
-    calendarOperations: planningCalendarOperations(operations, scheduleCalendar, payload),
+    calendarOperations,
+    diagnostics,
     days
   };
 }
@@ -2107,6 +2504,8 @@ export function buildPlan(payload, context) {
 
   const stockLedger = makeStockLedger(context);
   const forcedStockOnly = stockOnlySet(payload);
+  const skippedProduction = skipProductionSet(payload);
+  const stockChoices = stockChoiceMap(payload);
   const builtProductions = productions.map(production => {
     const productionTitle = production.productionTitle || `Produção ${production.productionIndex + 1}`;
     const built = buildAggregatedOperations({
@@ -2120,7 +2519,9 @@ export function buildPlan(payload, context) {
       productionIndex: production.productionIndex,
       productionTitle,
       productionColor: production.color || null,
-      forcedStockOnly
+      forcedStockOnly,
+      skippedProduction,
+      stockChoices
     });
     const tree = buildRequirementTree({
       material: production.material,
@@ -2191,6 +2592,14 @@ export function buildPlan(payload, context) {
   const finalOperation = operations[operations.length - 1];
   const uniqueDaysNeeded = new Set(days.map(day => day.planned_date)).size;
   const plannedQty = productions.reduce((sum, production) => sum + production.plannedQty, 0);
+  const calendarOperations = planningCalendarOperations(operations, scheduleCalendar, payload, {
+    ...context,
+    operationOverrides
+  });
+  const diagnostics = {
+    errors: calendarOperations.diagnostics || [],
+    warnings: []
+  };
 
   return {
     code: payload.planningCode || codeForPlan(new Date(), productions.length),
@@ -2238,9 +2647,10 @@ export function buildPlan(payload, context) {
     },
     tree,
     operations: operations.map((operation, index) => index === 0
-      ? { ...operation, _planningMeta: { shifts, setupHours: toOperationalHours(payload.setupHours || 0), dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides), manualWorkDates, productions: productions.map(production => ({ productionIndex: production.productionIndex, productionKey: `production-${production.productionIndex}`, title: production.productionTitle || `ProduÃ§Ã£o ${production.productionIndex + 1}`, color: production.color || null, materialId: production.material.id, materialName: production.material.name, materialCode: materialCode(production.material), plannedQty: production.plannedQty, plannedUnit: production.material.primary_unit, machineName: production.machineName || null, peopleCount: production.peopleCount == null || production.peopleCount === '' ? null : Number(production.peopleCount), desiredDate: production.desiredDate || null, productionModelName: production.productionModelName || null })) } }
+      ? { ...operation, _planningMeta: { shifts, setupHours: toOperationalHours(payload.setupHours || 0), dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides), manualWorkDates, productions: productions.map(production => ({ productionIndex: production.productionIndex, productionKey: `production-${production.productionIndex}`, title: production.productionTitle || `Produção ${production.productionIndex + 1}`, color: production.color || null, materialId: production.material.id, materialName: production.material.name, materialCode: materialCode(production.material), plannedQty: production.plannedQty, plannedUnit: production.material.primary_unit, machineName: production.machineName || null, peopleCount: production.peopleCount == null || production.peopleCount === '' ? null : Number(production.peopleCount), desiredDate: production.desiredDate || null, productionModelName: production.productionModelName || null })) } }
       : operation),
-    calendarOperations: planningCalendarOperations(operations, scheduleCalendar, payload),
+    calendarOperations,
+    diagnostics,
     days
   };
 }

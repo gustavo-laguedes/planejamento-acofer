@@ -69,7 +69,7 @@ function context(overrides = {}) {
     dailyTeamOverrides: {},
     manualWorkDates: [],
     setupMinutes: 0,
-    minimumStartRatio: 0.30,
+    minimumStartRatio: 1,
     dependencyCompletionBufferMinutes: 60,
     holidays: [],
     timezone: 'America/Sao_Paulo',
@@ -114,6 +114,14 @@ function totalsByParent(allocations = []) {
 
 function move(id, date, machineId = 'M1', source = 'drag') {
   return { type: 'MOVE_ALLOCATION', allocationId: id, targetDate: date, targetMachineId: machineId, source };
+}
+
+function stockOnlyMove(id, date, machineId = 'M1', overrides = {}) {
+  return {
+    ...move(id, date, machineId),
+    manualMovePolicy: 'stock_only_independent',
+    ...overrides
+  };
 }
 
 // A. Movimento válido em draft realista: múltiplas máquinas e produção multi-dia.
@@ -172,7 +180,7 @@ const dependency = {
   unit: 'kg'
 };
 
-// B/C. Estoque insuficiente e compromisso mínimo de 30% recusam sem alteração parcial.
+// B/C. Estoque insuficiente e compromisso do lote diário integral recusam sem alteração parcial.
 for (const stock of [[], [{ materialId: 'RAW', quantity: 1, unit: 'kg' }]]) {
   const previous = dependentDraft();
   const bytes = JSON.stringify(previous);
@@ -269,6 +277,44 @@ for (const stock of [[], [{ materialId: 'RAW', quantity: 1, unit: 'kg' }]]) {
   assert.equal(result.draft.allocations.find(item => item.allocationId === 'replace-moved').date, '2026-07-14');
   assert.notEqual(result.draft.allocations.find(item => item.allocationId === 'replace-occupant').date, '2026-07-14');
   assert.equal(result.draft.allocations.find(item => item.allocationId === 'already-pinned').pinned, true);
+}
+
+// J1. Substituicao manual empurra a fila para os dias seguintes sem abrir buracos.
+{
+  const previous = draft([
+    allocation('push-moved', { materialId: 'RAW', date: '2026-07-13' }),
+    allocation('push-occupant-1', { materialId: 'OTHER', date: '2026-07-14' }),
+    allocation('push-occupant-2', { materialId: 'OTHER', date: '2026-07-15' })
+  ]);
+  const result = transact(previous, move('push-moved', '2026-07-14'), {}, { confirmReplace: true });
+  assert.equal(result.accepted, true, JSON.stringify(result.blockingIssues));
+  assert.equal(result.draft.allocations.find(item => item.allocationId === 'push-moved').date, '2026-07-14');
+  assert.equal(result.draft.allocations.find(item => item.allocationId === 'push-occupant-1').date, '2026-07-15');
+  assert.equal(result.draft.allocations.find(item => item.allocationId === 'push-occupant-2').date, '2026-07-16');
+}
+
+// A confirmação de substituição precede a validação cronológica do candidato definitivo.
+{
+  const previous = draft([
+    allocation('replace-order-moved', { materialId: 'RAW', date: '2026-07-13' }),
+    allocation('replace-order-occupant', { materialId: 'OTHER', date: '2026-07-14' })
+  ]);
+  const intent = move('replace-order-moved', '2026-07-14');
+  const validationContext = { holidays: ['2026-07-14'] };
+  const decision = transact(previous, intent, validationContext);
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.decisionRequired, true);
+  assert.equal(decision.decisionContext.code, 'CONFIRM_REPLACE');
+  assert.deepEqual(decision.blockingIssues, []);
+  assert.equal(decision.decisionContext.sourceAllocation.date, '2026-07-13');
+  assert.equal(decision.decisionContext.proposedAllocation.date, '2026-07-14');
+  assert.equal(decision.decisionContext.occupyingAllocation.date, '2026-07-14');
+
+  const validated = transact(previous, intent, validationContext, { confirmReplace: true });
+  assert.equal(validated.accepted, false);
+  assert.equal(validated.decisionRequired, false);
+  assert.ok(validated.blockingIssues.some(item => item.code === 'NON_WORKING_DATE_NOT_RELEASED'));
+  assert.equal(JSON.stringify(validated.draft), JSON.stringify(previous));
 }
 
 // J2. Substituição sem qualquer próximo dia útil faz rollback integral.
@@ -389,7 +435,7 @@ for (const stock of [[], [{ materialId: 'RAW', quantity: 1, unit: 'kg' }]]) {
   });
 }
 
-// Dependência de 30%: diagnóstico relaciona produtor/consumidor e o caso válido é aceito.
+// Dependência por lote diário integral: diagnóstico relaciona produtor/consumidor e o caso válido é aceito.
 {
   const previous = dependentDraft();
   const bytes = JSON.stringify(previous);
@@ -428,6 +474,83 @@ for (const stock of [[], [{ materialId: 'RAW', quantity: 1, unit: 'kg' }]]) {
   const result = applyManualScheduleTransaction({ currentDraft: previous, intent: move('missing-context', '2026-07-14') });
   assert.equal(result.accepted, false);
   assert.ok(result.blockingIssues.some(item => item.code === 'MISSING_VALIDATION_CONTEXT'));
+}
+
+// E. Edicao explicita de quantidade recalcula duracao e capacidade do card.
+{
+  const previous = draft([allocation('edit-quantity', { quantity: 5, durationMinutes: 270, capacityPercent: 50 })]);
+  const result = transact(previous, {
+    type: 'EDIT_ALLOCATION',
+    allocationId: 'edit-quantity',
+    machineId: 'M1',
+    peopleCount: 2,
+    quantity: 8,
+    date: '2026-07-13',
+    startTime: '08:00'
+  });
+  assert.equal(result.accepted, true, JSON.stringify(result.blockingIssues));
+  const edited = result.draft.allocations.find(item => item.allocationId === 'edit-quantity');
+  assert.equal(edited.quantity, 8);
+  assert.equal(edited.capacityPercent, 80);
+  assert.equal(edited.durationMinutes, 432);
+  assert.equal(edited.pinned, true);
+}
+
+// Novo editor manual: movimento independente valida somente estoque do bloco e nao desloca ocupantes.
+{
+  const previous = draft([
+    allocation('stock-moved', { parentOperationId: 'op:consumer', materialId: 'FINAL', date: '2026-07-13' }),
+    allocation('stock-occupant', { parentOperationId: 'op:occupant', materialId: 'OTHER', date: '2026-07-14' })
+  ]);
+  const result = transact(previous, stockOnlyMove('stock-moved', '2026-07-14'), {
+    dependencies: [dependency],
+    stock: [{ materialId: 'RAW', quantity: 100, unit: 'kg' }]
+  });
+  assert.equal(result.accepted, true, JSON.stringify(result.blockingIssues));
+  assert.equal(result.draft.allocations.find(item => item.allocationId === 'stock-moved').date, '2026-07-14');
+  assert.equal(result.draft.allocations.find(item => item.allocationId === 'stock-occupant').date, '2026-07-14');
+  assert.equal(result.draft.lastManualAction, 'independent_move');
+}
+
+// Novo editor manual: estoque zero bloqueia totalmente e informa maximo zero.
+{
+  const previous = draft([allocation('stock-zero', { parentOperationId: 'op:consumer', materialId: 'FINAL' })]);
+  const result = transact(previous, stockOnlyMove('stock-zero', '2026-07-14'), {
+    dependencies: [dependency],
+    stock: []
+  });
+  assert.equal(result.accepted, false);
+  assert.equal(result.validation.manualMoveStockAnalysis.maxQuantity, 0);
+  assert.ok(result.blockingIssues.some(item => item.code === 'STOCK_COMMITMENT_SHORTAGE'));
+  assert.equal(JSON.stringify(result.draft), JSON.stringify(previous));
+}
+
+// Novo editor manual: estoque parcial calcula quantidade maxima e split confirmado preserva o restante.
+{
+  const previous = draft([allocation('stock-partial', { parentOperationId: 'op:consumer', materialId: 'FINAL', quantity: 5 })]);
+  const partial = transact(previous, stockOnlyMove('stock-partial', '2026-07-14'), {
+    dependencies: [dependency],
+    stock: [{ materialId: 'RAW', quantity: 2, unit: 'kg' }]
+  });
+  assert.equal(partial.accepted, false);
+  assert.equal(partial.validation.manualMoveStockAnalysis.maxQuantity, 2);
+
+  const split = transact(previous, stockOnlyMove('stock-partial', '2026-07-14', 'M1', {
+    quantity: 2,
+    remainderDate: '2026-07-15'
+  }), {
+    dependencies: [dependency],
+    stock: [{ materialId: 'RAW', quantity: 5, unit: 'kg' }]
+  });
+  assert.equal(split.accepted, true, JSON.stringify(split.blockingIssues));
+  const moved = split.draft.allocations.find(item => item.allocationId === 'stock-partial');
+  const remainder = split.draft.allocations.find(item => item.allocationId !== 'stock-partial');
+  assert.equal(moved.date, '2026-07-14');
+  assert.equal(moved.quantity, 2);
+  assert.equal(remainder.date, '2026-07-15');
+  assert.equal(remainder.quantity, 3);
+  assert.deepEqual(totalsByParent(split.draft.allocations), totalsByParent(previous.allocations));
+  assert.equal(split.draft.lastManualAction, 'stock_split_move');
 }
 
 console.log('manualScheduleTransaction.service.test.js ok');

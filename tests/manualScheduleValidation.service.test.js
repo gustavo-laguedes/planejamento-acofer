@@ -26,7 +26,7 @@ function validate(allocations, options = {}) {
     operations: options.operations || [],
     dependencies: options.dependencies || [],
     transports: options.transports || [],
-    minimumStartRatio: options.minimumStartRatio ?? 0.30,
+    minimumStartRatio: 1,
     dependencyCompletionBufferMinutes: options.dependencyCompletionBufferMinutes ?? 60,
     ...(Object.hasOwn(options, 'stock') ? { stock: options.stock } : {}),
     ...(Object.hasOwn(options, 'stockMinimums') ? { stockMinimums: options.stockMinimums } : {}),
@@ -229,17 +229,17 @@ function codes(result) {
   );
 }
 
-// Dependências A. O produtor atinge 30% antes do consumidor e conclui com buffer.
+// Dependências A. O produtor forma o lote diário integral antes do consumidor e conclui com buffer.
 {
   const result = validate([
     productionAllocation({ allocationId: 'pa', parentOperationId: 'P', materialId: 'MAT', quantity: 100, startTime: '08:00', endTime: '10:00', machineId: 'MP' }),
-    productionAllocation({ allocationId: 'ca', parentOperationId: 'C', materialId: 'OUT', quantity: 100, startTime: '08:40', endTime: '12:00', machineId: 'MC' })
+    productionAllocation({ allocationId: 'ca', parentOperationId: 'C', materialId: 'OUT', quantity: 100, startTime: '10:00', endTime: '12:00', machineId: 'MC' })
   ], { dependencies: [dependency('d-a', 'P', 'C', 'MAT', 100)] });
   assert.equal(result.valid, true);
   assert.equal(result.dependencyStatus.byDependencyId['d-a'].state, 'ok');
 }
 
-// B. Consumidor inicia antes de 30%.
+// B. Consumidor inicia antes de o lote diário integral estar disponível.
 {
   const result = validate([
     productionAllocation({ allocationId: 'pb', parentOperationId: 'P', materialId: 'MAT', quantity: 100, startTime: '08:00', endTime: '10:00', machineId: 'MP' }),
@@ -279,29 +279,29 @@ function codes(result) {
   assert.equal(firstIssue.details.individualDemands.length, 2);
 }
 
-// E. Produção parcial alimenta o consumidor quando sua taxa é suficiente.
+// E. O consumidor inicia assim que o produtor completa seu lote diário integral.
 {
   const result = validate([
     productionAllocation({ allocationId: 'pe', parentOperationId: 'P', materialId: 'MAT', quantity: 120, startTime: '08:00', endTime: '12:00', machineId: 'M1' }),
-    productionAllocation({ allocationId: 'ce', parentOperationId: 'C', materialId: 'OUT', quantity: 80, startTime: '09:00', endTime: '13:00', machineId: 'M2' })
+    productionAllocation({ allocationId: 'ce', parentOperationId: 'C', materialId: 'OUT', quantity: 80, startTime: '10:40', endTime: '14:40', machineId: 'M2' })
   ], { dependencies: [dependency('d-e', 'P', 'C', 'MAT', 80)] });
   assert.equal(result.valid, true);
 }
 
-// F. Consumidor mais rápido do que o insumo é bloqueado.
+// F. Consumidor sem o lote diário integral é bloqueado já no início.
 {
   const result = validate([
     productionAllocation({ allocationId: 'pf', parentOperationId: 'P', materialId: 'MAT', quantity: 100, startTime: '08:00', endTime: '12:00', machineId: 'M1' }),
     productionAllocation({ allocationId: 'cf', parentOperationId: 'C', materialId: 'OUT', quantity: 80, startTime: '09:30', endTime: '11:30', machineId: 'M2' })
   ], { dependencies: [dependency('d-f', 'P', 'C', 'MAT', 80)] });
-  assert.ok(codes(result).includes('DEPENDENCY_FULL_QUANTITY_NOT_AVAILABLE'));
+  assert.ok(codes(result).includes('DEPENDENCY_MINIMUM_NOT_AVAILABLE'));
 }
 
 // G. Quantidade integral precisa respeitar o buffer produtivo padrão.
 {
   const result = validate([
     productionAllocation({ allocationId: 'pg', parentOperationId: 'P', materialId: 'MAT', quantity: 100, startTime: '08:00', endTime: '12:00', machineId: 'M1' }),
-    productionAllocation({ allocationId: 'cg', parentOperationId: 'C', materialId: 'OUT', quantity: 100, startTime: '11:00', endTime: '12:30', machineId: 'M2' })
+    productionAllocation({ allocationId: 'cg', parentOperationId: 'C', materialId: 'OUT', quantity: 100, startTime: '12:00', endTime: '12:30', machineId: 'M2' })
   ], { dependencies: [dependency('d-g', 'P', 'C', 'MAT', 100)] });
   assert.ok(result.errors.some(error => error.code === 'DEPENDENCY_FULL_QUANTITY_NOT_AVAILABLE' && error.rule === 'dependency_completion_buffer'));
 }
@@ -311,7 +311,7 @@ function codes(result) {
   const result = validate([
     productionAllocation({ allocationId: 'ph1', parentOperationId: 'P1', materialId: 'MAT', quantity: 50, startTime: '08:00', endTime: '10:00', machineId: 'M1', sourceParentOperationIds: ['P1', 'P2'] }),
     productionAllocation({ allocationId: 'ph2', parentOperationId: 'P2', materialId: 'MAT', quantity: 50, startTime: '08:00', endTime: '10:00', machineId: 'M2', sourceParentOperationIds: ['P1', 'P2'] }),
-    productionAllocation({ allocationId: 'ch', parentOperationId: 'C', materialId: 'OUT', quantity: 100, startTime: '08:40', endTime: '12:00', machineId: 'M3' })
+    productionAllocation({ allocationId: 'ch', parentOperationId: 'C', materialId: 'OUT', quantity: 100, startTime: '10:00', endTime: '12:00', machineId: 'M3' })
   ], { dependencies: [dependency('d-h', 'P1', 'C', 'MAT', 100, { sourceParentOperationIds: ['P1', 'P2'] })] });
   assert.equal(result.valid, true);
   assert.deepEqual(result.dependencyStatus.byDependencyId['d-h'].producerAllocationIds, ['ph1', 'ph2']);
@@ -321,8 +321,8 @@ function codes(result) {
 {
   const allocations = [
     productionAllocation({ allocationId: 'pi-a', parentOperationId: 'A', materialId: 'MA', quantity: 100, startTime: '08:00', endTime: '09:00', machineId: 'M1' }),
-    productionAllocation({ allocationId: 'pi-b', parentOperationId: 'B', materialId: 'MB', quantity: 100, startTime: '09:30', endTime: '11:30', machineId: 'M2' }),
-    productionAllocation({ allocationId: 'pi-c', parentOperationId: 'C', materialId: 'MC', quantity: 100, startTime: '10:10', endTime: '13:00', machineId: 'M3' })
+    productionAllocation({ allocationId: 'pi-b', parentOperationId: 'B', materialId: 'MB', quantity: 100, startTime: '09:30', endTime: '10:30', machineId: 'M2' }),
+    productionAllocation({ allocationId: 'pi-c', parentOperationId: 'C', materialId: 'MC', quantity: 100, startTime: '10:30', endTime: '13:00', machineId: 'M3' })
   ];
   const chain = validate(allocations, { dependencies: [dependency('ab', 'A', 'B', 'MA', 100), dependency('bc', 'B', 'C', 'MB', 100)] });
   assert.equal(chain.valid, true);
@@ -395,7 +395,7 @@ function codes(result) {
     operations: [],
     dependencies: [dependency('dq', 'P', 'C', 'MAT', 100)],
     transports: [],
-    minimumStartRatio: 0.30,
+    minimumStartRatio: 1,
     dependencyCompletionBufferMinutes: 60
   };
   const before = JSON.stringify(input);
@@ -429,7 +429,7 @@ function codes(result) {
   assert.equal(previous.valid, true);
   const partial = validate([
     productionAllocation({ allocationId: 'stock-pe', parentOperationId: 'P', materialId: 'MAT', quantity: 120, startTime: '08:00', endTime: '12:00', machineId: 'MP' }),
-    productionAllocation({ allocationId: 'stock-ce', parentOperationId: 'C', materialId: 'OUT', quantity: 80, startTime: '09:00', endTime: '13:00', machineId: 'MC' })
+    productionAllocation({ allocationId: 'stock-ce', parentOperationId: 'C', materialId: 'OUT', quantity: 80, startTime: '10:40', endTime: '14:40', machineId: 'MC' })
   ], { dependencies: [dependency('sd-e', 'P', 'C', 'MAT', 80)], stock: [] });
   assert.equal(partial.valid, true);
 }
@@ -540,13 +540,37 @@ function codes(result) {
   assert.ok(codes(invalidUnit).includes('INVALID_STOCK_UNIT'));
 }
 
+// Local agregado e local real preservam detalhes técnicos sem expor IDs crus na mensagem.
+{
+  const aggregated = validate([], {
+    stock: [{ materialId: 'MAT', quantity: 10, unit: 'kg' }],
+    stockMinimums: [],
+    stockLocations: [{ locationId: 'L1' }]
+  });
+  const aggregatedIssue = aggregated.errors.find(item => item.code === 'STOCK_LOCATION_MISMATCH');
+  assert.equal(aggregatedIssue.locationId, '__default__');
+  assert.equal(aggregatedIssue.message, 'O estoque agregado do material não está configurado corretamente.');
+  assert.ok(!aggregatedIssue.message.includes('__default__'));
+  assert.deepEqual(aggregatedIssue.details.configuredLocations, ['L1']);
+
+  const named = validate([], {
+    stock: [{ materialId: 'MAT', locationId: 'LOC-INTERNO-9', locationName: 'Almoxarifado', quantity: 10, unit: 'kg' }],
+    stockMinimums: [],
+    stockLocations: [{ locationId: 'L1' }]
+  });
+  const namedIssue = named.errors.find(item => item.code === 'STOCK_LOCATION_MISMATCH');
+  assert.equal(namedIssue.locationId, 'LOC-INTERNO-9');
+  assert.match(namedIssue.message, /Almoxarifado/);
+  assert.ok(!namedIssue.message.includes('LOC-INTERNO-9'));
+}
+
 // Ledger R/T. Precisão decimal, imutabilidade e determinismo.
 {
   const input = {
     draft: { allocations: [productionAllocation({ allocationId: 'stock-dec', parentOperationId: 'C', materialId: 'OUT', quantity: 1, startTime: '08:00', endTime: '09:00', machineId: 'MC' })] },
     shifts: dayShift, manualWorkDates: [], holidays: [], timezone, operations: [],
     dependencies: [dependency('sd-dec', 'P', 'C', 'MAT', 0.12345678)], transports: [],
-    minimumStartRatio: 0.30, dependencyCompletionBufferMinutes: 60,
+    minimumStartRatio: 1, dependencyCompletionBufferMinutes: 60,
     stock: [{ materialId: 'MAT', quantity: 0.12345678, unit: 'kg' }], stockMinimums: [], stockLocations: [], quantityPrecision: 8
   };
   const before = JSON.stringify(input);

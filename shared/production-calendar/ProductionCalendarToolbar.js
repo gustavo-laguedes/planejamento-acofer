@@ -54,10 +54,21 @@ export function updateProductionCalendarToolbar(toolbar, state = {}, context = {
   const zoomOutButton = toolbar.querySelector('[data-production-calendar-action="zoom-out"]');
   const zoomInButton = toolbar.querySelector('[data-production-calendar-action="zoom-in"]');
   const resetButton = toolbar.querySelector('[data-production-calendar-action="zoom-reset"]');
+  const undoButton = toolbar.querySelector('[data-production-calendar-action="undo-manual-change"]');
+  const redoButton = toolbar.querySelector('[data-production-calendar-action="redo-manual-change"]');
+  const discardButton = toolbar.querySelector('[data-production-calendar-action="discard-all-changes"]');
+  const optimizeButton = toolbar.querySelector('[data-production-calendar-action="optimize-utilization"]');
 
   if (zoomOutButton) zoomOutButton.disabled = zoomIndex === 0;
   if (zoomInButton) zoomInButton.disabled = zoomIndex === PRODUCTION_CALENDAR_ZOOM_LEVELS.length - 1;
   if (resetButton) resetButton.disabled = PRODUCTION_CALENDAR_ZOOM_LEVELS[zoomIndex].id === PRODUCTION_CALENDAR_DEFAULT_ZOOM_ID;
+  toolbar.querySelectorAll('[data-production-calendar-expand]').forEach(button => {
+    button.disabled = false;
+  });
+  if (discardButton) discardButton.disabled = !state.hasManualChanges;
+  if (optimizeButton) optimizeButton.disabled = Boolean(state.optimizationInProgress);
+  if (undoButton) undoButton.disabled = !state.canUndoManualChange;
+  if (redoButton) redoButton.disabled = !state.canRedoManualChange;
 
   const selectedPanel = toolbar.querySelector('[data-production-calendar-selection]');
   const selectedText = toolbar.querySelector('[data-production-calendar-selection-text]');
@@ -90,6 +101,77 @@ export function ProductionCalendarToolbar({ permissions = {}, state = {}, action
 
   const zoomControls = document.createElement('div');
   zoomControls.className = 'production-calendar-toolbar-actions production-calendar-toolbar-actions-primary';
+
+  const horizonControls = document.createElement('div');
+  horizonControls.className = 'production-calendar-toolbar-actions production-calendar-toolbar-horizon production-calendar-toolbar-actions-right';
+
+  [7, 15, 30].forEach(dayCount => {
+    const button = createToolbarButton({
+      label: `+${dayCount} dias`,
+      title: `Exibir mais ${dayCount} dias`,
+      className: 'production-calendar-toolbar-button',
+      onClick: () => actions.onExpandHorizon?.(dayCount)
+    });
+    button.dataset.productionCalendarAction = `expand-${dayCount}`;
+    button.dataset.productionCalendarExpand = String(dayCount);
+    horizonControls.appendChild(button);
+  });
+
+  const showAllButton = createToolbarButton({
+    label: 'Data limite produção',
+    title: 'Remover somente os dias vazios posteriores à última produção',
+    className: 'production-calendar-toolbar-button',
+    onClick: actions.onShowAllDays
+  });
+  showAllButton.dataset.productionCalendarAction = 'show-all';
+  horizonControls.appendChild(showAllButton);
+
+  const manualActions = document.createElement('div');
+  manualActions.className = 'production-calendar-manual-actions';
+
+  const undoButton = createToolbarButton({
+    label: '←',
+    title: 'Desfazer última alteração',
+    className: 'production-calendar-toolbar-button production-calendar-toolbar-button-icon production-calendar-undo-button',
+    onClick: actions.onUndoManualChange
+  });
+  undoButton.dataset.productionCalendarAction = 'undo-manual-change';
+  manualActions.appendChild(undoButton);
+
+  const redoButton = createToolbarButton({
+    label: '→',
+    title: 'Refazer alteração',
+    className: 'production-calendar-toolbar-button production-calendar-toolbar-button-icon production-calendar-redo-button',
+    onClick: actions.onRedoManualChange
+  });
+  redoButton.dataset.productionCalendarAction = 'redo-manual-change';
+  manualActions.appendChild(redoButton);
+
+  const discardButton = createToolbarButton({
+    label: 'Descartar todas as alterações',
+    title: 'Remover todas as edições manuais e restaurar a simulação automática',
+    className: 'production-calendar-toolbar-button danger-button production-calendar-discard-button',
+    onClick: actions.onDiscardAllChanges
+  });
+  discardButton.dataset.productionCalendarAction = 'discard-all-changes';
+  manualActions.appendChild(discardButton);
+
+  const optimizeButton = createToolbarButton({
+    label: 'Simular com base no aproveitamento',
+    title: 'Reorganizar produções para maximizar pessoas, produtividade e menor tempo',
+    className: 'production-calendar-toolbar-button production-calendar-optimize-button',
+    onClick: actions.onOptimizeUtilization
+  });
+  optimizeButton.dataset.productionCalendarAction = 'optimize-utilization';
+  manualActions.appendChild(optimizeButton);
+
+  const fullscreenButton = createToolbarButton({
+    label: 'Calend\u00e1rio em tela cheia',
+    title: 'Abrir calend\u00e1rio em tela cheia',
+    className: 'production-calendar-toolbar-button',
+    onClick: actions.onOpenFullscreen
+  });
+  fullscreenButton.dataset.productionCalendarAction = 'open-fullscreen';
 
   const selectionPanel = document.createElement('div');
   selectionPanel.className = 'production-calendar-toolbar-selection';
@@ -146,9 +228,9 @@ export function ProductionCalendarToolbar({ permissions = {}, state = {}, action
   });
   startButton.dataset.productionCalendarAction = 'go-start';
 
-  zoomControls.append(zoomOutButton, zoomInButton, resetButton, startButton);
+  zoomControls.append(zoomOutButton, zoomInButton, resetButton, startButton, fullscreenButton);
 
-  toolbar.append(selectionPanel, zoomControls);
+  toolbar.append(manualActions, zoomControls, horizonControls, selectionPanel);
   updateProductionCalendarToolbar(toolbar, state, { selectedAllocation: state.selectedAllocation });
 
   return toolbar;

@@ -1,0 +1,120 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import {
+  buildPlanningScheduleViewModel,
+  PLANNING_SCHEDULE_VIEW_CONTRACT_VERSION
+} from '../shared/planning-schedule-view/planningScheduleViewModel.js';
+import {
+  planningScheduleViewToProductionCalendarSnapshot
+} from '../shared/planning-schedule-view/productionCalendarV2.renderer.js';
+
+const baseAllocation = {
+  allocationId: 'allocation-1',
+  operationId: 'operation-1',
+  parentOperationId: 'parent-1',
+  calendarParentOperationId: 'calendar-parent-1',
+  productionId: 'production-1',
+  productionIndex: 1,
+  machineId: 'machine-1',
+  machineName: 'Máquina 1',
+  date: '2026-07-24',
+  startTime: '07:00',
+  endDate: '2026-07-25',
+  endTime: '01:00',
+  quantity: 12.5,
+  unit: 'kg',
+  durationMinutes: 1080,
+  capacityPercent: 82.5,
+  peopleCount: 3,
+  productionColor: '#123456',
+  productionMemberships: [{
+    productionId: 'production-1',
+    productionIndex: 1,
+    quantity: 12.5,
+    unit: 'kg',
+    quantitySource: 'production-breakdown'
+  }]
+};
+const source = {
+  days: [{ date: '2026-07-24', isWorkingDay: true }],
+  machines: [{ machineId: 'machine-1', machineName: 'Máquina 1', order: 2 }],
+  allocations: [
+    baseAllocation,
+    {
+      ...baseAllocation,
+      allocationId: 'readonly:plan-legacy:operation-2',
+      operationId: 'operation-2',
+      quantity: 7
+    }
+  ],
+  validation: { valid: true, warnings: [] },
+  permissions: { readOnly: true, canEditAllocations: true },
+  visualState: { zoom: 1.25, selectedAllocationId: 'allocation-1' },
+  errors: []
+};
+const sourceBefore = structuredClone(source);
+
+const model = buildPlanningScheduleViewModel(source);
+assert.deepEqual(source, sourceBefore, 'derivação não pode mutar o snapshot aceito');
+assert.equal(model.contractVersion, PLANNING_SCHEDULE_VIEW_CONTRACT_VERSION);
+assert.deepEqual(model.capabilities, { inspect: true, mutate: false, manualMove: true });
+assert.equal(model.tasks[0].id, String(baseAllocation.allocationId));
+assert.equal(model.tasks[0].persistable, true);
+assert.equal(model.tasks[1].persistable, false, 'ID readonly de adapter nunca pode ser persistível');
+assert.deepEqual(model.tasks[0].start, { date: '2026-07-24', time: '07:00' });
+assert.deepEqual(model.tasks[0].end, { date: '2026-07-25', time: '01:00' });
+assert.equal(model.tasks[0].resourceId, 'machine-1');
+assert.equal(model.tasks[0].quantity, 12.5);
+assert.equal(model.tasks[0].startCapacityPercent, 0);
+assert.equal(model.tasks[0].endCapacityPercent, 82.5);
+assert.equal(model.tasks[1].startCapacityPercent, 82.5);
+assert.equal(model.tasks[1].endCapacityPercent, 165);
+assert.equal(model.tasks[1].capacityOverrunPercent, 65);
+assert.equal(model.metadata.warnings[0].code, 'GANTT_INTRADAY_CAPACITY_OVERFLOW');
+assert.equal(model.tasks[0].presentation.productionColor, '#123456');
+assert.deepEqual(model.tasks[0].presentation.productionMemberships, baseAllocation.productionMemberships);
+assert.deepEqual(model.tasks[0].productionMemberships, baseAllocation.productionMemberships);
+assert.ok(Object.isFrozen(model));
+assert.ok(Object.isFrozen(model.tasks[0]));
+assert.throws(() => { model.tasks[0].quantity = 99; }, TypeError);
+
+const v2Snapshot = planningScheduleViewToProductionCalendarSnapshot(model);
+assert.equal(v2Snapshot.allocations[0].allocationId, 'allocation-1');
+assert.equal(v2Snapshot.allocations[0].machineId, 'machine-1');
+assert.equal(v2Snapshot.allocations[0].date, '2026-07-24');
+assert.equal(v2Snapshot.allocations[0].startTime, '07:00');
+assert.equal(v2Snapshot.allocations[0].endDate, '2026-07-25');
+assert.equal(v2Snapshot.allocations[0].endTime, '01:00');
+assert.equal(v2Snapshot.allocations[0].quantity, 12.5);
+assert.equal(v2Snapshot.machines[0].machineId, 'machine-1');
+assert.deepEqual(source, sourceBefore, 'roundtrip visual também não pode mutar a origem');
+
+for (const snapshot of [
+  { allocations: [baseAllocation] },
+  { allocations: [{ ...baseAllocation, source: 'manual-draft-v2' }] },
+  { allocations: [{ ...baseAllocation, source: 'normalized-v1' }] },
+  { allocations: [{ ...baseAllocation, allocationId: 'readonly:legacy-fallback' }] }
+]) {
+  const projected = buildPlanningScheduleViewModel(snapshot);
+  assert.equal(projected.tasks.length, 1);
+  assert.equal(projected.tasks[0].id, String(snapshot.allocations[0].allocationId));
+}
+
+assert.equal(
+  buildPlanningScheduleViewModel({
+    ...source,
+    permissions: { readOnly: true, canEditAllocations: false }
+  }).capabilities.manualMove,
+  false,
+  'movimento manual do Gantt deve depender da permissao canonica de edicao de allocations'
+);
+
+const moduleSource = [
+  readFileSync(new URL('../shared/planning-schedule-view/planningScheduleViewModel.js', import.meta.url), 'utf8'),
+  readFileSync(new URL('../shared/planning-schedule-view/productionCalendarV2.renderer.js', import.meta.url), 'utf8')
+].join('\n');
+assert.doesNotMatch(moduleSource, /\bfetch\s*\(|\bapi\s*\(/, 'contrato/adapter não podem fazer HTTP');
+assert.doesNotMatch(moduleSource, /scheduleOperations|simulateCurrent|buildPlan\s*\(/, 'contrato/adapter não podem chamar scheduler');
+assert.doesNotMatch(moduleSource, /onRequestMove|onEditAllocation|onSplitAllocation/, 'read model não transporta callbacks mutáveis');
+
+console.log('planningScheduleViewModel.test.js ok');

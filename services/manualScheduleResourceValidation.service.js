@@ -10,6 +10,29 @@ function clockMinutes(value) {
   return hours * 60 + minutes;
 }
 
+function productiveMinutes(value) {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    const match = text.match(/^(\d+)(?:[,.](\d{1,2}))?$/);
+    if (match) {
+      const hours = Number(match[1]);
+      const fraction = match[2] || '';
+      if (fraction.length === 2 && Number(fraction) < 60) return (hours * 60) + Number(fraction);
+      const parsed = Number(`${match[1]}.${fraction}`);
+      if (Number.isFinite(parsed)) return Math.round(parsed * 60);
+    }
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 60) : null;
+}
+
+function clockTime(minutes) {
+  const normalized = ((Math.round(minutes) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+  const hours = Math.floor(normalized / 60);
+  const mins = normalized % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
 function dateMinute(date, time) {
   if (!DATE_PATTERN.test(String(date || ''))) return null;
   const minutes = clockMinutes(time);
@@ -74,8 +97,13 @@ function normalizeAllocation(allocation, index) {
 
 function normalizeShift(shift, index) {
   const startTime = String(shift?.startTime ?? shift?.shiftStartTime ?? '');
-  const endTime = String(shift?.endTime ?? shift?.shiftEndTime ?? '');
   const startMinutes = clockMinutes(startTime);
+  const suppliedEndTime = shift?.endTime ?? shift?.shiftEndTime;
+  const endTime = String(suppliedEndTime ?? (
+    startMinutes !== null && productiveMinutes(shift?.hoursPerDay)
+      ? clockTime(startMinutes + productiveMinutes(shift.hoursPerDay))
+      : ''
+  ));
   const endClock = clockMinutes(endTime);
   const valid = startMinutes !== null && endClock !== null && startMinutes !== endClock;
   return {
@@ -478,4 +506,23 @@ export function validateManualScheduleResources({
       }
     }
   };
+}
+
+export function resolveManualScheduleResourceByDate({
+  validation,
+  allocations = [],
+  shifts = [],
+  dailyTeamOverrides = {},
+  manualWorkDates = [],
+  holidays = []
+} = {}) {
+  const validatedByDate = validation?.resourceProjection?.byDate;
+  if (validatedByDate && Object.keys(validatedByDate).length) return validatedByDate;
+  return validateManualScheduleResources({
+    draft: { allocations },
+    shifts,
+    dailyTeamOverrides,
+    manualWorkDates,
+    holidays
+  }).resourceProjection.byDate;
 }

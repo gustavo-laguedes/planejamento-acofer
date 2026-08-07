@@ -26,7 +26,7 @@ let active = createManualScheduleDraft({
 const validationContext = {
   operations: [], materials, machines, productivityMatrix, stock: [], stockMinimums: [], stockLocations: [],
   dependencies: [], transports: [], shifts: [{ shiftId: 'day', startTime: '07:00', endTime: '16:00', teamAvailable: 6 }],
-  dailyTeamOverrides: {}, manualWorkDates: [], setupMinutes: 0, minimumStartRatio: 0.30,
+  dailyTeamOverrides: {}, manualWorkDates: [], setupMinutes: 0, minimumStartRatio: 1,
   dependencyCompletionBufferMinutes: 60, holidays: [], timezone: 'America/Sao_Paulo'
 };
 const draftContext = {
@@ -48,6 +48,16 @@ for (let index = 0; index < 4; index += 1) {
   assert.equal(transaction.accepted, true, JSON.stringify(transaction.blockingIssues));
   active = transaction.draft;
 }
+const allocationsBeforeSaturdayRelease = structuredClone(active.allocations);
+const saturdayRelease = applyManualScheduleTransaction({
+  currentDraft: active,
+  intent: { type: 'SET_MANUAL_WORK_DATE', date: '2026-07-18', enabled: true },
+  draftContext: { ...draftContext, now: '2026-07-13T15:30:00.000Z' },
+  validationContext
+});
+assert.equal(saturdayRelease.accepted, true, JSON.stringify(saturdayRelease.blockingIssues));
+assert.deepEqual(saturdayRelease.draft.allocations, allocationsBeforeSaturdayRelease);
+active = saturdayRelease.draft;
 const expectedPositions = active.allocations.map(item => [item.allocationId, item.date, item.machineId]);
 const stored = serializeManualScheduleDraft({
   draft: active, planningId: 'plan-16',
@@ -64,6 +74,7 @@ const revalidation = applyManualScheduleTransaction({
 });
 assert.equal(revalidation.accepted, true, JSON.stringify(revalidation.blockingIssues));
 assert.deepEqual(revalidation.draft.allocations.map(item => [item.allocationId, item.date, item.machineId]), expectedPositions);
+assert.deepEqual(revalidation.draft.manualWorkDates, ['2026-07-18']);
 assert.ok(revalidation.draft.validation.valid);
 
 const route = readFileSync(new URL('../server/routes/planning.routes.js', import.meta.url), 'utf8');
@@ -76,6 +87,9 @@ assert.match(updateRoute, /manual_schedule_revision = \$\{expectedRevision\}/);
 assert.match(updateRoute, /DELETE FROM production_plan_days/);
 assert.match(updateRoute, /insertPlanningAudit\(tx/);
 assert.match(route, /stockLocations: \[\s*\{ locationId: '__default__' \}/);
+assert.match(route, /validation\.incrementallyAccepted === true/);
+assert.match(route, /previousDiagnostics:\s*previousValidation/);
+assert.match(route, /draft\?\.frozenThrough\?\.date/);
 assert.ok(updateRoute.indexOf('DELETE FROM production_plan_days') < updateRoute.indexOf('UPDATE production_plans'));
 
 const createStart = route.indexOf("router.post('/plans'");
