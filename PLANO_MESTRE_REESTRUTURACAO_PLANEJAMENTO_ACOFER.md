@@ -694,6 +694,9 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] REF-027 concluida: auditoria do bloco arquitetural `planningPayloadBuilder`; fronteira segura limitada a construcao pura de payloads (`buildProductionPayload`, `buildStockOnlyMaterialsForPayload`, `buildShiftPayload`, `buildPlanningSimulationPayload`, `buildNormalizedPlanningPayload`) em `shared/planning-domain/planningPayloadBuilder.js`.
 - [x] Funcoes rejeitadas/retidas na REF-027: `simulatePlanningRequest`, `saveDraftNow`, `queueAutosave`, `simulateCurrent`, save/launch, `hydrateProductionDefaults` e wrappers `productionPayload`/`payload` completos permaneceram na pagina por API/save/persistencia, mutacao de defaults, leitura de closure ou regra produtiva.
 - [x] Baseline/validacao REF-027: baseline inicial `804669b`, worktree limpo, `node --test tests/*.js` com 56/56; teste novo `tests/planningPayloadBuilder.test.js`; suite final com 57/57; contagem canonica da `PlanningPage.js` reduziu de 7016 para 6990 linhas.
+- [x] REF-028 concluida: auditoria do bloco arquitetural `planningFlowModel`; fronteira segura limitada ao modelo puro de leitura do fluxo produtivo (`selectProductionFlowTrees`, `resolveFlowNodeModelName`, `buildFlowNodeKey`, `normalizeFlowQuantities`, `buildPlanningFlowGraph`) em `shared/planning-domain/planningFlowModel.js`.
+- [x] Funcoes rejeitadas/retidas na REF-028: `renderFlowNodeCard`, `renderFlowGraph`, `drawProductionFlowConnectors`, `renderProductionFlows`, `renderFlowTree`, `renderPlanFlowDetail`, `resolvePlanningFlowAllocation`, `focusPlanningFlowAllocation`, `planningFlowNodeStockBalanceChecked` e `stockOnlyMaterialsFromSimulation` permaneceram na pagina por HTML/DOM/SVG/modal/foco/Gantt/estoque/interacao.
+- [x] Baseline/validacao REF-028: baseline inicial `f38b266`, worktree limpo, `node --test tests/*.js` com 57/57; teste novo `tests/planningFlowModel.test.js`; suite final com 64/64; `git diff --check` OK; contagem canonica da `PlanningPage.js` reduziu de 6990 para 6832 linhas.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
@@ -1795,6 +1798,25 @@ Próxima missão sugerida:
 ```
 
 ## Entradas
+
+### 2026-08-07 18:50 - REF-028 - Auditar e extrair modelo de leitura do fluxo produtivo
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de extracao pequena e delimitada
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `f38b266`
+Objetivo: auditar o bloco de derivacao do modelo de dados do fluxo produtivo e extrair somente funcoes puras de arvores, nos, chaves, quantidades, arestas e metadados.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-001_PLANNING_PAGE_MAP.md`, `docs/refactor/REF-025_PLANNING_LOOKUPS_EXTRACTION.md`, `docs/refactor/REF-026_PLANNING_SCHEDULE_SNAPSHOT_EXTRACTION.md`, `docs/refactor/REF-027_PLANNING_PAYLOAD_BUILDER_EXTRACTION.md`, `pages/PlanningPage.js` e `package.json`.
+Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-domain/planningFlowModel.js`, `tests/planningFlowModel.test.js`, `docs/refactor/REF-028_PLANNING_FLOW_MODEL_EXTRACTION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: criado modulo neutro `planningFlowModel`; a pagina passou a delegar selecao de raizes, resolucao de modelo/chave, normalizacao de quantidades e construcao de grafo para dependencias explicitas, mantendo wrappers para a camada visual.
+Testes/comandos: baseline inicial `git status --short`, `git rev-parse HEAD`, branch, contagem canonica e `node --test tests/*.js`; validacao focada com `node --check shared/planning-domain/planningFlowModel.js`, `node --check pages/PlanningPage.js` e `node --test tests/planningFlowModel.test.js`; suite final `node --test tests/*.js`; `git diff --check`.
+Resultado: baseline inicial 57/57; teste focado novo aprovado com 7/7 subtestes; suite final 64/64; `git diff --check` OK, com avisos conhecidos de LF -> CRLF; `PlanningPage.js` passou de 6990 para 6832 linhas pelo metodo canonico.
+Homologacao: nao aplicavel como homologacao operacional; mudanca estrutural sem UI nova.
+Checkboxes atualizados: REF-028 registrada como concluida no quadro de extracoes; nenhuma missao futura foi marcada como concluida.
+Riscos/pendencias: camada visual do Flow, modal, DOM/SVG, foco Fluxo -> Gantt, estoque/toggle, Calendario V2, identidade do calendario manual, manual move/split, persistencia, `generatePlanningCode`, `productiveMinutes`, turnos/capacidade e homologacao manual REF-013 seguem pendentes.
+Proxima missao sugerida: extrair a camada visual HTML do Flow para modulo proprio, mantendo DOM/eventos/foco na pagina ate nova auditoria.
+
+---
 
 ### 2026-08-07 18:05 — REF-027 — Extrair construcao pura de payloads da PlanningPage
 
