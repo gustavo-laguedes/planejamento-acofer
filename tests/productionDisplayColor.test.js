@@ -52,6 +52,10 @@ const planningFlowViewSource = readFileSync(
   new URL('../shared/planning-presentation/planningFlowView.js', import.meta.url),
   'utf8'
 );
+const planningFlowDomSource = readFileSync(
+  new URL('../shared/planning-presentation/planningFlowDom.js', import.meta.url),
+  'utf8'
+);
 const cardSource = readFileSync(
   new URL('../shared/production-calendar/ProductionCalendarCard.js', import.meta.url),
   'utf8'
@@ -82,7 +86,7 @@ assert.match(
   /production-flow-node[\s\S]*productionThemeStyle\(productionIndex,[\s\S]*productionCardSegmentStyle\(productions\)/
 );
 assert.match(
-  planningPageSource,
+  planningFlowDomSource,
   /const color = productionTheme\(productionIndex,\s*edge\.color\)\.border/
 );
 assert.match(cardSource, /getProductionDisplayColor\(explicitColor,/);
