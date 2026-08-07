@@ -683,8 +683,11 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Funcoes extraidas na REF-022: `formatDuration`, `formatHourDuration`, `minutesToTime`, `timeToMinutes`.
 - [x] REF-023 concluida: extracao cirurgica de helpers neutros de data civil/calendario para `shared/planning-date/planningCivilDate.js`; commit-base `3650829`; contagem canonica por Node; suite final registrada em `docs/refactor/REF-023_PLANNING_CIVIL_DATE_EXTRACTION.md`. Correcao factual: `dateOnlyFromDate` e `parseDateOnly` nao sao puras/deterministicas para todos os inputs, pois preservam fallback legado para `new Date()` em entradas invalidas/vazias.
 - [x] Funcoes extraidas na REF-023: `dateOnlyFromDate`, `parseDateOnly`, `addCalendarMonths`, `isWeekendDate`.
-- [x] Proxima extracao recomendada registrada, sem execucao: extracao pequena de `generatePlanningCode`, se a auditoria confirmar baixo risco e preservar uso de `Date` local.
+- [x] REF-024 concluida: auditoria e centralizacao de `isValidDateOnly` no modulo `shared/planning-date/planningCivilDate.js`; commit-base `d7a7c20`; worktree inicial limpo; baseline inicial e suite final `node --test tests/*.js` com 54 testes, 54 aprovados e 0 falhas; contagem canonica final da `PlanningPage.js`: 7137 linhas.
+- [x] Funcoes extraidas na REF-024: somente `isValidDateOnly`. Nenhuma outra extracao foi autorizada ou executada.
+- [x] Proxima missao futura recomendada registrada, sem execucao: auditar a copia privada de `isValidDateOnly` em `shared/planning-presentation/planningFormatters.js` e, se seguro, fazer o modulo consumir o helper central.
 - [ ] `productiveMinutes` permanece pendente.
+- [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
 - [ ] REF-013 homologacao manual permanece pendente.
 - [ ] Calendario V2 permanece pendente.
@@ -1784,6 +1787,24 @@ Próxima missão sugerida:
 ```
 
 ## Entradas
+
+### 2026-08-07 16:20 — REF-024 — Centralizar isValidDateOnly no modulo de data civil
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de extracao pequena e delimitada; validacao tecnica por suite automatizada
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `d7a7c204daa386611eed7527fa6d6c05be1113ef`
+Objetivo: auditar `isValidDateOnly` local da `PlanningPage.js` e, comprovada neutralidade, move-la para `shared/planning-date/planningCivilDate.js`.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-001_PLANNING_PAGE_MAP.md`, `docs/refactor/REF-020_TECHNICAL_CHECKPOINT.md`, `docs/refactor/REF-021_PLANNING_FORMATTERS_EXTRACTION.md`, `docs/refactor/REF-022_PLANNING_TIME_FORMATTERS_EXTRACTION.md`, `docs/refactor/REF-023_PLANNING_CIVIL_DATE_EXTRACTION.md`, `pages/PlanningPage.js`, `shared/planning-date/planningCivilDate.js`, `tests/planningCivilDate.test.js` e `package.json`.
+Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-date/planningCivilDate.js`, `tests/planningCivilDate.test.js`, `docs/refactor/REF-024_IS_VALID_DATE_ONLY_CENTRALIZATION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: `PlanningPage.js` passou a importar `isValidDateOnly` do modulo de data civil; a definicao local foi removida; o modulo passou a exportar a mesma implementacao literal; o teste de data civil caracteriza o comportamento real, inclusive datas impossiveis, datetime ISO completo e tipos nao-string.
+Testes/comandos: baseline inicial com `git status --short`, `git rev-parse HEAD`, contagem canonica e `node --test tests/*.js`; validacao final com `node --check shared/planning-date/planningCivilDate.js`, `node --check pages/PlanningPage.js`, `node --test tests/planningCivilDate.test.js`, `node --test tests/*.js`, `git diff --check` e diffs obrigatorios.
+Resultado: baseline inicial 54/54; suite final 54 testes, 54 aprovados e 0 falhas; `PlanningPage.js` passou de 7143 para 7137 linhas pelo metodo canonico.
+Decisao: extracao aprovada porque o helper e neutro, deterministico para entradas iguais no mesmo timezone, sem efeito colateral e sem dependencia de estado da pagina. Regex, `Date`, local/UTC, slice e aceites/rejeicoes foram preservados.
+Riscos/pendencias: duplicacoes homonimas em services, routes, V2/adapter e copia privada em `planningFormatters.js` nao foram consolidadas; `2026-01-01T12:34:56.000Z` permanece aceito por slice dos 10 primeiros caracteres; objetos com `toString()` compativel permanecem aceitos; REF-013 manual, Calendario V2, `productiveMinutes`, turnos e `generatePlanningCode` seguem pendentes.
+Proxima missao sugerida: auditar e, se seguro, centralizar a copia privada de `isValidDateOnly` usada por `shared/planning-presentation/planningFormatters.js`, sem tocar em services ou V2.
+
+---
 
 ### 2026-08-07 15:36 — REF-023 — Extracao cirurgica de helpers neutros de data civil/calendario
 

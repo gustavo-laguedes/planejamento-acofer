@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   addCalendarMonths,
   dateOnlyFromDate,
+  isValidDateOnly,
   isWeekendDate,
   parseDateOnly
 } from '../shared/planning-date/planningCivilDate.js';
@@ -43,6 +44,27 @@ assert.ok(Number.isFinite(parseDateOnly(null).getTime()));
 assert.ok(Number.isFinite(parseDateOnly(undefined).getTime()));
 assert.ok(Number.isFinite(parseDateOnly('fora-do-formato').getTime()));
 assert.equal(dateOnlyFromDate(parseDateOnly('2026-13-01')), '2027-01-01');
+
+assert.equal(isValidDateOnly('2026-07-15'), true);
+assert.equal(isValidDateOnly('2026-01-01'), true);
+assert.equal(isValidDateOnly('2026-12-31'), true);
+assert.equal(isValidDateOnly('2024-02-29'), true);
+assert.equal(isValidDateOnly('2026-02-28'), true);
+assert.equal(isValidDateOnly('2026-02-29'), false);
+assert.equal(isValidDateOnly('2026-02-31'), false);
+assert.equal(isValidDateOnly('2026-13-01'), false);
+assert.equal(isValidDateOnly('2026-00-01'), false);
+assert.equal(isValidDateOnly(''), false);
+assert.equal(isValidDateOnly(' '), false);
+assert.equal(isValidDateOnly(null), false);
+assert.equal(isValidDateOnly(undefined), false);
+assert.equal(isValidDateOnly('fora-do-formato'), false);
+assert.equal(isValidDateOnly('01/01/2026'), false);
+assert.equal(isValidDateOnly('2026-01-01T12:34:56.000Z'), true);
+assert.equal(isValidDateOnly(20260101), false);
+assert.equal(isValidDateOnly(new Date(2026, 0, 1)), false);
+assert.equal(isValidDateOnly(true), false);
+assert.equal(isValidDateOnly({ toString() { return '2026-01-01'; } }), true);
 
 assert.equal(dateOnlyFromDate(addCalendarMonths(new Date(2026, 6, 15), 1)), '2026-08-01');
 assert.equal(dateOnlyFromDate(addCalendarMonths(new Date(2026, 6, 15), -1)), '2026-06-01');

@@ -13,6 +13,13 @@ export function parseDateOnly(value) {
   return new Date(year, month - 1, day);
 }
 
+export function isValidDateOnly(value) {
+  const dateValue = String(value || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) return false;
+  const date = new Date(`${dateValue}T00:00:00`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === dateValue;
+}
+
 export function addCalendarMonths(date, offset) {
   const next = new Date(date.getFullYear(), date.getMonth() + offset, 1);
   return next;
