@@ -688,6 +688,9 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] REF-025 concluida: auditoria do bloco arquitetural `planningLookups` no commit-base `aae0dfb`; funcoes candidatas auditadas incluíram `materialById`, `matchingMatrix`, `productionMaterialOptions`, `materialMatches`, `findSimulationOperation`, `treeForProductionIndex`, `matchingDropOption`, selectors de calendario/manual, estoque, fluxo e detalhes. Foram rejeitadas funcoes com API, DOM, draft mutavel, payload, calendario manual, transporte, estoque, arvore produtiva, persistencia, precedencia ou IDs sensiveis.
 - [x] Funcoes extraidas na REF-025: `findMaterialById`, `selectMatchingMatrixRows`, `selectProductionMaterialOptions`, `materialMatchesSearch` para `shared/planning-domain/planningLookups.js`; suite final `node --test tests/*.js` com 55 testes, 55 aprovados e 0 falhas; contagem canonica final da `PlanningPage.js`: 7099 linhas.
 - [x] Proxima fronteira recomendada apos REF-025, sem execucao: auditar e, se seguro, extrair apenas `productionCalendarParentOperationId` e seus normalizadores imediatos para modulo de identidade de calendario manual, preservando IDs legados.
+- [x] REF-026 concluida: auditoria do bloco arquitetural `planningScheduleSnapshot`; fronteira segura limitada a helpers de leitura/derivacao (`buildTimelineOperations`, `selectProductionCalendarMachines`, `resolveProductionCalendarPlanningId`, `mergeDraftAllocationDays`, `buildManualScheduleIssueMessages`, `buildProductionCalendarValidationSnapshot`) em `shared/planning-domain/planningScheduleSnapshot.js`.
+- [x] Funcoes rejeitadas na REF-026: `buildProductionCalendarSnapshot`, `currentProductionCalendarSnapshot`, `currentManualScheduleValidationContext`, `withManualTransportPresentation`, `findProductionCalendarMachine` e `validateProductionCalendarMoveIntent`, por acoplamento com closure, validacao produtiva, transporte, movimento manual, estado visual, permissoes, historico, estoque ou efeitos colaterais.
+- [x] Baseline/validacao REF-026: baseline inicial `5923c5e`, worktree limpo, `node --test tests/*.js` com 55/55; teste novo `tests/planningScheduleSnapshot.test.js`; suite final com 56/56; contagem canonica da `PlanningPage.js` reduziu de 7099 para 7016 linhas.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
@@ -1789,6 +1792,25 @@ Próxima missão sugerida:
 ```
 
 ## Entradas
+
+### 2026-08-07 17:10 — REF-026 — Extrair bloco coeso de snapshot/leitura do planejamento
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de extracao pequena e delimitada
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `5923c5e`
+Objetivo: auditar e extrair somente a fronteira limpa de snapshot/leitura do planejamento, sem mover regras de movimento, split, estoque, transporte, reotimizacao, persistencia, Gantt ou Calendario V2.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-001_PLANNING_PAGE_MAP.md`, `docs/refactor/REF-020_TECHNICAL_CHECKPOINT.md`, `docs/refactor/REF-025_PLANNING_LOOKUPS_EXTRACTION.md`, `pages/PlanningPage.js`, `package.json` e testes relacionados a integracao manual, lookups e view model.
+Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-domain/planningScheduleSnapshot.js`, `tests/planningScheduleSnapshot.test.js`, `docs/refactor/REF-026_PLANNING_SCHEDULE_SNAPSHOT_EXTRACTION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: criado modulo neutro `planningScheduleSnapshot` para helpers de leitura/derivacao; `PlanningPage.js` passou a delegar selecao de timeline, maquinas, planningId, dias com allocations e snapshot de validacao, mantendo wrappers finos para dependencias de closure e compatibilidade.
+Testes/comandos: baseline inicial `git status --short`, branch, HEAD, contagem canonica e `node --test tests/*.js`; validacao focada com `node --check shared/planning-domain/planningScheduleSnapshot.js`, `node --check pages/PlanningPage.js` e `node --test tests/planningScheduleSnapshot.test.js`; suite final `node --test tests/*.js`; `git diff --check`.
+Resultado: baseline inicial 55/55; teste focado novo aprovado; suite final 56/56; `git diff --check` OK com apenas avisos LF/CRLF conhecidos; `PlanningPage.js` passou de 7099 para 7016 linhas pelo metodo canonico.
+Homologacao: nao aplicavel como homologacao operacional; mudanca estrutural sem UI nova.
+Checkboxes atualizados: REF-026 registrada como concluida no quadro de extrações; nenhuma missao futura foi marcada como concluida.
+Riscos/pendencias: `buildProductionCalendarSnapshot` completo permanece na pagina por acoplamento com estado visual, permissoes, recursos, historico, estoque/alertas, transporte, adapter V2 e log; REF-013 manual, Calendario V2, `generatePlanningCode`, `productiveMinutes`, turnos e controladores manuais seguem pendentes.
+Proxima missao sugerida: auditar e, se seguro, extrair normalizadores de identidade de calendario manual (`productionCalendarParentOperationId` e helpers imediatos) para modulo proprio, sem mover movimento manual.
+
+---
 
 ### 2026-08-07 16:20 — REF-024 — Centralizar isValidDateOnly no modulo de data civil
 
