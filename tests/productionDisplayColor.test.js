@@ -48,6 +48,10 @@ assert.equal(getProductionCalendarAllocationColor(allocation).accent, displayCol
 assert.equal(ganttApsProductionVisuals(allocation)[0].color, displayColor);
 
 const planningPageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
+const planningFlowViewSource = readFileSync(
+  new URL('../shared/planning-presentation/planningFlowView.js', import.meta.url),
+  'utf8'
+);
 const cardSource = readFileSync(
   new URL('../shared/production-calendar/ProductionCalendarCard.js', import.meta.url),
   'utf8'
@@ -63,6 +67,18 @@ assert.match(
 );
 assert.match(
   planningPageSource,
+  /productionThemeStyle/
+);
+assert.match(
+  planningPageSource,
+  /productionCardSegmentStyle/
+);
+assert.match(
+  planningPageSource,
+  /productionSegmentStyle/
+);
+assert.match(
+  planningFlowViewSource,
   /production-flow-node[\s\S]*productionThemeStyle\(productionIndex,[\s\S]*productionCardSegmentStyle\(productions\)/
 );
 assert.match(

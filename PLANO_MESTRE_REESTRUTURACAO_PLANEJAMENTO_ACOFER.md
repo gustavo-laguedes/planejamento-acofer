@@ -697,6 +697,10 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] REF-028 concluida: auditoria do bloco arquitetural `planningFlowModel`; fronteira segura limitada ao modelo puro de leitura do fluxo produtivo (`selectProductionFlowTrees`, `resolveFlowNodeModelName`, `buildFlowNodeKey`, `normalizeFlowQuantities`, `buildPlanningFlowGraph`) em `shared/planning-domain/planningFlowModel.js`.
 - [x] Funcoes rejeitadas/retidas na REF-028: `renderFlowNodeCard`, `renderFlowGraph`, `drawProductionFlowConnectors`, `renderProductionFlows`, `renderFlowTree`, `renderPlanFlowDetail`, `resolvePlanningFlowAllocation`, `focusPlanningFlowAllocation`, `planningFlowNodeStockBalanceChecked` e `stockOnlyMaterialsFromSimulation` permaneceram na pagina por HTML/DOM/SVG/modal/foco/Gantt/estoque/interacao.
 - [x] Baseline/validacao REF-028: baseline inicial `f38b266`, worktree limpo, `node --test tests/*.js` com 57/57; teste novo `tests/planningFlowModel.test.js`; suite final com 64/64; `git diff --check` OK; contagem canonica da `PlanningPage.js` reduziu de 6990 para 6832 linhas.
+- [x] REF-029 concluida: auditoria e extracao da apresentacao HTML/string do Flow para `shared/planning-presentation/planningFlowView.js`; baseline inicial `3d8f8ce`, worktree limpo, `node --test tests/*.js` com 64/64, contagem inicial da `PlanningPage.js`: 6832 linhas.
+- [x] Funcoes extraidas na REF-029: `renderFlowNodeCard`, implementacao HTML de `renderFlowGraph`, `renderFlowTree` e helpers privados de apresentacao `flowNodeStatus`, `nodeUsesStockBalance`, `renderStockBalanceInfo`. `PlanningPage.js` manteve adapter fino para injetar `buildFlowGraph`, tema e escolhas de estoque.
+- [x] Funcoes rejeitadas/retidas na REF-029: `renderProductionFlows`, `drawProductionFlowConnectors`, `renderPlanFlowDetail`, eventos click/keyboard, modal/detalhes, `resolvePlanningFlowAllocation`, `focusPlanningFlowAllocation`, Gantt, estoque/toggle operacional, movimento manual e split.
+- [x] Testes REF-029: criado `tests/planningFlowView.test.js`; ajuste estritamente necessario em `tests/productionDisplayColor.test.js`; sintaxe de `planningFlowView` e `PlanningPage` aprovada; teste focado aprovado; suite final registrada em `docs/refactor/REF-029_PLANNING_FLOW_VIEW_EXTRACTION.md`; contagem canonica da `PlanningPage.js` reduziu de 6832 para 6756 linhas.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
@@ -1798,6 +1802,25 @@ Próxima missão sugerida:
 ```
 
 ## Entradas
+
+### 2026-08-07 19:35 - REF-029 - Extrair apresentacao HTML pura do Flow
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de extracao pequena e delimitada
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `3d8f8ce`
+Objetivo: auditar e extrair somente funcoes do Flow cuja responsabilidade seja transformar dados ja derivados em HTML/string de apresentacao.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-028_PLANNING_FLOW_MODEL_EXTRACTION.md`, `pages/PlanningPage.js`, `shared/planning-domain/planningFlowModel.js`, `package.json` e testes relacionados a Flow/tema.
+Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-presentation/planningFlowView.js`, `tests/planningFlowView.test.js`, `tests/productionDisplayColor.test.js`, `docs/refactor/REF-029_PLANNING_FLOW_VIEW_EXTRACTION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: criado modulo `planningFlowView` com `renderFlowNodeCard`, implementacao HTML de `renderFlowGraph`, `renderFlowTree` e helpers privados de apresentacao; `PlanningPage.js` passou a injetar dependencias via adapter local e manteve DOM/eventos/foco/legenda; teste novo caracteriza o HTML real e teste estatico de cor foi realinhado ao novo local do card.
+Testes/comandos: baseline inicial `git status --short`, branch, `git rev-parse HEAD`, contagem canonica e `node --test tests/*.js`; validacao focada com `node --check shared/planning-presentation/planningFlowView.js`, `node --check pages/PlanningPage.js`, `node --test tests/planningFlowView.test.js`, `node --test tests/productionDisplayColor.test.js`; suite final `node --test tests/*.js`; `git diff --check`.
+Resultado: baseline inicial 64/64; `PlanningPage.js` passou de 6832 para 6756 linhas pelo metodo canonico; suite final registrada no documento REF-029.
+Homologacao: nao marcada; mudanca estrutural sem UI nova. REF-013 manual permanece pendente.
+Checkboxes atualizados: REF-029 registrada como concluida no quadro de extracoes; nenhuma missao futura foi marcada como concluida.
+Riscos/pendencias: eventos/DOM/SVG do Flow, foco Flow -> Gantt, Calendario V2, manual move/split, persistencia, identidade do calendario manual, `productiveMinutes`, `generatePlanningCode`, turnos/capacidade e homologacao manual REF-013 seguem pendentes.
+Proxima missao sugerida: auditar e, se seguro, extrair apenas os conectores/eventos DOM do Flow para modulo controlador visual, mantendo foco Flow -> Gantt como fronteira explicita.
+
+---
 
 ### 2026-08-07 18:50 - REF-028 - Auditar e extrair modelo de leitura do fluxo produtivo
 
