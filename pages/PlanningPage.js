@@ -20,6 +20,17 @@ import {
   createPlanningScheduleRendererHost,
   createProductionCalendarV2Renderer
 } from '../shared/planning-schedule-view/index.js';
+import {
+  escapeHtml,
+  formatDateOnly,
+  formatPeriod,
+  formatPtBrDecimal,
+  formatPtBrInteger,
+  normalizeJsonArray,
+  normalizeJsonObject,
+  normalizeText,
+  parsePtBrDecimal
+} from '../shared/planning-presentation/planningFormatters.js';
 import { DataTable } from '../shared/DataTable.js';
 import { holidayForDate } from '../shared/holidays.js';
 import { createOperationOverlay, setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
@@ -210,11 +221,6 @@ function formatDate(value) {
   return value ? new Date(value).toLocaleString('pt-BR') : '';
 }
 
-function formatDateOnly(value) {
-  if (!isValidDateOnly(value)) return '';
-  return new Date(`${String(value).slice(0, 10)}T00:00:00`).toLocaleDateString('pt-BR');
-}
-
 export function getPlanningStockProjectionDay(projection, selectedDate) {
   const date = String(selectedDate || '').slice(0, 10);
   const day = (projection?.days || []).find(item => String(item?.date) === date) || null;
@@ -326,12 +332,6 @@ function isValidDateOnly(value) {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === dateValue;
 }
 
-function formatPeriod(startDate, endDate) {
-  const start = formatDateOnly(startDate);
-  const end = formatDateOnly(endDate);
-  return start && end ? `${start} at\u00e9 ${end}` : 'Per\u00edodo n\u00e3o informado';
-}
-
 function operationPeriod(operations = [], fallbackStartDate = null, fallbackEndDate = null) {
   const dates = normalizeJsonArray(operations).reduce((result, operation) => {
     const startDate = isValidDateOnly(operation?.startDate) ? operation.startDate : null;
@@ -343,37 +343,6 @@ function operationPeriod(operations = [], fallbackStartDate = null, fallbackEndD
   const startDate = dates.starts.sort()[0] || fallbackStartDate;
   const endDate = dates.ends.sort().at(-1) || fallbackEndDate || fallbackStartDate;
   return { startDate, endDate, label: formatPeriod(startDate, endDate) };
-}
-
-function parsePtBrDecimal(value, fallback = NaN) {
-  const rawValue = String(value ?? '').trim();
-  if (!rawValue) return fallback;
-  const timeLikeValue = rawValue.match(/^(\d+),(\d{2})$/);
-  if (timeLikeValue && Number(timeLikeValue[2]) <= 59) {
-    return Number(timeLikeValue[1]) + (Number(timeLikeValue[2]) / 60);
-  }
-  const normalizedValue = rawValue.includes(',')
-    ? rawValue.replace(/\./g, '').replace(',', '.')
-    : rawValue;
-  const number = Number(normalizedValue);
-  return Number.isFinite(number) ? number : fallback;
-}
-
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
-}
-
-function normalizeText(value) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase();
 }
 
 function readStockMinimumDays() {
@@ -418,43 +387,6 @@ function materialLookupKeys(row = {}) {
 
 function isHexColor(value) {
   return /^#[0-9a-f]{6}$/i.test(String(value || '').trim());
-}
-
-function normalizeJsonArray(value) {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== 'string') return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function normalizeJsonObject(value) {
-  if (value && typeof value === 'object') return value;
-  if (typeof value !== 'string') return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function formatPtBrDecimal(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return '';
-  const hasDecimals = !Number.isInteger(number);
-  return number.toLocaleString('pt-BR', {
-    minimumFractionDigits: hasDecimals ? 2 : 0,
-    maximumFractionDigits: 3
-  });
-}
-
-function formatPtBrInteger(value) {
-  const number = Math.floor(Math.max(Number(value) || 0, 0));
-  return number.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
 }
 
 function normalizeOperationParentId(value = {}) {
