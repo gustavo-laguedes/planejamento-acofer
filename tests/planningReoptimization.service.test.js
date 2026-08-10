@@ -397,7 +397,7 @@ assert.match(allocationEditorControllerSource, /applyManualScheduleTransaction/)
 assert.doesNotMatch(editorHandlerSource, /productivityMatrix:\s*productivityRows/);
 assert.doesNotMatch(editorHandlerSource, /reoptimizePlanningFuture|simulatePlanning|simulateCurrent|scheduleOperations/);
 assert.match(editorHandlerSource, /acceptProductionCalendarEditorTransaction/);
-const editorComponentSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarEditor.js', import.meta.url), 'utf8');
+const editorComponentSource = readFileSync(new URL('../shared/planning-editor/PlanningAllocationEditor.js', import.meta.url), 'utf8');
 const reoptimizationSource = readFileSync(new URL('../services/planningReoptimization.service.js', import.meta.url), 'utf8');
 const previewSource = reoptimizationSource.slice(
   reoptimizationSource.indexOf('export function buildPlanningOperationResourcePreview'),

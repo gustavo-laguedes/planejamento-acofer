@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { ProductionCalendarCard } from '../shared/production-calendar/ProductionCalendarCard.js';
+import { buildManualScheduleAllocationParts } from '../services/manualScheduleDraft.service.js';
 import {
-  addProductionCalendarSplitPart,
-  equalProductionCalendarSplitPercents,
-  ProductionCalendarEditor,
-  resolveProductionCalendarDistribution,
-  resolveProductionCalendarEditorPreview
-} from '../shared/production-calendar/ProductionCalendarEditor.js';
+  addPlanningAllocationSplitPart,
+  equalPlanningAllocationSplitPercents,
+  PlanningAllocationEditor,
+  resolvePlanningAllocationDistribution,
+  resolvePlanningAllocationEditorPreview
+} from '../shared/planning-editor/PlanningAllocationEditor.js';
 
 class FakeElement {
   constructor(tagName = 'div') {
@@ -149,7 +150,8 @@ const cardSource = readFileSync(new URL('../shared/production-calendar/Productio
 const gridSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarGrid.js', import.meta.url), 'utf8');
 const calendarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendar.js', import.meta.url), 'utf8');
 const dragSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarDrag.js', import.meta.url), 'utf8');
-const editorSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarEditor.js', import.meta.url), 'utf8');
+const editorSource = readFileSync(new URL('../shared/planning-editor/PlanningAllocationEditor.js', import.meta.url), 'utf8');
+const legacyEditorSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarEditor.js', import.meta.url), 'utf8');
 const editorCss = readFileSync(new URL('../shared/production-calendar/production-calendar.css', import.meta.url), 'utf8');
 const pageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
 
@@ -161,7 +163,12 @@ assert.match(dragSource, /\.production-calendar-card-selector, button, input, se
 assert.match(dragSource, /if \(isInteractivePointerTarget\(event\.target, card\)\) return false/);
 assert.match(editorSource, /\[data-editor-cancel\][\s\S]*addEventListener\('click', close\)/);
 assert.match(pageSource, /onEditAllocation:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\)/);
-assert.match(pageSource, /ProductionCalendarEditor\(\{[\s\S]*onSave:\s*payload\s*=>\s*handleProductionCalendarAllocationSave\(\{\s*\.\.\.payload,\s*productivityRows\s*\}\)/);
+assert.match(pageSource, /PlanningAllocationEditor\(\{[\s\S]*onSave:\s*payload\s*=>\s*handleProductionCalendarAllocationSave\(\{\s*\.\.\.payload,\s*productivityRows\s*\}\)/);
+assert.match(pageSource, /getDistributionPreview:\s*\(previewAllocation,\s*percents,\s*options\)\s*=>\s*buildManualScheduleAllocationParts\(previewAllocation,\s*percents,\s*options\)/);
+assert.match(legacyEditorSource, /PlanningAllocationEditor/);
+assert.match(legacyEditorSource, /buildManualScheduleAllocationParts/);
+assert.doesNotMatch(editorSource, /\.\.\/\.\.\/services\//);
+assert.doesNotMatch(editorSource, /\.\.\/production-calendar|productionCalendar\.utils|ProductionCalendarCard/);
 assert.match(pageSource, /runPlanningAllocationEditorController/);
 const allocationEditorControllerSource = readFileSync(new URL('../shared/planning-controller/planningAllocationEditorController.js', import.meta.url), 'utf8');
 assert.match(allocationEditorControllerSource, /type:\s*'EDIT_ALLOCATION'/);
@@ -170,31 +177,40 @@ assert.doesNotMatch(pageSource, /manualDraftDailyMinutes/);
 assert.match(pageSource, /dailyMinutes:\s*planningDraftDailyMinutes\(\{ requireConfiguredShifts: true \}\)/);
 
 const previewMachine = { machineId: 'M2' };
-const currentPreview = resolveProductionCalendarEditorPreview(
+const currentPreview = resolvePlanningAllocationEditorPreview(
   ({ machine, peopleCount }) => ({ capacityPerDay: machine.machineId === 'M2' ? peopleCount * 30 : 0 }),
   { machine: previewMachine, peopleCount: 2 }
 );
-const changedPeoplePreview = resolveProductionCalendarEditorPreview(
+const changedPeoplePreview = resolvePlanningAllocationEditorPreview(
   ({ machine, peopleCount }) => ({ capacityPerDay: machine.machineId === 'M2' ? peopleCount * 30 : 0 }),
   { machine: previewMachine, peopleCount: 3 }
 );
 assert.equal(currentPreview.capacityPerDay, 60);
 assert.equal(changedPeoplePreview.capacityPerDay, 90);
-assert.equal(resolveProductionCalendarEditorPreview(() => null, {}), null);
+assert.equal(resolvePlanningAllocationEditorPreview(() => null, {}), null);
 assert.equal(
-  resolveProductionCalendarEditorPreview(() => { throw new ReferenceError('missing daily minutes'); }, {}),
+  resolvePlanningAllocationEditorPreview(() => { throw new ReferenceError('missing daily minutes'); }, {}),
   null,
   'falha na prévia não pode impedir a abertura do editor'
 );
 
-assert.deepEqual(equalProductionCalendarSplitPercents(3), [33.33, 33.33, 33.34]);
-assert.deepEqual(addProductionCalendarSplitPart([50, 50]), [50, 25, 25]);
-assert.deepEqual(addProductionCalendarSplitPart([50, 25, 25]), [50, 25, 12.5, 12.5]);
-const distribution = resolveProductionCalendarDistribution(allocation({ quantity: 10, capacityPercent: 60.5 }), ['50,00', '50,00'], { splitGroupId: 'ui-preview' });
+assert.deepEqual(equalPlanningAllocationSplitPercents(3), [33.33, 33.33, 33.34]);
+assert.deepEqual(addPlanningAllocationSplitPart([50, 50]), [50, 25, 25]);
+assert.deepEqual(addPlanningAllocationSplitPart([50, 25, 25]), [50, 25, 12.5, 12.5]);
+const distribution = resolvePlanningAllocationDistribution(
+  (sourceAllocation, percents, options) => buildManualScheduleAllocationParts(sourceAllocation, percents, options),
+  allocation({ quantity: 10, capacityPercent: 60.5 }),
+  ['50,00', '50,00'],
+  { splitGroupId: 'ui-preview' }
+);
 assert.equal(distribution.valid, true);
 assert.deepEqual(distribution.parts.map(part => part.capacityPercent), [30.25, 30.25]);
 assert.deepEqual(distribution.parts.map(part => part.quantity), [5, 5]);
-assert.equal(resolveProductionCalendarDistribution(allocation(), ['40', '40']).valid, false);
+assert.equal(resolvePlanningAllocationDistribution(
+  (sourceAllocation, percents, options) => buildManualScheduleAllocationParts(sourceAllocation, percents, options),
+  allocation(),
+  ['40', '40']
+).valid, false);
 assert.match(editorSource, /Participação no pai/);
 assert.match(editorSource, /Participação na produção original/);
 assert.match(editorSource, /Capacidade utilizada desta parte/);

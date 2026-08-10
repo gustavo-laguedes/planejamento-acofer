@@ -3,11 +3,11 @@ import { getCurrentUser } from '../shared/api.js';
 import { CalendarTimeline } from '../shared/CalendarTimeline.js';
 import {
   ProductionCalendar,
-  ProductionCalendarEditor,
   buildProductionCalendarDayPresentation,
   buildProductionCalendarDayProductivity,
   extendProductionCalendarDayRange
 } from '../shared/production-calendar/index.js';
+import { PlanningAllocationEditor } from '../shared/planning-editor/PlanningAllocationEditor.js';
 import {
   adaptPlanningResultToScheduleSnapshot as adaptPlanningResultToProductionCalendar
 } from '../shared/planning-schedule/planningScheduleAdapter.js';
@@ -120,6 +120,7 @@ import { canAccess } from '../shared/rbac.js';
 import { SummaryCards } from '../shared/SummaryCard.js';
 import { PlanningStatusPill } from '../shared/StatusPill.js';
 import {
+  buildManualScheduleAllocationParts,
   createManualScheduleDraft,
   moveDraftAllocation
 } from '../services/manualScheduleDraft.service.js';
@@ -3197,12 +3198,13 @@ export function PlanningPage() {
       machines: snapshot?.machines || [],
       material: material || editorAllocation
     });
-    ProductionCalendarEditor({
+    PlanningAllocationEditor({
       allocation: editorAllocation,
       machines,
       readOnly: !canWritePlanning,
       startSplit,
       emptyMessage: machines.length ? '' : 'Nenhuma máquina compatível foi encontrada na Matriz para este material.',
+      getDistributionPreview: (previewAllocation, percents, options) => buildManualScheduleAllocationParts(previewAllocation, percents, options),
       getPreview: ({ allocation: previewAllocation = editorAllocation, quantity, machine, peopleCount, date, startTime }) => buildPlanningOperationResourcePreview({
         allocation: { ...previewAllocation, quantity: quantity ?? previewAllocation.quantity, date: date || previewAllocation.date, startTime: startTime || previewAllocation.startTime },
         machine,
@@ -5343,12 +5345,13 @@ export function PlanningPage() {
           settled = true;
           resolve(value);
         };
-        ProductionCalendarEditor({
+        PlanningAllocationEditor({
           allocation: editorAllocation,
           machines: orderedMachines,
           allowSplit: false,
           lockPosition: true,
           emptyMessage: 'Nenhuma configuração compatível foi encontrada na Matriz para este material no destino.',
+          getDistributionPreview: (previewAllocation, percents, options) => buildManualScheduleAllocationParts(previewAllocation, percents, options),
           getPreview,
           onClose: () => finish(null),
           onSave: payload => {

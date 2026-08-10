@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { buildManualScheduleAllocationSplit } from '../services/manualScheduleDraft.service.js';
 import {
-  ProductionCalendarSplitEditor,
-  resolveProductionCalendarSplitPreview
-} from '../shared/production-calendar/ProductionCalendarSplitEditor.js';
+  PlanningAllocationSplitEditor,
+  resolvePlanningAllocationSplitPreview
+} from '../shared/planning-editor/PlanningAllocationSplitEditor.js';
 
 class FakeElement {
   constructor(tagName = 'div') {
@@ -76,9 +78,17 @@ const allocation = {
   components: [{ allocationId: 'allocation-modal', parentOperationId: 'operation-modal', productionId: 'production-modal', quantity: 800 }]
 };
 
-assert.equal(resolveProductionCalendarSplitPreview(allocation, '30,00', { splitGroupId: 'preview' }).second.capacityPercent, 56);
-assert.equal(resolveProductionCalendarSplitPreview(allocation, '30,00', { splitGroupId: 'preview' }).second.splitRatioPercent, 70);
-assert.equal(resolveProductionCalendarSplitPreview(allocation, 'texto').valid, false);
+const splitPreview = (sourceAllocation, firstPercent, options) => buildManualScheduleAllocationSplit(sourceAllocation, firstPercent, options);
+assert.equal(resolvePlanningAllocationSplitPreview(splitPreview, allocation, '30,00', { splitGroupId: 'preview' }).second.capacityPercent, 56);
+assert.equal(resolvePlanningAllocationSplitPreview(splitPreview, allocation, '30,00', { splitGroupId: 'preview' }).second.splitRatioPercent, 70);
+assert.equal(resolvePlanningAllocationSplitPreview(splitPreview, allocation, 'texto').valid, false);
+
+const splitEditorSource = readFileSync(new URL('../shared/planning-editor/PlanningAllocationSplitEditor.js', import.meta.url), 'utf8');
+const legacySplitEditorSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarSplitEditor.js', import.meta.url), 'utf8');
+assert.doesNotMatch(splitEditorSource, /\.\.\/\.\.\/services\//);
+assert.doesNotMatch(splitEditorSource, /\.\.\/production-calendar|productionCalendar\.utils/);
+assert.match(legacySplitEditorSource, /PlanningAllocationSplitEditor/);
+assert.match(legacySplitEditorSource, /buildManualScheduleAllocationSplit/);
 
 const previousDocument = globalThis.document;
 const body = new FakeElement('body');
@@ -86,7 +96,7 @@ globalThis.document = { createElement: tagName => new FakeElement(tagName), body
 try {
   let saves = 0;
   const bytes = JSON.stringify(allocation);
-  const editor = ProductionCalendarSplitEditor({ allocation, onSave: () => { saves += 1; } });
+  const editor = PlanningAllocationSplitEditor({ allocation, getSplitPreview: splitPreview, onSave: () => { saves += 1; } });
   const modal = editor.element.children[0];
   assert.equal(modal.querySelector('[data-split-preview="secondPercent"]').textContent, '50%');
   modal.querySelector('[data-split-cancel]').dispatch('click');

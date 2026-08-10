@@ -988,7 +988,7 @@ Não mover regra de calendário produtivo de services para shared. Helpers de ap
 
 ### Missão REF-023 — Separar editor operacional do renderer V2
 
-**Status:** `[ ] PENDENTE`
+**Status:** `[x] CONCLUIDA pela REF-042`
 
 #### Situação atual
 
@@ -1012,6 +1012,17 @@ features/planning/schedule-editor/
 #### Gate
 
 A edição operacional pode ser aberta a partir do fluxo do Gantt sem importar `shared/production-calendar/`.
+
+#### REF-042 - Resultado registrado em 10/08/2026
+
+- Baseline: branch `rebuild-production-calendar`, HEAD `8cd1dbc`, worktree limpo, suite inicial `node --test tests/*.js` com 98/98.
+- Consumidores confirmados: `PlanningPage.js` abre o editor neutro em edicao de allocation e em confirmacao de movimento manual; `ProductionCalendarSplitEditor` permanece sem consumidor produtivo direto confirmado, mas testado/exportado para compatibilidade.
+- Gate: `PlanningAllocationEditor` passou no gate apos receber `getDistributionPreview` por callback explicito; `PlanningAllocationSplitEditor` passou como componente legado/compatibilidade apos receber `getSplitPreview` por callback explicito.
+- Dependencia CSS: classes `production-calendar-editor-*` e seletores `data-editor-preview`, `data-split-*` e `data-part-*` foram preservados; CSS nao foi movido nem renomeado.
+- Extracao realizada: criados `shared/planning-editor/PlanningAllocationEditor.js`, `PlanningAllocationSplitEditor.js`, `planningAllocationDisplay.js`, `planningAllocationEditorFormatters.js` e `index.js`.
+- Compatibilidade: caminhos antigos `shared/production-calendar/ProductionCalendarEditor.js` e `ProductionCalendarSplitEditor.js` viraram wrappers/re-exports temporarios com nomes `ProductionCalendar*`.
+- Testes REF-042: sintaxe dos novos editores, wrappers e `PlanningPage.js`; testes focados de edit/split/configuracao/capacidade/controller/reotimizacao; suite completa e `git diff --check` registrados em `docs/refactor/REF-042_PLANNING_EDITOR_VISUAL_NEUTRALIZATION.md`.
+- Blockers restantes para desligar V2: REF-013 homologacao manual, renderer/fallback V2, `ProductionCalendar`/grid, CSS V2 ou CSS compartilhado dos modais, helpers V2 puros, `productiveMinutes`, turnos/capacidade, stock-only, identidade manual restante, autosave/descarte e `generatePlanningCode`.
 
 ---
 
@@ -2430,6 +2441,27 @@ Homologacao: nao executada em browser; mudanca estrutural de import/export e hel
 Checkboxes atualizados: REF-041 registrada como concluida em Fase 3; baseline, inventario, classificacao, gate, re-exports, testes e blockers restantes registrados.
 Riscos/pendencias: REF-013 homologacao manual, renderer/fallback V2, `ProductionCalendar`, editor/split visual, helpers V2 puros, `productiveMinutes`, turnos/capacidade, stock-only, identidade manual restante, autosave/descarte e `generatePlanningCode` permanecem pendentes.
 Proxima missao sugerida: auditar editor/split visual compartilhado para definir se existe fronteira neutra de apresentacao operacional sem mover regra transacional.
+
+---
+
+### 2026-08-10 - REF-042 - Neutralizar editor/split visual compartilhado do planejamento
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de neutralizacao estrutural; auditoria read-only por Rogerio Ceni
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-manual-calendar`, `acofer-production-calendar-ui`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `8cd1dbc`
+Baseline: worktree inicial limpo; `node --test tests/*.js` inicial com 98 testes, 98 aprovados e 0 falhas.
+Objetivo: auditar se `ProductionCalendarEditor` e `ProductionCalendarSplitEditor` eram UI operacional compartilhada e mover somente a camada visual segura para namespace neutro.
+Arquivos lidos: `AGENTS.md`, este plano, `docs/refactor/REF-037_PLANNING_ALLOCATION_EDITOR_CONTROLLER_EXTRACTION.md`, `docs/refactor/REF-038_CALENDARIO_V2_COUPLING_NEUTRALIZATION.md`, `docs/refactor/REF-040_SCHEDULE_ADAPTER_NEUTRALIZATION.md`, `docs/refactor/REF-041_SCHEDULE_DAY_HELPERS_NEUTRALIZATION.md`, `pages/PlanningPage.js`, `shared/production-calendar/ProductionCalendarEditor.js`, `shared/production-calendar/ProductionCalendarSplitEditor.js`, `shared/production-calendar/index.js`, `shared/planning-controller/planningAllocationEditorController.js`, CSS e testes relacionados.
+Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-editor/PlanningAllocationEditor.js`, `shared/planning-editor/PlanningAllocationSplitEditor.js`, `shared/planning-editor/planningAllocationDisplay.js`, `shared/planning-editor/planningAllocationEditorFormatters.js`, `shared/planning-editor/index.js`, `shared/production-calendar/ProductionCalendarEditor.js`, `shared/production-calendar/ProductionCalendarSplitEditor.js`, `tests/productionCalendarEditButton.test.js`, `tests/productionCalendarSplitEditor.test.js`, `tests/planningReoptimization.service.test.js`, `docs/refactor/REF-042_PLANNING_EDITOR_VISUAL_NEUTRALIZATION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: os editores visuais foram movidos para `shared/planning-editor/` com nomes neutros; a pagina passou a usar `PlanningAllocationEditor`; o calculo canonico de distribuicao/split passou a ser recebido por callbacks explicitos; caminhos antigos do V2 viraram wrappers compativeis; CSS `production-calendar-*` foi preservado.
+Gate registrado: editor principal usado pelo planejamento/Gantt via pagina, sem estado interno de `ProductionCalendar`, sem grid V2, sem solver/reotimizacao e sem transaction direta; split editor legado sem consumidor produtivo direto confirmado, mas neutralizado como compatibilidade segura; ambos preservam API por wrappers.
+Testes/comandos: `node --check pages/PlanningPage.js`; `node --check shared/planning-editor/PlanningAllocationEditor.js`; `node --check shared/planning-editor/PlanningAllocationSplitEditor.js`; `node --test tests/productionCalendarEditButton.test.js`; `node --test tests/productionCalendarSplitEditor.test.js`; `node --test tests/productionCalendarConfigurationEdit.integration.test.js`; `node --test tests/manualScheduleEditCapacityOverride.test.js`; `node --test tests/planningAllocationEditorController.test.js`; `node --test tests/planningReoptimization.service.test.js`; suite completa e `git diff --check`.
+Resultado: testes focados aprovados; suite final `node --test tests/*.js` com 98 testes, 98 aprovados e 0 falhas; `git diff --check` sem erros, apenas avisos conhecidos LF -> CRLF.
+Homologacao: nao executada em browser; mudanca estrutural de import/export e injecao de callbacks, sem redesign, CSS, renderer, solver, persistencia, estoque ou regra produtiva nova.
+Checkboxes atualizados: REF-023 registrada como concluida pela REF-042; baseline, consumidores, gate, CSS, extracao, compatibilidade, testes e blockers restantes registrados.
+Riscos/pendencias: REF-013 homologacao manual, renderer/fallback V2, `ProductionCalendar`/grid, CSS V2 ou CSS compartilhado dos modais, helpers V2 puros, `productiveMinutes`, turnos/capacidade, stock-only, identidade manual restante, autosave/descarte e `generatePlanningCode` permanecem pendentes.
+Proxima missao sugerida: neutralizar CSS compartilhado dos editores em namespace proprio, mantendo classes antigas por compatibilidade temporaria.
 
 ---
 
