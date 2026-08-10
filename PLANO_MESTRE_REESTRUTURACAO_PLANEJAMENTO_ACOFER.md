@@ -2410,6 +2410,29 @@ Proxima missao sugerida: neutralizar helpers de dia/snapshot ainda usados fora d
 
 ---
 
+### 2026-08-10 - REF-041 - Neutralizar helpers civis de dia/snapshot
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao pequena de neutralizacao; metodologia JARVIS/Toto aplicada pelo coordenador
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `f0c9085`
+Baseline: worktree inicial limpo; `node --test tests/*.js` inicial com 97 testes, 97 aprovados e 0 falhas.
+Objetivo: auditar os helpers restantes de `productionCalendar.utils.js` e mover somente helpers neutros de leitura/normalizacao civil de dia, snapshot e transformacao pura, sem tocar capacidade, turnos, feriados como regra produtiva, finais de semana como regra produtiva, `manualWorkDates`, estoque, solver ou reotimizacao.
+Arquivos lidos: `AGENTS.md`, este plano, `docs/refactor/REF-038_CALENDARIO_V2_COUPLING_NEUTRALIZATION.md`, `docs/refactor/REF-039_MACHINE_HELPERS_NEUTRALIZATION.md`, `docs/refactor/REF-040_SCHEDULE_ADAPTER_NEUTRALIZATION.md`, `shared/production-calendar/productionCalendar.utils.js`, `shared/production-calendar/index.js`, `shared/production-calendar/ProductionCalendar.js`, `shared/production-calendar/ProductionCalendarGrid.js`, `shared/planning-schedule/*`, `shared/planning-schedule-view/*`, `pages/PlanningPage.js`, consumidores localizados por `rg` e testes relacionados.
+Arquivos alterados: `shared/planning-schedule/planningScheduleDay.js`, `shared/production-calendar/productionCalendar.utils.js`, `pages/PlanningPage.js`, `tests/planningScheduleDay.test.js`, `docs/refactor/REF-041_SCHEDULE_DAY_HELPERS_NEUTRALIZATION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Inventario/classificacao: movidos como neutros `formatProductionCalendarDate`, `getProductionCalendarWeekday`, `addProductionCalendarDays`, `getProductionCalendarProductionLimitDate`, `normalizeProductionCalendarDay` e `fillProductionCalendarDayRange`; mantidos como V2/grid `getProductionCalendarDayCardCounts`, `groupAllocationsByMachineAndDate`, `createProductionCalendarGridRows`, `formatProductionCalendarCompactNumber`; mantidos por regra produtiva/ambigua `buildProductionCalendarDayProductivity`, `buildProductionCalendarDayPresentation`, `isProductionCalendarNonWorkingDay` e `extendProductionCalendarDayRange`; `normalizeProductionCalendarMachineName` e `compareProductionCalendarMachineOrder` permanecem registrados como ja neutralizados na REF-039.
+Resumo do diff: criado `planningScheduleDay` com a implementacao canonica dos helpers civis UTC; `productionCalendar.utils.js` passou a reexportar nomes legados e usar os auxiliares neutros para evitar duplicacao; `PlanningPage.js` passou a importar `fillPlanningScheduleDayRange` do namespace neutro com alias local legado; teste novo caracteriza timezone, parsing, fallbacks, mutabilidade rasa, duplicatas, excecao historica com `null` e re-export antigo.
+Gate registrado: helpers movidos nao tem DOM, estado visual V2, capacidade, jornada, pessoas, estoque, solver, persistencia ou regra produtiva; assinatura/retorno e timezone foram preservados; comportamentos estranhos existentes nao foram corrigidos.
+Re-exports: nomes `ProductionCalendar*` civis continuam disponiveis apenas em `shared/production-calendar/productionCalendar.utils.js` e no barrel antigo para compatibilidade temporaria.
+Testes/comandos: `node --check shared/planning-schedule/planningScheduleDay.js`; `node --check shared/production-calendar/productionCalendar.utils.js`; `node --check pages/PlanningPage.js`; `node --test tests/planningScheduleDay.test.js`; `node --test tests/productionCalendarGrid.test.js`; `node --test tests/productionCalendarDayHeader.test.js`; `node --test tests/productionCalendarHorizon.test.js`; `node --test tests/ganttApsRenderer.test.js`; `node --test tests/planningScheduleRenderer.test.js`; `node --test tests/*.js`; `git diff --check`.
+Resultado: testes focados aprovados; suite final com 98 testes, 98 aprovados e 0 falhas; `git diff --check` sem erros, apenas avisos conhecidos LF -> CRLF.
+Homologacao: nao executada em browser; mudanca estrutural de import/export e helpers puros, sem alteracao de renderer, DOM, movimento manual, persistencia, estoque, solver, reotimizacao, capacidade ou CSS.
+Checkboxes atualizados: REF-041 registrada como concluida em Fase 3; baseline, inventario, classificacao, gate, re-exports, testes e blockers restantes registrados.
+Riscos/pendencias: REF-013 homologacao manual, renderer/fallback V2, `ProductionCalendar`, editor/split visual, helpers V2 puros, `productiveMinutes`, turnos/capacidade, stock-only, identidade manual restante, autosave/descarte e `generatePlanningCode` permanecem pendentes.
+Proxima missao sugerida: auditar editor/split visual compartilhado para definir se existe fronteira neutra de apresentacao operacional sem mover regra transacional.
+
+---
+
 # 14. Quadro de status geral
 
 | Fase | Estado |

@@ -2,6 +2,16 @@ import { holidayForDate } from '../holidays.js';
 import {
   comparePlanningMachineOrder
 } from '../planning-schedule/planningMachineOrder.js';
+import {
+  addPlanningScheduleDays as addProductionCalendarDays,
+  fillPlanningScheduleDayRange as fillProductionCalendarDayRange,
+  formatPlanningScheduleDate as formatProductionCalendarDate,
+  getPlanningScheduleProductionLimitDate as getProductionCalendarProductionLimitDate,
+  getPlanningScheduleWeekday as getProductionCalendarWeekday,
+  isPlanningScheduleDateOnly,
+  normalizePlanningScheduleDay as normalizeProductionCalendarDay,
+  parsePlanningScheduleDateOnlyToUtcDate
+} from '../planning-schedule/planningScheduleDay.js';
 
 export {
   comparePlanningMachineOrder as compareProductionCalendarMachineOrder,
@@ -9,44 +19,12 @@ export {
 } from '../planning-schedule/planningMachineOrder.js';
 
 /**
- * @param {string} date
- * @returns {boolean}
- */
-function isValidDateOnly(date) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return false;
-  const parsed = new Date(`${date}T00:00:00Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
-}
-
-/**
- * @param {string} date
- * @returns {Date|null}
- */
-function dateOnlyToUtcDate(date) {
-  return isValidDateOnly(date) ? new Date(`${date}T00:00:00Z`) : null;
-}
-
-function addUtcDays(date, amount) {
-  const next = new Date(date.getTime());
-  next.setUTCDate(next.getUTCDate() + amount);
-  return next;
-}
-
-function utcDateToDateOnly(date) {
-  return date.toISOString().slice(0, 10);
-}
-
-/**
  * Formats an ISO date as dd/mm/yyyy in pt-BR.
  *
  * @param {string} date
  * @returns {string}
  */
-export function formatProductionCalendarDate(date) {
-  const parsed = dateOnlyToUtcDate(date);
-  if (!parsed) return String(date || '');
-  return new Intl.DateTimeFormat('pt-BR', { timeZone: 'UTC' }).format(parsed);
-}
+export { formatPlanningScheduleDate as formatProductionCalendarDate } from '../planning-schedule/planningScheduleDay.js';
 
 /**
  * Formats an ISO date weekday in pt-BR.
@@ -54,11 +32,7 @@ export function formatProductionCalendarDate(date) {
  * @param {string} date
  * @returns {string}
  */
-export function getProductionCalendarWeekday(date) {
-  const parsed = dateOnlyToUtcDate(date);
-  if (!parsed) return '';
-  return new Intl.DateTimeFormat('pt-BR', { weekday: 'long', timeZone: 'UTC' }).format(parsed);
-}
+export { getPlanningScheduleWeekday as getProductionCalendarWeekday } from '../planning-schedule/planningScheduleDay.js';
 
 /**
  * Formats a numeric quantity without changing the original value.
@@ -173,7 +147,7 @@ export function isProductionCalendarNonWorkingDay(day) {
   if (day?.isWorkingDay === true) return false;
   if (day?.isWorkingDay === false) return true;
 
-  const parsed = dateOnlyToUtcDate(day?.date);
+  const parsed = parsePlanningScheduleDateOnlyToUtcDate(day?.date);
   if (!parsed) return false;
 
   if (holidayForDate(day.date)) return true;
@@ -182,20 +156,9 @@ export function isProductionCalendarNonWorkingDay(day) {
   return weekday === 0 || weekday === 6;
 }
 
-export function addProductionCalendarDays(date, amount) {
-  const parsed = dateOnlyToUtcDate(date);
-  const days = Number(amount);
-  if (!parsed || !Number.isFinite(days)) return String(date || '');
-  return utcDateToDateOnly(addUtcDays(parsed, Math.trunc(days)));
-}
+export { addPlanningScheduleDays as addProductionCalendarDays } from '../planning-schedule/planningScheduleDay.js';
 
-export function getProductionCalendarProductionLimitDate(allocations = []) {
-  return (Array.isArray(allocations) ? allocations : [])
-    .map(allocation => String(allocation?.date || ''))
-    .filter(isValidDateOnly)
-    .sort()
-    .at(-1) || null;
-}
+export { getPlanningScheduleProductionLimitDate as getProductionCalendarProductionLimitDate } from '../planning-schedule/planningScheduleDay.js';
 
 function productionCalendarShiftId(shift, index) {
   return String(shift?.shiftId ?? shift?.id ?? `shift-${index + 1}`);
@@ -287,45 +250,7 @@ export function buildProductionCalendarDayPresentation({
  * @param {string|Date|Object} day
  * @returns {{date: string, label: string, weekday: string, isWorkingDay?: boolean}}
  */
-export function normalizeProductionCalendarDay(day) {
-  if (day && typeof day === 'object' && !(day instanceof Date)) {
-    const date = String(day.date || '');
-    const normalized = {
-      ...day,
-      date,
-      label: String(day.label || day.date || ''),
-      weekday: String(day.weekday || day.weekDay || day.dayOfWeek || getProductionCalendarWeekday(date))
-    };
-
-    if (day.isWorkingDay !== undefined) normalized.isWorkingDay = Boolean(day.isWorkingDay);
-    if (day.workingDay !== undefined) normalized.isWorkingDay = Boolean(day.workingDay);
-    if (day.businessDay !== undefined) normalized.isWorkingDay = Boolean(day.businessDay);
-    if (day.is_business_day !== undefined) normalized.isWorkingDay = Boolean(day.is_business_day);
-    if (day.business_day !== undefined) normalized.isWorkingDay = Boolean(day.business_day);
-
-    if (!normalized.label) normalized.label = formatProductionCalendarDate(date);
-    return {
-      ...normalized,
-      label: normalized.label
-    };
-  }
-
-  if (day instanceof Date) {
-    const date = day.toISOString().slice(0, 10);
-    return {
-      date,
-      label: formatProductionCalendarDate(date),
-      weekday: getProductionCalendarWeekday(date)
-    };
-  }
-
-  const date = String(day || '');
-  return {
-    date,
-    label: formatProductionCalendarDate(date),
-    weekday: getProductionCalendarWeekday(date)
-  };
-}
+export { normalizePlanningScheduleDay as normalizeProductionCalendarDay } from '../planning-schedule/planningScheduleDay.js';
 
 /**
  * Fills visual gaps between the first and last valid day without changing planning data.
@@ -333,29 +258,7 @@ export function normalizeProductionCalendarDay(day) {
  * @param {Array<{date: string, label: string, weekday: string, isWorkingDay?: boolean}>} days
  * @returns {Array<{date: string, label: string, weekday: string, isWorkingDay?: boolean}>}
  */
-export function fillProductionCalendarDayRange(days = []) {
-  const byDate = days.reduce((map, day) => {
-    if (isValidDateOnly(day?.date) && !map.has(day.date)) map.set(day.date, day);
-    return map;
-  }, new Map());
-  const dates = [...byDate.keys()].sort();
-  if (!dates.length) return [];
-
-  const start = dateOnlyToUtcDate(dates[0]);
-  const end = dateOnlyToUtcDate(dates[dates.length - 1]);
-  const filled = [];
-
-  for (let current = start; current <= end; current = addUtcDays(current, 1)) {
-    const date = utcDateToDateOnly(current);
-    filled.push(byDate.get(date) || {
-      date,
-      label: formatProductionCalendarDate(date),
-      weekday: getProductionCalendarWeekday(date)
-    });
-  }
-
-  return filled;
-}
+export { fillPlanningScheduleDayRange as fillProductionCalendarDayRange } from '../planning-schedule/planningScheduleDay.js';
 
 /**
  * Extends the calendar contract with fully usable empty days through endDate.
@@ -364,7 +267,7 @@ export function fillProductionCalendarDayRange(days = []) {
  */
 export function extendProductionCalendarDayRange(days = [], endDate = null) {
   const normalized = fillProductionCalendarDayRange(days.map(normalizeProductionCalendarDay));
-  if (!normalized.length || !isValidDateOnly(endDate)) return normalized;
+  if (!normalized.length || !isPlanningScheduleDateOnly(endDate)) return normalized;
   const lastDate = normalized.at(-1).date;
   if (endDate <= lastDate) return normalized.filter(day => day.date <= endDate);
 

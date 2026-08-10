@@ -6,12 +6,14 @@ import {
   ProductionCalendarEditor,
   buildProductionCalendarDayPresentation,
   buildProductionCalendarDayProductivity,
-  extendProductionCalendarDayRange,
-  fillProductionCalendarDayRange
+  extendProductionCalendarDayRange
 } from '../shared/production-calendar/index.js';
 import {
   adaptPlanningResultToScheduleSnapshot as adaptPlanningResultToProductionCalendar
 } from '../shared/planning-schedule/planningScheduleAdapter.js';
+import {
+  fillPlanningScheduleDayRange as fillProductionCalendarDayRange
+} from '../shared/planning-schedule/planningScheduleDay.js';
 import {
   getProductionDisplayColor,
   getProductionDisplayFallbackColor,
