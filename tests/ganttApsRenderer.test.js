@@ -416,8 +416,13 @@ assert.match(
 );
 assert.match(
   geometrySource,
-  /import\s*\{\s*compareProductionCalendarMachineOrder\s*\}\s*from\s*['"]\.\.\/\.\.\/production-calendar\/productionCalendar\.utils\.js['"]/,
-  'Gantt APS deve consumir o comparador canônico do Calendário V2'
+  /import\s*\{\s*comparePlanningMachineOrder\s*\}\s*from\s*['"]\.\.\/\.\.\/planning-schedule\/planningMachineOrder\.js['"]/,
+  'Gantt APS deve consumir o comparador canonico neutro de maquinas'
+);
+assert.doesNotMatch(
+  geometrySource,
+  /production-calendar\/productionCalendar\.utils\.js/,
+  'Gantt APS nao deve importar helpers de maquina do pacote visual V2'
 );
 assert.doesNotMatch(
   geometrySource,

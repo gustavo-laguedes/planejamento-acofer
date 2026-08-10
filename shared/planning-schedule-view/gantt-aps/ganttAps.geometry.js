@@ -1,4 +1,4 @@
-import { compareProductionCalendarMachineOrder } from '../../production-calendar/productionCalendar.utils.js';
+import { comparePlanningMachineOrder } from '../../planning-schedule/planningMachineOrder.js';
 
 export const GANTT_APS_MAX_VISIBLE_DAYS = 120;
 export const GANTT_APS_DEFAULT_PIXELS_PER_HOUR = 6;
@@ -191,7 +191,7 @@ export function orderGanttApsResources(model = {}) {
   const resources = (Array.isArray(model.resources) ? model.resources : [])
     .map(resource => ({ ...resource }))
     .sort((left, right) => (
-      compareProductionCalendarMachineOrder(left, right)
+      comparePlanningMachineOrder(left, right)
       || Number(left.order ?? Number.MAX_SAFE_INTEGER) - Number(right.order ?? Number.MAX_SAFE_INTEGER)
       || String(left.name || '').localeCompare(String(right.name || ''), 'pt-BR')
       || String(left.id).localeCompare(String(right.id))

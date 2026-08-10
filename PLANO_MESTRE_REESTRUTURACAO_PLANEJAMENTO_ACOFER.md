@@ -736,6 +736,10 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] REF-038 concluida: neutralizacao inicial das dependencias do Calendario V2 com auditoria de PlanningPage, renderer/factory, Gantt APS, editor/split, adapter, `productionDisplayColor`, utilities e fallback; evidencia em `docs/refactor/REF-038_CALENDARIO_V2_COUPLING_NEUTRALIZATION.md`.
 - [x] Bloco neutralizado na REF-038: `productionDisplayColor` e o resolvedor puro `getProductionCalendarAllocationColor` foram movidos para `shared/planning-presentation/productionDisplayColor.js`; o Gantt deixou de importar `ProductionCalendarCard.js`; re-exports legados preservam compatibilidade.
 - [x] Testes REF-038: baseline inicial `node --test tests/*.js` com 95/95; validacoes finais focadas de renderer, Gantt, editor, split, grid e cor; suite final 95/95; `git diff --check` sem falhas.
+- [x] REF-039 concluida: helpers neutros de maquina `normalizeProductionCalendarMachineName` e `compareProductionCalendarMachineOrder` foram auditados e movidos para `shared/planning-schedule/planningMachineOrder.js`; evidencia em `docs/refactor/REF-039_MACHINE_HELPERS_NEUTRALIZATION.md`.
+- [x] Consumidores REF-039 encontrados: `ganttAps.geometry.js`, `createProductionCalendarGridRows`, `productionCalendar.adapter.js`, barrel `shared/production-calendar/index.js` e testes de Gantt/grid/utilities.
+- [x] Gate REF-039: sem DOM/render V2, sem estado V2, sem regra especifica V2, API preservada por re-export, movimentacao mecanica sem mudanca de comportamento.
+- [x] Neutralizacao REF-039: cadeia `Gantt geometry -> productionCalendar.utils.js` substituida por `Gantt geometry -> shared/planning-schedule/planningMachineOrder.js`; `productionCalendar.utils.js` mantem re-export temporario.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
@@ -853,6 +857,62 @@ shared/planning-presentation/
 #### Gate
 
 O Gantt não importa nenhum componente visual do V2 para resolver cor.
+
+---
+
+### Missao REF-039 - Neutralizar helpers de maquina usados pelo Gantt
+
+**Status:** `[x] CONCLUIDA`
+
+#### Situacao inicial
+
+`ganttAps.geometry.js` importava `compareProductionCalendarMachineOrder` de `shared/production-calendar/productionCalendar.utils.js`, mantendo a cadeia:
+
+```text
+Gantt geometry
+-> productionCalendar.utils.js
+```
+
+#### Auditoria e consumidores
+
+Consumidores diretos encontrados:
+
+- `shared/planning-schedule-view/gantt-aps/ganttAps.geometry.js`;
+- `shared/production-calendar/productionCalendar.adapter.js`;
+- `createProductionCalendarGridRows` em `shared/production-calendar/productionCalendar.utils.js`;
+- `shared/production-calendar/index.js`;
+- testes de Gantt, grid e utilities.
+
+Gate dos helpers:
+
+- usados fora do V2: sim;
+- DOM/render V2: nao;
+- estado V2: nao;
+- regra especifica do Calendario V2: nao;
+- API preservavel: sim;
+- movimentacao sem mudanca de comportamento: sim.
+
+#### Resultado
+
+Implementacao canonica movida para `shared/planning-schedule/planningMachineOrder.js`.
+
+`productionCalendar.utils.js` mantem re-export temporario de:
+
+- `normalizeProductionCalendarMachineName`;
+- `compareProductionCalendarMachineOrder`.
+
+O Gantt agora usa:
+
+```text
+Gantt geometry
+-> shared/planning-schedule/planningMachineOrder.js
+```
+
+#### Testes
+
+Baseline inicial da REF-039: branch `rebuild-production-calendar`, HEAD `2b345c0`, worktree limpo, `node --test tests/*.js` com 95/95.
+
+Validacoes finais registradas no historico desta missao.
 
 ---
 
@@ -2292,6 +2352,29 @@ Evidências de baseline:
 Alterações de código produtivo: nenhuma.
 
 Próxima missão: REF-000 a REF-003 em auditoria read-only.
+
+---
+
+### 2026-08-10 - REF-039 - Neutralizar helpers de maquina usados pelo Gantt
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de neutralizacao pequena; auditoria read-only por Rogerio Ceni
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `2b345c0`
+Baseline: worktree inicial limpo; `node --test tests/*.js` inicial com 95 testes, 95 aprovados e 0 falhas.
+Objetivo: remover do Gantt APS a dependencia em `shared/production-calendar/productionCalendar.utils.js` somente para helpers neutros de maquina.
+Arquivos lidos: `AGENTS.md`, este plano, `docs/refactor/REF-038_CALENDARIO_V2_COUPLING_NEUTRALIZATION.md`, `shared/production-calendar/productionCalendar.utils.js`, `shared/planning-schedule-view/gantt-aps/ganttAps.geometry.js`, `shared/production-calendar/productionCalendar.adapter.js`, `shared/production-calendar/index.js`, `tests/ganttApsRenderer.test.js`, `tests/productionCalendarGrid.test.js`, `tests/planningScheduleRenderer.test.js` e consumidores diretos localizados por `rg`.
+Arquivos alterados: `shared/planning-schedule/planningMachineOrder.js`, `shared/production-calendar/productionCalendar.utils.js`, `shared/planning-schedule-view/gantt-aps/ganttAps.geometry.js`, `tests/ganttApsRenderer.test.js`, `tests/planningMachineOrder.test.js`, `docs/refactor/REF-039_MACHINE_HELPERS_NEUTRALIZATION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: criado modulo neutro `planningMachineOrder` com a implementacao canonica de normalizacao e ordenacao de maquinas; `productionCalendar.utils.js` passou a reexportar os nomes antigos e usar o comparador neutro internamente; `ganttAps.geometry.js` passou a importar `comparePlanningMachineOrder`; teste do Gantt passou a exigir o import neutro e teste novo cobre ordem, normalizacao, aliases, desconhecidos, vazios/nulos, comparacao deterministica e re-export antigo.
+Gate registrado: `normalizeProductionCalendarMachineName` e `compareProductionCalendarMachineOrder` sao usados fora do V2, nao tem DOM/render V2, nao usam estado V2, nao tem regra especifica do Calendario V2, preservam API por re-export e puderam ser movidos mecanicamente sem mudanca de comportamento.
+Cadeia antes: `Gantt geometry -> productionCalendar.utils.js`.
+Cadeia depois: `Gantt geometry -> shared/planning-schedule/planningMachineOrder.js`.
+Testes/comandos: `node --check shared/planning-schedule/planningMachineOrder.js`; `node --check shared/planning-schedule-view/gantt-aps/ganttAps.geometry.js`; `node --check shared/production-calendar/productionCalendar.utils.js`; `node --test tests/planningMachineOrder.test.js`; `node --test tests/ganttApsRenderer.test.js`; `node --test tests/productionCalendarGrid.test.js`; `node --test tests/planningScheduleRenderer.test.js`; `node --test tests/*.js`; `git diff --check`.
+Resultado: testes focados aprovados; suite final com 96 testes, 96 aprovados e 0 falhas; `git diff --check` sem erros, apenas avisos LF -> CRLF conhecidos.
+Homologacao: nao executada em browser; mudanca estrutural de import/export e helper puro, sem alteracao de renderer, DOM, movimento, persistencia, estoque, solver ou capacidade.
+Checkboxes atualizados: REF-039 registrada como concluida em Fase 3; consumidores, gate, cadeia antes/depois, re-export e blockers restantes registrados.
+Riscos/pendencias: REF-013 homologacao manual, fallback/renderer V2, `ProductionCalendar`, editor/split visual compartilhado, adapter, demais utilities V2, stock-only, identidade manual, autosave/descarte, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade permanecem pendentes.
+Proxima missao sugerida: neutralizar o adapter de schedule com re-export, preservando `allocationId`, memberships e IDs `readonly:*`.
 
 ---
 
