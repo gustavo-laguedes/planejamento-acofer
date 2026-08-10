@@ -54,6 +54,10 @@ import {
   createPlanningHistoryController
 } from '../shared/planning-controller/planningHistoryController.js';
 import {
+  buildLoadedPlanningManualScheduleState,
+  savePlanningManualSchedule
+} from '../shared/planning-controller/planningPersistenceController.js';
+import {
   buildPlanningStockCalendarAlert,
   buildPlanningStockModalModel,
   buildPlanningStockProjection
@@ -114,7 +118,6 @@ import {
   isManualScheduleValidationCompatible,
   MANUAL_SCHEDULE_VALIDATION_VERSION
 } from '../services/manualScheduleTransaction.service.js';
-import { normalizePersistedManualScheduleDraft } from '../services/manualSchedulePersistence.service.js';
 import { presentManualScheduleValidation } from '../services/manualScheduleDiagnosticPresenter.service.js';
 import { resolveManualScheduleResourceByDate } from '../services/manualScheduleResourceValidation.service.js';
 import {
@@ -4279,54 +4282,27 @@ export function PlanningPage() {
     async function launchPlanning(button) {
       button.disabled = true;
       try {
-        let body = {
-          ...(lastPayload || {}),
+        const savedResult = await savePlanningManualSchedule({
+          draft,
+          lastPayload,
           manualScheduleDraft,
-          manualScheduleValidation: manualScheduleDraft?.validation || null,
-          setupMinutes: Number(draft.setupHours || 0) * 60,
-          minimumStartRatio: 1,
-          dependencyCompletionBufferMinutes: Number(currentSimulation?.dependencyCompletionBufferMinutes ?? 60),
-          shifts: draft.shifts || [],
-          settings: {
-            manualWorkDates: manualScheduleDraft?.manualWorkDates || [],
-            dailyTeamOverrides: manualScheduleDraft?.dailyTeamOverrides || {},
-            setupMinutes: Number(draft.setupHours || 0) * 60,
-            minimumStartRatio: 1,
-            dependencyCompletionBufferMinutes: Number(currentSimulation?.dependencyCompletionBufferMinutes ?? 60)
-          }
-        };
-        if (stockShortages.length) {
-          const authorization = await requestStockAuthorization(stockShortages);
-          if (!authorization) {
-            button.disabled = false;
-            return;
-          }
-          body = { ...body, stockAuthorization: authorization };
+          currentSimulation,
+          stockShortages,
+          requestStockAuthorization,
+          persistCreate: ({ body }) => api('/planning/plans', { method: 'POST', body }),
+          persistUpdate: ({ planningId, body }) => api(`/planning/plans/${planningId}/manual-schedule`, { method: 'PUT', body })
+        });
+        if (!savedResult.accepted) {
+          button.disabled = false;
+          return;
         }
-        const saved = draft.savedPlanningId
-          ? await api(`/planning/plans/${draft.savedPlanningId}/manual-schedule`, {
-              method: 'PUT',
-              body: {
-                manualScheduleDraft,
-                manualScheduleValidation: manualScheduleDraft?.validation || null,
-                expectedRevision: Number(draft.savedPlanningRevision || 0),
-                shifts: draft.shifts || [],
-                settings: {
-                  manualWorkDates: manualScheduleDraft?.manualWorkDates || currentSimulation?.manualWorkDates || [],
-                  dailyTeamOverrides: manualScheduleDraft?.dailyTeamOverrides || draft.dailyTeamOverrides || {},
-                  setupMinutes: Number(draft.setupHours || 0) * 60,
-                  minimumStartRatio: 1,
-                  dependencyCompletionBufferMinutes: Number(currentSimulation?.dependencyCompletionBufferMinutes ?? 60)
-                }
-              }
-            })
-          : await api('/planning/plans', { method: 'POST', body });
+        const saved = savedResult.saved;
         localStorage.removeItem(DRAFT_KEY);
         draft = defaultDraft();
         lastPayload = null;
-    currentSimulation = null;
-    currentAutomaticBaseline = null;
-    manualScheduleDraft = null;
+        currentSimulation = null;
+        currentAutomaticBaseline = null;
+        manualScheduleDraft = null;
         manualScheduleHistory.reset();
         backdrop.remove();
         window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Calendário manual do planejamento ${saved.plan.code || saved.plan.id} salvo.` }));
@@ -4518,50 +4494,21 @@ export function PlanningPage() {
   }
 
   async function reopenSavedPlan(detail) {
-    const plan = detail.plan || {};
-    const persisted = normalizePersistedManualScheduleDraft(detail.manualScheduleDraft ?? plan.manual_schedule_draft);
-    if (persisted.status === 'incompatible' || persisted.status === 'invalid') throw new Error(persisted.diagnostics[0]);
-    localStorage.removeItem(DRAFT_KEY);
-    draft = normalizeDraft({
-      planningStartDate: detail.summary?.planningStartDate || plan.start_date,
-      shifts: detail.summary?.shifts || [defaultShift(0)],
-      dailyTeamOverrides: persisted.draft?.dailyTeamOverrides || detail.summary?.dailyTeamOverrides || {},
-      manualWorkDates: persisted.draft?.manualWorkDates || detail.summary?.manualWorkDates || [],
-      setupHours: Number(detail.summary?.setupHours || 0),
-      savedPlanningId: String(plan.id),
-      savedPlanningRevision: Number(plan.manual_schedule_revision || 0),
-      planningCode: plan.code || String(plan.id)
+    const loaded = buildLoadedPlanningManualScheduleState(detail, {
+      normalizeDraft,
+      defaultShift
     });
-    lastPayload = {
-      planningCode: plan.code || String(plan.id),
-      planningStartDate: detail.summary?.planningStartDate || plan.start_date,
-      planningEndDate: detail.summary?.planningEndDate || plan.end_date,
-      manualWorkDates: persisted.draft?.manualWorkDates || detail.summary?.manualWorkDates || []
-    };
-    currentSimulation = {
-      id: plan.id,
-      planningId: plan.id,
-      code: plan.code,
-      tree: detail.tree || plan.schedule_tree,
-      operations: detail.operations || plan.operations || [],
-      calendarOperations: detail.automaticCalendarOperations || [],
-      days: detail.automaticDays || [],
-      stockContext: detail.stockContext || null,
-      demandContext: detail.demandContext || null,
-      summary: {
-        ...(detail.summary || {}),
-        planningId: plan.id,
-        planningStartDate: detail.summary?.planningStartDate || plan.start_date,
-        planningEndDate: detail.summary?.planningEndDate || plan.end_date,
-        status: plan.status
-      }
-    };
+    const { persisted } = loaded;
+    localStorage.removeItem(DRAFT_KEY);
+    draft = loaded.draft;
+    lastPayload = loaded.lastPayload;
+    currentSimulation = loaded.currentSimulation;
     const automaticSnapshot = buildProductionCalendarSnapshot(currentSimulation, { ignoreManualDraft: true });
     currentAutomaticBaseline = createAutomaticSimulationBaseline({
       simulation: currentSimulation,
       allocations: automaticSnapshot.allocations
     });
-    manualScheduleDraft = persisted.draft;
+    manualScheduleDraft = loaded.manualScheduleDraft;
     draft.lastPayload = lastPayload;
     draft.currentSimulation = currentSimulation;
     draft.manualScheduleDraft = manualScheduleDraft;

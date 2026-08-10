@@ -721,6 +721,10 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Funcoes/blocos extraidos na REF-034: identidade e lookup de transporte manual, escopo downstream por dependencias/memberships, calculo de chegada/horas, montagem de constraints `MANUAL_TRANSPORT`/pins, apresentacao `manualTransport` e orquestracao de save por callbacks explicitos. A pagina manteve DOM/modal/eventos/foco e estado visual.
 - [x] Funcoes rejeitadas/retidas na REF-034: `emptyTransport`, normalizacao de `production.transports`, `transportsFromOperations`, `buildManualScheduleValidationContext`, `openProductionCalendarTransportModal`, save/load efetivo, API, services, solver interno, manual move/split, estoque, stock-only, Gantt, Calendario V2, Flow, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade.
 - [x] Testes REF-034: criado `tests/planningTransportController.test.js`; ajustados testes estaticos estritamente relacionados; sintaxe de `planningTransportController` e `PlanningPage` aprovada; testes focados e relacionados de memberships, reotimizacao, validacao, persistencia e save/load aprovados; suite final `node --test tests/*.js` com 85/85; `git diff --check` OK com avisos LF/CRLF; contagem canonica da `PlanningPage.js` reduziu de 6610 para 6265 linhas.
+- [x] REF-035 concluida: auditoria e extracao parcial do controlador de persistencia manual para `shared/planning-controller/planningPersistenceController.js`; baseline inicial `815c74c`, worktree limpo, `node --test tests/*.js` com 85/85, contagem inicial da `PlanningPage.js`: 6265 linhas.
+- [x] Funcoes/blocos extraidos na REF-035: montagem de payload `POST /planning/plans`, montagem de payload `PUT /planning/plans/:id/manual-schedule` com `expectedRevision`, orquestracao de save por callbacks explicitos e montagem de estado de reopen a partir de `normalizePersistedManualScheduleDraft`.
+- [x] Funcoes rejeitadas/retidas na REF-035: `saveDraftNow`, `queueAutosave`, `discardAllProductionCalendarChanges`, `prepareAutomaticBaselineDiscard`, `prepareCurrentSimulationManualDiscard`, pre-validacao produtiva com `applyManualScheduleTransaction`, criacao de baseline automatica no reopen, reset de historico, modal, toast, navegacao, render, API direta, services/backend/database, solver/reotimizacao, manual move/split, transporte, estoque, stock-only, Gantt, Calendario V2, Flow, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade.
+- [x] Testes REF-035: criado `tests/planningPersistenceController.test.js`; ajustado teste estatico estritamente relacionado em `tests/automaticSimulationBaseline.service.test.js`; sintaxe de `planningPersistenceController`, `PlanningPage` e teste novo aprovada; testes focados e canonicos de persistencia/save-load aprovados; suite final `node --test tests/*.js` com 86/86; contagem canonica da `PlanningPage.js` reduziu de 6265 para 6212 linhas.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
@@ -728,7 +732,7 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [ ] Calendario V2 permanece pendente.
 - [ ] Identidade do calendario manual permanece pendente.
 - [ ] Manual move/split permanece pendente.
-- [ ] Persistencia permanece pendente.
+- [ ] Persistencia ampla/autosave/descarte permanece pendente.
 - [ ] Stock-only/movimento de estoque permanece pendente.
 
 ---
@@ -1826,6 +1830,25 @@ Próxima missão sugerida:
 ```
 
 ## Entradas
+
+### 2026-08-10 - REF-035 - Extrair controlador de persistencia manual
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de extracao pequena e delimitada, com auditoria read-only paralela de Rogerio Ceni e design de testes por Toto Wolff
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-persistence-legacy`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `815c74c`
+Objetivo: auditar o bloco real de save/load do planejamento manual e extrair somente a orquestracao segura para `shared/planning-controller/planningPersistenceController.js`, preservando DOM, `localStorage`, historico, backend, payload, revision e hash.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-020_TECHNICAL_CHECKPOINT.md`, `docs/refactor/REF-034_PLANNING_TRANSPORT_CONTROLLER_EXTRACTION.md`, `pages/PlanningPage.js`, `services/manualSchedulePersistence.service.js`, `server/routes/planning.routes.js`, `tests/manualSchedulePersistence.service.test.js`, `tests/planningManualScheduleSaveLoad.integration.test.js`, `tests/planningTransportController.test.js` e `package.json`.
+Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-controller/planningPersistenceController.js`, `tests/planningPersistenceController.test.js`, `tests/automaticSimulationBaseline.service.test.js`, `docs/refactor/REF-035_PLANNING_PERSISTENCE_CONTROLLER_EXTRACTION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: criado controlador de persistencia manual com montagem de payload create/update, save por callbacks explicitos e montagem de estado de reopen a partir do draft persistido normalizado; `PlanningPage.js` manteve API concreta, storage, modal, botao/loading, historico, toast, navegacao, render e criacao de baseline automatica.
+Testes/comandos: baseline inicial com `git status --short`, branch, `git rev-parse --short HEAD`, contagem canonica e `node --test tests/*.js`; validacao focada com `node --check shared/planning-controller/planningPersistenceController.js`, `node --check pages/PlanningPage.js`, `node --check tests/planningPersistenceController.test.js`, `node --test tests/planningPersistenceController.test.js`; relacionados `manualSchedulePersistence`, `planningManualScheduleSaveLoad` e `automaticSimulationBaseline`.
+Resultado: baseline inicial 85/85; auditoria confirmou fronteira segura parcial; `PlanningPage.js` passou de 6265 para 6212 linhas; testes focados e relacionados aprovados; suite final 86/86.
+Homologacao: nao marcada; mudanca estrutural sem UI nova. REF-013 manual permanece pendente.
+Checkboxes atualizados: REF-035 registrada como concluida no quadro de extracoes; pendencias de REF-013, Calendario V2, identidade manual, move/split, stock-only, `productiveMinutes`, `generatePlanningCode`, turnos/capacidade e persistencia ampla/autosave/descarte mantidas abertas.
+Riscos/pendencias: descarte total, autosave local, pre-validacao produtiva, efeitos visuais pos-save e baseline automatica de reopen seguem na pagina; controller depende dos services canonicos e API real por callbacks; homologacao operacional em navegador nao foi executada.
+Proxima missao sugerida: auditar e, se seguro, extrair somente o controlador de descarte/autosave local da persistencia manual, mantendo save/load ja extraidos, backend, services, movimento, split, estoque, transporte, Gantt e Calendario V2 fora do escopo.
+
+---
 
 ### 2026-08-10 - REF-034 - Extrair controlador de transporte manual
 

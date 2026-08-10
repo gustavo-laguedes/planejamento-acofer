@@ -102,6 +102,7 @@ assert.equal(storedSnapshot.days[0].planned_date, '2026-07-21');
 assert.ok(storedSnapshot.calendarOperations.length, 'plano salvo deve derivar cards da operation automática sem scheduler');
 
 const planningSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
+const persistenceControllerSource = readFileSync(new URL('../shared/planning-controller/planningPersistenceController.js', import.meta.url), 'utf8');
 const toolbarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarToolbar.js', import.meta.url), 'utf8');
 const calendarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendar.js', import.meta.url), 'utf8');
 const routeSource = readFileSync(new URL('../server/routes/planning.routes.js', import.meta.url), 'utf8');
@@ -137,6 +138,6 @@ assert.ok(
   planningSource.indexOf('if (captureAutomaticBaseline)') < planningSource.indexOf('const candidateDraft = restoredDraft || createManualScheduleDraft'),
   'baseline deve ser capturada antes do primeiro draft manual'
 );
-assert.match(planningSource, /calendarOperations: detail\.automaticCalendarOperations/);
+assert.match(persistenceControllerSource, /calendarOperations: detail\.automaticCalendarOperations/);
 
 console.log('automaticSimulationBaseline.service.test.js ok');
