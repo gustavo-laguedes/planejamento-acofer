@@ -733,6 +733,9 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Funcoes/blocos extraidos na REF-037: montagem das operacoes canonicas `EDIT_ALLOCATION` e `SPLIT_ALLOCATION`, execucao por `applyManualScheduleTransaction`, retorno de aceite/rejeicao/stale/no-op, diagnostics preservados e aplicacao do draft aceito somente por callback explicito.
 - [x] Funcoes rejeitadas/retidas na REF-037: abertura/fechamento dos editores, `ProductionCalendarEditor`, `ProductionCalendarSplitEditor`, preview de produtividade, modal de capacidade, ramo de troca de recurso com reotimizacao, `acceptRecalculatedCalendar`, historico/save/render/toast, transporte, stock-only, persistencia, autosave/descarte, Gantt, Calendario V2 renderer/grid, solver/reotimizacao, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade global.
 - [x] Testes REF-037: criado `tests/planningAllocationEditorController.test.js`; ajustados testes estaticos estritamente relacionados em `tests/planningReoptimization.service.test.js` e `tests/productionCalendarEditButton.test.js`; sintaxe do controller e da `PlanningPage` aprovada; testes focados e relacionados de split/editor/configuracao/capacidade aprovados; suite final registrada em `docs/refactor/REF-037_PLANNING_ALLOCATION_EDITOR_CONTROLLER_EXTRACTION.md`; contagem canonica da `PlanningPage.js` reduziu de 6136 para 6134 linhas.
+- [x] REF-038 concluida: neutralizacao inicial das dependencias do Calendario V2 com auditoria de PlanningPage, renderer/factory, Gantt APS, editor/split, adapter, `productionDisplayColor`, utilities e fallback; evidencia em `docs/refactor/REF-038_CALENDARIO_V2_COUPLING_NEUTRALIZATION.md`.
+- [x] Bloco neutralizado na REF-038: `productionDisplayColor` e o resolvedor puro `getProductionCalendarAllocationColor` foram movidos para `shared/planning-presentation/productionDisplayColor.js`; o Gantt deixou de importar `ProductionCalendarCard.js`; re-exports legados preservam compatibilidade.
+- [x] Testes REF-038: baseline inicial `node --test tests/*.js` com 95/95; validacoes finais focadas de renderer, Gantt, editor, split, grid e cor; suite final 95/95; `git diff --check` sem falhas.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
@@ -819,11 +822,13 @@ Criar fixtures ou builders reutilizáveis, sem depender da data atual ou de banc
 
 ### Missão REF-020 — Extrair identidade visual de produção
 
-**Status:** `[ ] PENDENTE`
+**Status:** `[x] CONCLUIDA VIA REF-038`
 
 #### Situação atual
 
-Cores e helpers vivem em `shared/production-calendar/productionDisplayColor.js`, e o Gantt importa cor por meio de `ProductionCalendarCard.js`.
+Cores e helpers viviam em `shared/production-calendar/productionDisplayColor.js`, e o Gantt importava cor por meio de `ProductionCalendarCard.js`.
+
+Atualizacao REF-038: a implementacao canonica foi movida para `shared/planning-presentation/productionDisplayColor.js`; o caminho antigo permanece como re-export temporario.
 
 #### Destino sugerido
 
@@ -836,14 +841,14 @@ shared/planning-presentation/
 
 #### Tarefas
 
-- [ ] mover helpers neutros de cor;
-- [ ] mover cálculo neutro de cor da allocation;
-- [ ] remover import do Gantt vindo de `ProductionCalendarCard.js`;
-- [ ] manter re-export temporário no caminho antigo, se necessário;
-- [ ] migrar PlanningPage, Gantt, Fluxo e testes;
-- [ ] preservar cores persistidas;
-- [ ] preservar fallback determinístico;
-- [ ] provar que nenhuma cor do draft é mutada.
+- [x] mover helpers neutros de cor;
+- [x] mover cálculo neutro de cor da allocation;
+- [x] remover import do Gantt vindo de `ProductionCalendarCard.js`;
+- [x] manter re-export temporário no caminho antigo, se necessário;
+- [x] migrar PlanningPage, Gantt e testes diretamente afetados;
+- [x] preservar cores persistidas;
+- [x] preservar fallback determinístico;
+- [x] provar que nenhuma cor do draft é mutada.
 
 #### Gate
 

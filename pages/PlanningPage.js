@@ -8,12 +8,14 @@ import {
   buildProductionCalendarDayPresentation,
   buildProductionCalendarDayProductivity,
   extendProductionCalendarDayRange,
-  fillProductionCalendarDayRange,
+  fillProductionCalendarDayRange
+} from '../shared/production-calendar/index.js';
+import {
   getProductionDisplayColor,
   getProductionDisplayFallbackColor,
   getProductionDisplayTheme,
   PRODUCTION_DISPLAY_PALETTE
-} from '../shared/production-calendar/index.js';
+} from '../shared/planning-presentation/productionDisplayColor.js';
 import {
   buildPlanningScheduleViewModel,
   createGanttApsRenderer,

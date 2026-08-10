@@ -24,7 +24,7 @@ export {
   getProductionDisplayTheme,
   mixProductionDisplayColor,
   PRODUCTION_DISPLAY_PALETTE
-} from './productionDisplayColor.js';
+} from '../planning-presentation/productionDisplayColor.js';
 export { ProductionCalendarDetails } from './ProductionCalendarDetails.js';
 export { ProductionCalendarEditor } from './ProductionCalendarEditor.js';
 export { ProductionCalendarSplitEditor, resolveProductionCalendarSplitPreview } from './ProductionCalendarSplitEditor.js';

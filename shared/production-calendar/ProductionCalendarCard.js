@@ -5,9 +5,10 @@ import {
   formatProductionCalendarQuantity
 } from './productionCalendar.utils.js';
 import {
-  getProductionDisplayColor,
-  mixProductionDisplayColor
-} from './productionDisplayColor.js';
+  getProductionCalendarAllocationColor
+} from '../planning-presentation/productionDisplayColor.js';
+
+export { getProductionCalendarAllocationColor };
 
 function firstExisting(...values) {
   return values.find(value => value !== null && value !== undefined && value !== '');
@@ -16,10 +17,6 @@ function firstExisting(...values) {
 export function getProductionCalendarStage(allocation) {
   const stage = Number(allocation?.productionStage);
   return Number.isInteger(stage) && stage > 0 ? stage : null;
-}
-
-function stripDailyOperationSuffix(value) {
-  return String(value || '').replace(/:day-\d+$/i, '');
 }
 
 function getProductionDisplayNumber(allocation) {
@@ -88,25 +85,6 @@ function sharedProductionBackground(allocation, memberships) {
     return [`${color.bg} ${start}%`, `${color.bg} ${end}%`];
   });
   return `linear-gradient(90deg, ${stops.join(', ')})`;
-}
-
-export function getProductionCalendarAllocationColor(allocation) {
-  const explicitColor = String(allocation?.productionColor || '').trim();
-  const identity = firstExisting(
-    allocation?.productionId,
-    allocation?.calendarParentOperationId,
-    stripDailyOperationSuffix(allocation?.operationId)
-  );
-  const accent = getProductionDisplayColor(explicitColor, {
-    productionIndex: firstExisting(allocation?.productionIndex, allocation?.productionOrder),
-    productionId: allocation?.productionId,
-    identity
-  });
-  return {
-    accent,
-    bg: mixProductionDisplayColor(accent, 0.88),
-    border: mixProductionDisplayColor(accent, 0.58)
-  };
 }
 
 function appendMetric(parent, label, value) {

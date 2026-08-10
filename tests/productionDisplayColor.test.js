@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  getProductionCalendarAllocationColor,
   getProductionDisplayColor,
   getProductionDisplayFallbackColor,
   getProductionDisplayTheme
-} from '../shared/production-calendar/productionDisplayColor.js';
-import {
-  getProductionCalendarAllocationColor
-} from '../shared/production-calendar/ProductionCalendarCard.js';
+} from '../shared/planning-presentation/productionDisplayColor.js';
 import {
   ganttApsProductionVisuals
 } from '../shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js';
@@ -60,7 +58,15 @@ const cardSource = readFileSync(
   new URL('../shared/production-calendar/ProductionCalendarCard.js', import.meta.url),
   'utf8'
 );
+const ganttRendererSource = readFileSync(
+  new URL('../shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js', import.meta.url),
+  'utf8'
+);
 assert.match(planningPageSource, /getProductionDisplayColor,[\s\S]*getProductionDisplayTheme,[\s\S]*PRODUCTION_DISPLAY_PALETTE/);
+assert.match(
+  planningPageSource,
+  /from\s*['"]\.\.\/shared\/planning-presentation\/productionDisplayColor\.js['"]/
+);
 assert.match(
   planningPageSource,
   /function productionTheme[\s\S]*getProductionDisplayTheme\(canonicalColor,\s*\{\s*productionIndex:\s*index\s*\}\)/
@@ -89,7 +95,19 @@ assert.match(
   planningFlowDomSource,
   /const color = productionTheme\(productionIndex,\s*edge\.color\)\.border/
 );
-assert.match(cardSource, /getProductionDisplayColor\(explicitColor,/);
+assert.match(
+  cardSource,
+  /from\s*['"]\.\.\/planning-presentation\/productionDisplayColor\.js['"]/
+);
+assert.doesNotMatch(cardSource, /getProductionDisplayColor\(explicitColor,/);
+assert.match(
+  ganttRendererSource,
+  /from\s*['"]\.\.\/\.\.\/planning-presentation\/productionDisplayColor\.js['"]/
+);
+assert.doesNotMatch(
+  ganttRendererSource,
+  /from\s*['"]\.\.\/\.\.\/production-calendar\/ProductionCalendarCard\.js['"]/
+);
 assert.doesNotMatch(cardSource, /CARD_PALETTE/);
 assert.doesNotMatch(planningPageSource, /const PRODUCTION_(?:COLOR_PALETTE|THEMES|THEME_SEQUENCE)/);
 

@@ -9,7 +9,7 @@ import {
 } from './ganttAps.geometry.js';
 import {
   getProductionCalendarAllocationColor
-} from '../../production-calendar/ProductionCalendarCard.js';
+} from '../../planning-presentation/productionDisplayColor.js';
 
 const ZOOM_LEVELS = [3, 4, 6, 8, 12];
 export const GANTT_APS_ROWS_PER_PAGE = 60;
