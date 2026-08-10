@@ -372,15 +372,16 @@ assert.deepEqual(editorUndo.state, beforeEditorState, 'undo restaura máquina, p
 const editorRedo = redoManualScheduleHistory(editorUndo.history);
 assert.deepEqual(editorRedo.state, afterEditorState, 'redo restaura o resultado completo da edição');
 const planningPageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
-const transportIdSource = planningPageSource.slice(
-  planningPageSource.indexOf('function manualTransportIdFor'),
-  planningPageSource.indexOf('function manualTransportConstraints')
+const transportControllerSource = readFileSync(new URL('../shared/planning-controller/planningTransportController.js', import.meta.url), 'utf8');
+const transportIdSource = transportControllerSource.slice(
+  transportControllerSource.indexOf('export function manualTransportIdFor'),
+  transportControllerSource.indexOf('export function manualTransportConstraints')
 );
 assert.match(transportIdSource, /allocation\.allocationId/, 'transporte manual precisa ser unitario por allocation, nao por parent+material');
-assert.match(planningPageSource, /producerAllocationId:\s*String\(allocation\.allocationId/, 'registro de transporte deve preservar a allocation de origem');
-const applyTransportSource = planningPageSource.slice(
-  planningPageSource.indexOf('function applyManualTransportConstraints'),
-  planningPageSource.indexOf('function withManualTransportPresentation')
+assert.match(transportControllerSource, /producerAllocationId:\s*String\(allocation\.allocationId/, 'registro de transporte deve preservar a allocation de origem');
+const applyTransportSource = transportControllerSource.slice(
+  transportControllerSource.indexOf('export function applyManualTransportConstraints'),
+  transportControllerSource.indexOf('export function withManualTransportPresentation')
 );
 assert.match(applyTransportSource, /legacyTransportIds/, 'transporte novo deve localizar ids legados do mesmo produtor/material');
 assert.match(applyTransportSource, /legacyTransportIds\.has\(String\(constraint\.transportId \|\| ''\)\)/, 'pins operacionais de transporte legado precisam ser removidos junto com o registro antigo');

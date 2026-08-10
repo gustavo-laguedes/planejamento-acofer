@@ -376,48 +376,49 @@ assert.deepEqual(
 );
 
 const planningPageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
+const transportControllerSource = readFileSync(new URL('../shared/planning-controller/planningTransportController.js', import.meta.url), 'utf8');
 assert.match(
-  planningPageSource,
+  transportControllerSource,
   /function productionCalendarParentMatchesDownstreamScope[\s\S]*productionCalendarCandidateMatchesDownstreamMembership/,
   'escopo de transporte deve filtrar dependencias pela cadeia da allocation'
 );
 assert.match(
-  planningPageSource,
+  transportControllerSource,
   /sourceParentId[\s\S]*candidateParentId[\s\S]*sameMaterial[\s\S]*return false/,
   'transporte nao deve tratar outro card do mesmo material como etapa downstream'
 );
 assert.match(
-  planningPageSource,
+  transportControllerSource,
   /scopedSuccessors[\s\S]*productionCalendarParentMatchesDownstreamScope/,
   'sucessores por dependencia precisam respeitar memberships da cadeia'
 );
 assert.match(
-  planningPageSource,
-  /function productionCalendarSuccessorParentIds[\s\S]*productionCalendarHasDownstreamScope\(allocation\)[\s\S]*productionCalendarFallbackDownstreamParentIds\(allocation, \{ immediate: true \}\)/,
+  transportControllerSource,
+  /function productionCalendarSuccessorParentIds[\s\S]*productionCalendarHasDownstreamScope\(allocation\)[\s\S]*productionCalendarFallbackDownstreamParentIds\(allocation, \{ sourceDraft, immediate: true \}\)/,
   'sucessores de transporte com membership devem usar cadeia por etapa antes do grafo de dependencias'
 );
 assert.match(
-  planningPageSource,
-  /function productionCalendarDownstreamParentIds[\s\S]*productionCalendarHasDownstreamScope\(allocation\)[\s\S]*productionCalendarFallbackDownstreamParentIds\(allocation\)/,
+  transportControllerSource,
+  /function productionCalendarDownstreamParentIds[\s\S]*productionCalendarHasDownstreamScope\(allocation\)[\s\S]*productionCalendarFallbackDownstreamParentIds\(allocation, \{ sourceDraft \}\)/,
   'cadeia downstream de transporte com membership deve usar cadeia por etapa antes do grafo de dependencias'
 );
 assert.match(
-  planningPageSource,
+  transportControllerSource,
   /directProductionId[\s\S]*directMemberships[\s\S]*normalizedMemberships\.length > 1 \? \[normalizedMemberships\[0\]\]/,
   'escopo de transporte deve escolher uma membership primaria em cards agregados para nao puxar cadeias laterais'
 );
 assert.doesNotMatch(
-  planningPageSource,
+  transportControllerSource,
   /manual-transport-chain/,
   'transporte manual nao deve criar pin duro de maquina para downstream'
 );
 assert.match(
-  planningPageSource,
-  /downstreamTransportScopeParentIds = \[\s*\.\.\.productionCalendarSuccessorParentIds\(current\),\s*\.\.\.productionCalendarDownstreamParentIds\(current\)/,
+  transportControllerSource,
+  /downstreamTransportScopeParentIds = \[\s*\.\.\.productionCalendarSuccessorParentIds\(allocation, scopeOptions\),\s*\.\.\.productionCalendarDownstreamParentIds\(allocation, scopeOptions\)/,
   'transporte manual deve reotimizar primeiro somente sucessores/downstream'
 );
 assert.doesNotMatch(
-  planningPageSource,
+  transportControllerSource,
   /const transportScopeParentIds = \[\.\.\.new Set\(\[\s*productionCalendarParentOperationId\(current\),/,
   'transporte manual nao deve puxar a etapa produtora para o escopo principal'
 );
