@@ -48,6 +48,9 @@ import {
   scheduleProductionFlowConnectors
 } from '../shared/planning-presentation/planningFlowDom.js';
 import {
+  bindPlanningFlowEvents
+} from '../shared/planning-presentation/planningFlowEvents.js';
+import {
   addCalendarMonths,
   dateOnlyFromDate,
   isValidDateOnly,
@@ -6412,21 +6415,12 @@ export function PlanningPage() {
       }
     });
 
-    target.addEventListener('click', event => {
-      if (event.target.closest('[data-stock-only], .stock-only-toggle')) return;
-      const flowNode = event.target.closest('.production-flow-node[data-flow-material-id]');
-      if (!flowNode) return;
-      openFlowNodeDetailsModal(flowNode);
-      focusFlowNodeInSchedule(flowNode);
-    });
-
-    target.addEventListener('keydown', event => {
-      if (!['Enter', ' '].includes(event.key)) return;
-      const flowNode = event.target.closest('.production-flow-node[data-flow-material-id]');
-      if (!flowNode) return;
-      event.preventDefault();
-      openFlowNodeDetailsModal(flowNode);
-      focusFlowNodeInSchedule(flowNode);
+    bindPlanningFlowEvents({
+      root: target,
+      onActivateNode: ({ node: flowNode }) => {
+        openFlowNodeDetailsModal(flowNode);
+        focusFlowNodeInSchedule(flowNode);
+      }
     });
 
     target.addEventListener('change', async event => {
