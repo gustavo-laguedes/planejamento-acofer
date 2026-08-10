@@ -42,9 +42,10 @@ function safeDestroy(renderer) {
 
 export function createPlanningScheduleRendererHost({
   factories = {},
-  fallbackRenderer = PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2,
+  fallbackRenderer = null,
   onLifecycleError
 } = {}) {
+  void fallbackRenderer;
   let activeRenderer = null;
   let activeRendererId = null;
   let mountedContainer = null;
@@ -70,27 +71,13 @@ export function createPlanningScheduleRendererHost({
     }
   };
 
-  const mountFallback = (container, model, originalError) => {
-    try {
-      return createAndMount(fallbackRenderer, container, model);
-    } catch (fallbackError) {
-      fallbackError.cause = originalError;
-      throw fallbackError;
-    }
-  };
-
   return {
     mount(container, model, { renderer = PLANNING_SCHEDULE_RENDERERS.AUTO, autoPolicy } = {}) {
       safeDestroy(activeRenderer);
       activeRenderer = null;
       activeRendererId = null;
       const selectedRenderer = resolvePlanningScheduleRenderer(renderer, { autoPolicy });
-      try {
-        return createAndMount(selectedRenderer, container, model);
-      } catch (error) {
-        if (selectedRenderer === fallbackRenderer) throw error;
-        return mountFallback(container, model, error);
-      }
+      return createAndMount(selectedRenderer, container, model);
     },
 
     update(model) {
@@ -106,8 +93,7 @@ export function createPlanningScheduleRendererHost({
         activeRenderer = null;
         activeRendererId = null;
         onLifecycleError?.({ error, rendererId: failedRendererId, phase: 'update' });
-        if (failedRendererId === fallbackRenderer) throw error;
-        return mountFallback(mountedContainer, model, error);
+        throw error;
       }
     },
 

@@ -3889,7 +3889,7 @@ export function PlanningPage() {
           })
         },
         onLifecycleError: ({ error, rendererId, phase }) => {
-          console.warn(`Falha no renderer ${rendererId} durante ${phase}; aplicando rollback para o Calendário V2.`, error);
+          console.warn(`Falha no renderer ${rendererId} durante ${phase}.`, error);
         }
       });
       planningScheduleRendererHost.mount(targetElement, model, {
