@@ -58,6 +58,9 @@ import {
   savePlanningManualSchedule
 } from '../shared/planning-controller/planningPersistenceController.js';
 import {
+  runPlanningManualMoveController
+} from '../shared/planning-controller/planningManualMoveController.js';
+import {
   buildPlanningStockCalendarAlert,
   buildPlanningStockModalModel,
   buildPlanningStockProjection
@@ -5707,35 +5710,9 @@ export function PlanningPage() {
             }
           : await confirmManualMoveConfiguration(intent, move, calendarSnapshot);
         if (!moveConfiguration) return;
-        intent = {
-          ...intent,
-          to: {
-            ...(intent.to || {}),
-            date: moveConfiguration.date || intent?.to?.date,
-            machineId: moveConfiguration.machineId || intent?.to?.machineId
-          },
-          peopleCount: moveConfiguration.peopleCount
-        };
-        move = {
-          ...move,
-          machine: {
-            ...(move.machine || {}),
-            machineId: moveConfiguration.machineId || move?.machine?.machineId,
-            machineName: moveConfiguration.machineName || move?.machine?.machineName
-          }
-        };
         productionCalendarMoveInProgress = true;
         setOperationLoading(true, 'Validando movimentação...');
         const validationContext = await currentManualScheduleValidationContextWithFreshStock(calendarSnapshot);
-        const baseMoveIntent = {
-          type: 'MOVE_ALLOCATION',
-          allocationId: move.allocation.allocationId,
-          targetDate: intent.to.date,
-          targetMachineId: move.machine.machineId,
-          peopleCount: moveConfiguration.peopleCount,
-          source: intent.source,
-          manualMovePolicy: 'stock_only_independent'
-        };
         const draftContext = {
           now: transactionTimestamp,
           validatedAt: transactionTimestamp,
@@ -5744,19 +5721,14 @@ export function PlanningPage() {
           days: calendarSnapshot.days,
           dailyMinutes: planningDraftDailyMinutes()
         };
-        const runStockMove = extraIntent => applyManualScheduleTransaction({
-          currentDraft: manualScheduleDraft,
-          intent: { ...baseMoveIntent, ...(extraIntent || {}) },
-          draftContext,
-          validationContext
-        });
-        const installAcceptedMove = transaction => {
+        const installAcceptedMove = (transaction, { operation } = {}) => {
+          const acceptedAllocationId = operation?.move?.allocation?.allocationId || move.allocation.allocationId;
           manualScheduleDraft = transaction.draft;
           draft.manualScheduleDraft = manualScheduleDraft;
           recordAcceptedManualState(previousManualState);
           saveDraftNow();
           refreshTimelineOnly();
-          if (String(previousVisualState.selectedAllocationId || '') === String(move.allocation.allocationId || '')) {
+          if (String(previousVisualState.selectedAllocationId || '') === String(acceptedAllocationId || '')) {
             productionCalendarVisualState = {
               ...productionCalendarVisualState,
               selectedAllocationId: null
@@ -5767,76 +5739,28 @@ export function PlanningPage() {
             : 'Produção movimentada no rascunho manual.');
         };
 
-        const fullTransaction = runStockMove();
-        if (fullTransaction.accepted) {
-          installAcceptedMove(fullTransaction);
-          return;
-        }
-        const analysis = {
-          ...(fullTransaction.validation?.manualMoveStockAnalysis || {
-            stockIssues: fullTransaction.blockingIssues || [],
-            maxQuantity: 0
-          }),
-          validation: fullTransaction.validation
-        };
-        const maxQuantity = Number(analysis.maxQuantity || 0);
-        if (!(maxQuantity > 0)) {
-          await openManualStockUnavailableModal({
-            allocation: move.allocation,
-            date: intent.to.date,
+        await runPlanningManualMoveController({
+          currentDraft: manualScheduleDraft,
+          intent,
+          move,
+          moveConfiguration,
+          calendarSnapshot,
+          validationContext,
+          draftContext,
+          onAccepted: installAcceptedMove,
+          onStockUnavailable: ({ allocation, date, analysis }) => openManualStockUnavailableModal({
+            allocation,
+            date,
             analysis
-          });
-          return;
-        }
-        setOperationLoading(false);
-        const horizonDates = (calendarSnapshot.days || [])
-          .map(day => String(day?.date || '').slice(0, 10))
-          .filter(date => isValidDateOnly(date) && date !== String(intent.to.date).slice(0, 10));
-        const dateTransactionsByQuantity = new Map();
-        const dateOptionsForQuantity = quantity => {
-          const acceptedQuantity = Math.floor(Math.max(Number(quantity || 0), 0));
-          if (dateTransactionsByQuantity.has(acceptedQuantity)) return dateTransactionsByQuantity.get(acceptedQuantity);
-          const options = [];
-          const transactions = new Map();
-          for (const date of horizonDates) {
-            const transaction = runStockMove({ quantity: acceptedQuantity, remainderDate: date });
-            if (transaction.accepted) {
-              transactions.set(date, transaction);
-              options.push({ date, viable: true });
-            } else {
-              options.push({
-                date,
-                viable: false,
-                reason: transaction.blockingIssues?.[0]?.message || transaction.validation?.errors?.[0]?.message || 'Sem estoque suficiente para o restante.'
-              });
-            }
-          }
-          const result = { options, transactions };
-          dateTransactionsByQuantity.set(acceptedQuantity, result);
-          return result;
-        };
-        const partialChoice = await openManualStockPartialMoveModal({
-          allocation: move.allocation,
-          date: intent.to.date,
-          analysis,
-          getDateOptions: async quantity => dateOptionsForQuantity(quantity).options
+          }),
+          onBeforePartialChoice: () => setOperationLoading(false),
+          onStockPartialChoice: ({ allocation, date, analysis, getDateOptions }) => openManualStockPartialMoveModal({
+            allocation,
+            date,
+            analysis,
+            getDateOptions
+          })
         });
-        const acceptedQuantity = Math.floor(Number(partialChoice?.quantity || 0));
-        if (!(acceptedQuantity > 0)) return;
-        const remainderQuantity = Math.max(Math.floor(Number(move.allocation.quantity || 0)) - acceptedQuantity, 0);
-        if (!(remainderQuantity > 0)) {
-          const partialTransaction = runStockMove({ quantity: acceptedQuantity });
-          if (!partialTransaction.accepted) throw new Error(partialTransaction.blockingIssues?.[0]?.message || 'Movimento recusado por estoque.');
-          installAcceptedMove(partialTransaction);
-          return;
-        }
-        const remainderDate = partialChoice?.remainderDate;
-        if (!remainderDate) return;
-        const cachedDates = dateOptionsForQuantity(acceptedQuantity);
-        const splitTransaction = cachedDates.transactions.get(remainderDate)
-          || runStockMove({ quantity: acceptedQuantity, remainderDate });
-        if (!splitTransaction.accepted) throw new Error(splitTransaction.blockingIssues?.[0]?.message || 'A data escolhida nao possui estoque suficiente para o restante.');
-        installAcceptedMove(splitTransaction);
       } catch (error) {
         productionCalendarVisualState = previousVisualState;
         const calendar = target.querySelector('.production-calendar-container');

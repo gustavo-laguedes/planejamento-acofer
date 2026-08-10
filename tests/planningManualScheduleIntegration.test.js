@@ -105,6 +105,10 @@ assert.deepEqual(context.stockLocations.map(item => item.locationId), ['L1', 'L2
 }
 
 const source = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
+const manualMoveControllerSource = readFileSync(
+  new URL('../shared/planning-controller/planningManualMoveController.js', import.meta.url),
+  'utf8'
+);
 assert.match(source, /productionIndexesToRemove/, 'cortar cadeia deve remover a producao do builder');
 assert.match(source, /rerenderProductionsBuilder\(\);\s*lastPayload = payload\(\);/, 'builder deve renumerar producoes antes de simular novamente');
 assert.match(source, /buildProductionShortageCascade/, 'modal de falta deve calcular saldo em cascata');
@@ -118,9 +122,11 @@ const runnerEnd = source.indexOf('function openFlowNodeDetailsModal', runnerStar
 assert.ok(runnerStart > 0 && runnerEnd > runnerStart, 'harness do movimento manual deve existir');
 const runner = source.slice(runnerStart, runnerEnd);
 
-assert.match(runner, /applyManualScheduleTransaction\s*\(/, 'todos os movimentos V2 devem usar o coordenador');
+assert.match(runner, /runPlanningManualMoveController\s*\(/, 'todos os movimentos V2 devem passar pelo controller manual');
+assert.match(manualMoveControllerSource, /applyManualScheduleTransaction/, 'controller de move deve usar o coordenador transacional');
 assert.doesNotMatch(runner, /simulateCurrent\s*\(/, 'movimento manual não pode simular novamente');
 assert.doesNotMatch(runner, /scheduleOperations\s*\(/, 'movimento manual não pode chamar o scheduler');
+assert.doesNotMatch(manualMoveControllerSource, /\b(simulateCurrent|buildPlan|scheduleOperations|reoptimizePlanningFuture)\b/, 'controller de move nao pode chamar solver/reotimizacao');
 assert.doesNotMatch(source, /applyDraftMove\s*\(/, 'PlanningPage não pode aplicar allocations diretamente');
 const manualWorkDateStart = source.indexOf('async function handleProductionCalendarManualWorkDate');
 const manualWorkDateEnd = source.indexOf('async function handleProductionCalendarDailyTeam', manualWorkDateStart);
@@ -143,14 +149,14 @@ const simulateEnd = source.indexOf('function openManualDraftChoiceModal', simula
 const simulateHandler = source.slice(simulateStart, simulateEnd);
 assert.ok(simulateHandler.indexOf('preservedManualWorkDates') < simulateHandler.indexOf('manualScheduleDraft = null'), 'restrições devem ser preservadas antes de descartar movimentos manuais');
 assert.match(simulateHandler, /draft\.manualWorkDates\s*=\s*preservedManualWorkDates/);
-assert.match(runner, /const installAcceptedMove = transaction => \{[\s\S]*manualScheduleDraft = transaction\.draft[\s\S]*saveDraftNow\(\)/, 'bloqueio deve impedir troca do draft ativo');
-assert.match(runner, /if \(fullTransaction\.accepted\) \{[\s\S]*installAcceptedMove\(fullTransaction\);[\s\S]*return;[\s\S]*\}/, 'movimento integral aceito deve instalar o candidato e encerrar');
-assert.match(runner, /if \(!\(maxQuantity > 0\)\) \{[\s\S]*openManualStockUnavailableModal[\s\S]*return;[\s\S]*\}/, 'bloqueio total de estoque deve retornar sem trocar o draft ativo');
+assert.match(runner, /const installAcceptedMove = \(transaction, \{ operation \} = \{\}\) => \{[\s\S]*manualScheduleDraft = transaction\.draft[\s\S]*saveDraftNow\(\)/, 'bloqueio deve impedir troca do draft ativo');
+assert.match(manualMoveControllerSource, /if \(fullTransaction\.accepted\) \{[\s\S]*onAccepted\?\.?\(fullTransaction, \{ operation, mode: 'full' \}\)[\s\S]*return \{ accepted: true/, 'movimento integral aceito deve instalar o candidato e encerrar');
+assert.match(manualMoveControllerSource, /if \(!\(maxQuantity > 0\)\) \{[\s\S]*onStockUnavailable\?\.?\([\s\S]*return \{ accepted: false, status: 'rejected'/, 'bloqueio total de estoque deve retornar sem trocar o draft ativo');
 assert.ok(
   runner.indexOf('manualScheduleDraft = transaction.draft') < runner.indexOf('saveDraftNow()'),
   'localStorage só pode ser atualizado após aceitar o candidato'
 );
-const rejectionBranch = runner.slice(runner.indexOf('const analysis ='), runner.indexOf('const acceptedQuantity ='));
+const rejectionBranch = manualMoveControllerSource.slice(manualMoveControllerSource.indexOf('const analysis ='), manualMoveControllerSource.indexOf('const acceptedQuantity ='));
 assert.doesNotMatch(rejectionBranch, /saveDraftNow\s*\(/, 'candidato recusado não pode ir ao localStorage');
 assert.doesNotMatch(rejectionBranch, /manualScheduleDraft\s*=/, 'candidato recusado não pode trocar o draft ativo');
 assert.match(runner, /transaction\.warnings\.length/, 'warning deve confirmar movimento com alertas');

@@ -142,13 +142,19 @@ function extractBalancedFunction(sourceText, marker) {
 const runnerStart = source.indexOf('productionCalendarMoveRunner = async');
 assert.equal(source.indexOf('function focusCalendarCardFromFlow', runnerStart), -1, 'delimitador legado nao faz parte do contrato atual');
 const runner = extractBalancedFunction(source, 'productionCalendarMoveRunner = async');
-assert.match(runner, /getDateOptions:\s*async quantity => dateOptionsForQuantity\(quantity\)\.options/);
-assert.match(runner, /remainderQuantity\s*=\s*Math\.max\(Math\.floor\(Number\(move\.allocation\.quantity/);
-assert.match(runner, /cachedDates\.transactions\.get\(remainderDate\)/);
-assert.match(runner, /applyManualScheduleTransaction\s*\(/, 'fluxo parcial deve usar a transacao manual canonica');
-assert.match(runner, /manualMovePolicy:\s*'stock_only_independent'/, 'fluxo parcial deve usar a politica independente de estoque');
+const manualMoveControllerSource = readFileSync(
+  new URL('../shared/planning-controller/planningManualMoveController.js', import.meta.url),
+  'utf8'
+);
+assert.match(runner, /runPlanningManualMoveController\s*\(/, 'runner deve delegar fluxo parcial para o controller de move');
+assert.match(runner, /onStockPartialChoice:[\s\S]*openManualStockPartialMoveModal/, 'pagina deve manter o modal parcial como callback visual');
+assert.match(manualMoveControllerSource, /getDateOptions:\s*async quantity => dateOptionsForQuantity\(quantity\)\.options/);
+assert.match(manualMoveControllerSource, /remainderQuantity\s*=\s*Math\.max\(allocationQuantity - acceptedQuantity/);
+assert.match(manualMoveControllerSource, /cachedDates\.transactions\.get\(remainderDate\)/);
+assert.match(manualMoveControllerSource, /applyManualScheduleTransaction/, 'fluxo parcial deve usar a transacao manual canonica');
+assert.match(manualMoveControllerSource, /manualMovePolicy:\s*'stock_only_independent'/, 'fluxo parcial deve usar a politica independente de estoque');
 assert.doesNotMatch(runner, /openManualRemainderDateModal\s*\(/, 'data do restante deve estar no modal parcial');
-assert.doesNotMatch(runner, /reoptimizePlanningFuture|simulateCurrent|scheduleOperations/, 'fluxo de drag parcial nao deve reotimizar nem simular');
+assert.doesNotMatch(manualMoveControllerSource, /\b(reoptimizePlanningFuture|simulateCurrent|scheduleOperations|buildPlan)\b/, 'fluxo de drag parcial nao deve reotimizar nem simular');
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));

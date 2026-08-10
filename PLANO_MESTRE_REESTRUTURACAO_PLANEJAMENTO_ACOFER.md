@@ -725,13 +725,17 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Funcoes/blocos extraidos na REF-035: montagem de payload `POST /planning/plans`, montagem de payload `PUT /planning/plans/:id/manual-schedule` com `expectedRevision`, orquestracao de save por callbacks explicitos e montagem de estado de reopen a partir de `normalizePersistedManualScheduleDraft`.
 - [x] Funcoes rejeitadas/retidas na REF-035: `saveDraftNow`, `queueAutosave`, `discardAllProductionCalendarChanges`, `prepareAutomaticBaselineDiscard`, `prepareCurrentSimulationManualDiscard`, pre-validacao produtiva com `applyManualScheduleTransaction`, criacao de baseline automatica no reopen, reset de historico, modal, toast, navegacao, render, API direta, services/backend/database, solver/reotimizacao, manual move/split, transporte, estoque, stock-only, Gantt, Calendario V2, Flow, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade.
 - [x] Testes REF-035: criado `tests/planningPersistenceController.test.js`; ajustado teste estatico estritamente relacionado em `tests/automaticSimulationBaseline.service.test.js`; sintaxe de `planningPersistenceController`, `PlanningPage` e teste novo aprovada; testes focados e canonicos de persistencia/save-load aprovados; suite final `node --test tests/*.js` com 86/86; contagem canonica da `PlanningPage.js` reduziu de 6265 para 6212 linhas.
+- [x] REF-036 concluida: auditoria e extracao do controlador de movimentacao manual de allocations para `shared/planning-controller/planningManualMoveController.js`; baseline inicial `0f72af3`, worktree limpo, `node --test tests/*.js` com 86/86, contagem inicial da `PlanningPage.js`: 6212 linhas.
+- [x] Funcoes/blocos extraidos na REF-036: montagem da operacao canonica `MOVE_ALLOCATION`, preservando `allocationId`, destino, maquina, pessoas, origem e `manualMovePolicy`; execucao transacional por `applyManualScheduleTransaction`; aceite/rejeicao/cancelamento por callbacks explicitos; diagnostics e `manualMoveStockAnalysis` preservados.
+- [x] Funcoes rejeitadas/retidas na REF-036: `handleProductionCalendarMoveRequest`, `validateProductionCalendarMoveIntent`, `confirmManualMoveConfiguration`, callbacks pos-aceite (`recordAcceptedManualState`, `saveDraftNow`, `refreshTimelineOnly`, toast e limpeza de selecao), modais de estoque, rejeicao visual, `buildManualMoveCandidateDraft`, split/editor/capacidade, transporte, persistencia, autosave/descarte, Gantt renderer, Calendario V2, solver/reotimizacao, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade.
+- [x] Testes REF-036: criado `tests/planningManualMoveController.test.js`; ajustado teste estatico estritamente relacionado em `tests/planningManualScheduleIntegration.test.js`; sintaxe de `planningManualMoveController` e `PlanningPage` aprovada; testes focados e relacionados de transacao, validacao, integracao manual e Gantt aprovados; suite final registrada em `docs/refactor/REF-036_PLANNING_MANUAL_MOVE_CONTROLLER_EXTRACTION.md`; contagem canonica da `PlanningPage.js` reduziu de 6212 para 6136 linhas.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
 - [ ] REF-013 homologacao manual permanece pendente.
 - [ ] Calendario V2 permanece pendente.
 - [ ] Identidade do calendario manual permanece pendente.
-- [ ] Manual move/split permanece pendente.
+- [ ] Split/editor permanece pendente.
 - [ ] Persistencia ampla/autosave/descarte permanece pendente.
 - [ ] Stock-only/movimento de estoque permanece pendente.
 
