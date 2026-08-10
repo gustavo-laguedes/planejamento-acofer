@@ -729,13 +729,17 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Funcoes/blocos extraidos na REF-036: montagem da operacao canonica `MOVE_ALLOCATION`, preservando `allocationId`, destino, maquina, pessoas, origem e `manualMovePolicy`; execucao transacional por `applyManualScheduleTransaction`; aceite/rejeicao/cancelamento por callbacks explicitos; diagnostics e `manualMoveStockAnalysis` preservados.
 - [x] Funcoes rejeitadas/retidas na REF-036: `handleProductionCalendarMoveRequest`, `validateProductionCalendarMoveIntent`, `confirmManualMoveConfiguration`, callbacks pos-aceite (`recordAcceptedManualState`, `saveDraftNow`, `refreshTimelineOnly`, toast e limpeza de selecao), modais de estoque, rejeicao visual, `buildManualMoveCandidateDraft`, split/editor/capacidade, transporte, persistencia, autosave/descarte, Gantt renderer, Calendario V2, solver/reotimizacao, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade.
 - [x] Testes REF-036: criado `tests/planningManualMoveController.test.js`; ajustado teste estatico estritamente relacionado em `tests/planningManualScheduleIntegration.test.js`; sintaxe de `planningManualMoveController` e `PlanningPage` aprovada; testes focados e relacionados de transacao, validacao, integracao manual e Gantt aprovados; suite final registrada em `docs/refactor/REF-036_PLANNING_MANUAL_MOVE_CONTROLLER_EXTRACTION.md`; contagem canonica da `PlanningPage.js` reduziu de 6212 para 6136 linhas.
+- [x] REF-037 concluida: auditoria e extracao do controlador de split/editor de allocation para `shared/planning-controller/planningAllocationEditorController.js`; baseline inicial `0baec24`, worktree limpo, `node --test tests/*.js` com 87/87, contagem inicial da `PlanningPage.js`: 6136 linhas.
+- [x] Funcoes/blocos extraidos na REF-037: montagem das operacoes canonicas `EDIT_ALLOCATION` e `SPLIT_ALLOCATION`, execucao por `applyManualScheduleTransaction`, retorno de aceite/rejeicao/stale/no-op, diagnostics preservados e aplicacao do draft aceito somente por callback explicito.
+- [x] Funcoes rejeitadas/retidas na REF-037: abertura/fechamento dos editores, `ProductionCalendarEditor`, `ProductionCalendarSplitEditor`, preview de produtividade, modal de capacidade, ramo de troca de recurso com reotimizacao, `acceptRecalculatedCalendar`, historico/save/render/toast, transporte, stock-only, persistencia, autosave/descarte, Gantt, Calendario V2 renderer/grid, solver/reotimizacao, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade global.
+- [x] Testes REF-037: criado `tests/planningAllocationEditorController.test.js`; ajustados testes estaticos estritamente relacionados em `tests/planningReoptimization.service.test.js` e `tests/productionCalendarEditButton.test.js`; sintaxe do controller e da `PlanningPage` aprovada; testes focados e relacionados de split/editor/configuracao/capacidade aprovados; suite final registrada em `docs/refactor/REF-037_PLANNING_ALLOCATION_EDITOR_CONTROLLER_EXTRACTION.md`; contagem canonica da `PlanningPage.js` reduziu de 6136 para 6134 linhas.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
 - [ ] REF-013 homologacao manual permanece pendente.
 - [ ] Calendario V2 permanece pendente.
 - [ ] Identidade do calendario manual permanece pendente.
-- [ ] Split/editor permanece pendente.
+- [ ] Split/editor com reotimizacao de recurso e desacoplamento visual do pacote V2 permanece pendente.
 - [ ] Persistencia ampla/autosave/descarte permanece pendente.
 - [ ] Stock-only/movimento de estoque permanece pendente.
 

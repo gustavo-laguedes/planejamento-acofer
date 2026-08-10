@@ -162,8 +162,10 @@ assert.match(dragSource, /if \(isInteractivePointerTarget\(event\.target, card\)
 assert.match(editorSource, /\[data-editor-cancel\][\s\S]*addEventListener\('click', close\)/);
 assert.match(pageSource, /onEditAllocation:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\)/);
 assert.match(pageSource, /ProductionCalendarEditor\(\{[\s\S]*onSave:\s*payload\s*=>\s*handleProductionCalendarAllocationSave\(\{\s*\.\.\.payload,\s*productivityRows\s*\}\)/);
-assert.match(pageSource, /type:\s*'EDIT_ALLOCATION'/);
-assert.match(pageSource, /type:\s*'SPLIT_ALLOCATION'/);
+assert.match(pageSource, /runPlanningAllocationEditorController/);
+const allocationEditorControllerSource = readFileSync(new URL('../shared/planning-controller/planningAllocationEditorController.js', import.meta.url), 'utf8');
+assert.match(allocationEditorControllerSource, /type:\s*'EDIT_ALLOCATION'/);
+assert.match(allocationEditorControllerSource, /type:\s*'SPLIT_ALLOCATION'/);
 assert.doesNotMatch(pageSource, /manualDraftDailyMinutes/);
 assert.match(pageSource, /dailyMinutes:\s*planningDraftDailyMinutes\(\{ requireConfiguredShifts: true \}\)/);
 

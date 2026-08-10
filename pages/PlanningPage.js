@@ -60,6 +60,7 @@ import {
 import {
   runPlanningManualMoveController
 } from '../shared/planning-controller/planningManualMoveController.js';
+import { runPlanningAllocationEditorController } from '../shared/planning-controller/planningAllocationEditorController.js';
 import {
   buildPlanningStockCalendarAlert,
   buildPlanningStockModalModel,
@@ -2988,6 +2989,14 @@ export function PlanningPage() {
     return ['split', 'override'].includes(choice) ? choice : 'cancel';
   }
 
+  function acceptProductionCalendarEditorTransaction(transaction, previousManualState, { resetSelection = false, message = '' } = {}) {
+    manualScheduleDraft = transaction.draft;
+    draft.manualScheduleDraft = manualScheduleDraft;
+    if (resetSelection) productionCalendarVisualState = { ...productionCalendarVisualState, selectedAllocationId: null };
+    recordAcceptedManualState(previousManualState); saveDraftNow(); refreshTimelineOnly();
+    if (message) toast(message);
+  }
+
   async function handleProductionCalendarAllocationSave({ mode, allocation, relativePercents, partEdits, machineId, peopleCount, quantity, date, startTime, productivityRows } = {}) {
     if (!canWritePlanning || !manualScheduleDraft || !allocation) return { accepted: false };
     const current = manualScheduleDraft.allocations.find(item => String(item.allocationId) === String(allocation.allocationId));
@@ -3000,12 +3009,6 @@ export function PlanningPage() {
       String(current.machineId) !== String(machineId)
       || Number(current.peopleCount) !== Number(peopleCount)
     );
-    if (!isSplit && String(current.machineId) === String(machineId)
-      && Number(current.peopleCount) === Number(peopleCount)
-      && String(current.date) === String(date)
-      && String(current.startTime) === String(startTime)
-      && !quantityChanged) return { accepted: true };
-
     if (resourceChanged) {
       const snapshot = currentProductionCalendarSnapshot();
       const material = resolveProductivityMaterial({ reference: current, materials });
@@ -3045,11 +3048,11 @@ export function PlanningPage() {
       if (capacityDecision === 'override') {
         const previousManualState = cloneDraftPlanningState();
         const timestamp = new Date().toISOString();
-        const transaction = applyManualScheduleTransaction({
+        const result = await runPlanningAllocationEditorController({
           currentDraft: manualScheduleDraft,
-          intent: {
-            type: 'EDIT_ALLOCATION',
-            allocationId: current.allocationId,
+          editRequest: {
+            mode: 'edit',
+            allocation: current,
             machineId,
             peopleCount,
             quantity: quantityChanged ? requestedQuantity : undefined,
@@ -3064,18 +3067,13 @@ export function PlanningPage() {
             dailyMinutes: planningDraftDailyMinutes({ requireConfiguredShifts: true })
           },
           validationContext: await currentManualScheduleValidationContextWithFreshStock(snapshot),
-          decisions: { capacityDecision: 'override' }
+          decisions: { capacityDecision: 'override' },
+          onAccepted: transaction => acceptProductionCalendarEditorTransaction(transaction, previousManualState, { message: 'Configuracao atualizada com capacidade extraordinaria.' })
         });
-        if (!transaction.accepted) return {
+        if (!result.accepted) return {
           accepted: false,
-          message: transaction.blockingIssues?.[0]?.message || 'A capacidade extraordinaria nao pode ser aplicada.'
+          message: result.transaction?.blockingIssues?.[0]?.message || 'A capacidade extraordinaria nao pode ser aplicada.'
         };
-        manualScheduleDraft = transaction.draft;
-        draft.manualScheduleDraft = manualScheduleDraft;
-        recordAcceptedManualState(previousManualState);
-        saveDraftNow();
-        refreshTimelineOnly();
-        toast('Configuracao atualizada com capacidade extraordinaria.');
         return { accepted: true };
       }
 
@@ -3146,12 +3144,18 @@ export function PlanningPage() {
         : 'split';
       if (capacityDecision === 'cancel') return { accepted: false, message: '' };
     }
-    const transaction = applyManualScheduleTransaction({
+    const result = await runPlanningAllocationEditorController({
       currentDraft: manualScheduleDraft,
-      intent: isSplit ? {
-        type: 'SPLIT_ALLOCATION', allocationId: current.allocationId, relativePercents, partEdits
-      } : {
-        type: 'EDIT_ALLOCATION', allocationId: current.allocationId, machineId, peopleCount, quantity: quantityChanged ? requestedQuantity : undefined, date, startTime
+      editRequest: {
+        mode,
+        allocation: current,
+        relativePercents,
+        partEdits,
+        machineId,
+        peopleCount,
+        quantity: quantityChanged ? requestedQuantity : undefined,
+        date,
+        startTime
       },
       draftContext: {
         now: timestamp,
@@ -3161,19 +3165,13 @@ export function PlanningPage() {
         dailyMinutes: planningDraftDailyMinutes({ requireConfiguredShifts: true })
       },
       validationContext: await currentManualScheduleValidationContextWithFreshStock(),
-      decisions: { capacityDecision }
+      decisions: { capacityDecision },
+      onAccepted: transaction => acceptProductionCalendarEditorTransaction(transaction, previousManualState, { resetSelection: true, message: isSplit ? 'Allocation dividida proporcionalmente.' : 'Allocation atualizada sem alterar as partes irmãs.' })
     });
-    if (!transaction.accepted) return {
+    if (!result.accepted) return {
       accepted: false,
-      message: transaction.blockingIssues?.[0]?.message || 'As alterações não passaram pela validação localizada.'
+      message: result.message || 'As alterações não passaram pela validação localizada.'
     };
-    manualScheduleDraft = transaction.draft;
-    draft.manualScheduleDraft = manualScheduleDraft;
-    productionCalendarVisualState = { ...productionCalendarVisualState, selectedAllocationId: null };
-    recordAcceptedManualState(previousManualState);
-    saveDraftNow();
-    refreshTimelineOnly();
-    toast(isSplit ? 'Allocation dividida proporcionalmente.' : 'Allocation atualizada sem alterar as partes irmãs.');
     return { accepted: true };
   }
 

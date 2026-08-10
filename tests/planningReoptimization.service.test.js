@@ -389,12 +389,14 @@ const editorHandlerSource = planningPageSource.slice(
   planningPageSource.indexOf('async function handleProductionCalendarAllocationSave'),
   planningPageSource.indexOf('function openProductionCalendarAllocationEditor')
 );
-assert.match(editorHandlerSource, /type:\s*'EDIT_ALLOCATION'/);
-assert.match(editorHandlerSource, /type:\s*'SPLIT_ALLOCATION'/);
-assert.match(editorHandlerSource, /applyManualScheduleTransaction\s*\(/);
+const allocationEditorControllerSource = readFileSync(new URL('../shared/planning-controller/planningAllocationEditorController.js', import.meta.url), 'utf8');
+assert.match(editorHandlerSource, /runPlanningAllocationEditorController/);
+assert.match(allocationEditorControllerSource, /type:\s*'EDIT_ALLOCATION'/);
+assert.match(allocationEditorControllerSource, /type:\s*'SPLIT_ALLOCATION'/);
+assert.match(allocationEditorControllerSource, /applyManualScheduleTransaction/);
 assert.doesNotMatch(editorHandlerSource, /productivityMatrix:\s*productivityRows/);
 assert.doesNotMatch(editorHandlerSource, /reoptimizePlanningFuture|simulatePlanning|simulateCurrent|scheduleOperations/);
-assert.equal((editorHandlerSource.match(/recordAcceptedManualState\s*\(/g) || []).length, 2);
+assert.match(editorHandlerSource, /acceptProductionCalendarEditorTransaction/);
 const editorComponentSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarEditor.js', import.meta.url), 'utf8');
 const reoptimizationSource = readFileSync(new URL('../services/planningReoptimization.service.js', import.meta.url), 'utf8');
 const previewSource = reoptimizationSource.slice(
