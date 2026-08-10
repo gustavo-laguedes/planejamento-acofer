@@ -4,12 +4,14 @@ import { CalendarTimeline } from '../shared/CalendarTimeline.js';
 import {
   ProductionCalendar,
   ProductionCalendarEditor,
-  adaptPlanningResultToProductionCalendar,
   buildProductionCalendarDayPresentation,
   buildProductionCalendarDayProductivity,
   extendProductionCalendarDayRange,
   fillProductionCalendarDayRange
 } from '../shared/production-calendar/index.js';
+import {
+  adaptPlanningResultToScheduleSnapshot as adaptPlanningResultToProductionCalendar
+} from '../shared/planning-schedule/planningScheduleAdapter.js';
 import {
   getProductionDisplayColor,
   getProductionDisplayFallbackColor,

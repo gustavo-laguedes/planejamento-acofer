@@ -740,6 +740,14 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Consumidores REF-039 encontrados: `ganttAps.geometry.js`, `createProductionCalendarGridRows`, `productionCalendar.adapter.js`, barrel `shared/production-calendar/index.js` e testes de Gantt/grid/utilities.
 - [x] Gate REF-039: sem DOM/render V2, sem estado V2, sem regra especifica V2, API preservada por re-export, movimentacao mecanica sem mudanca de comportamento.
 - [x] Neutralizacao REF-039: cadeia `Gantt geometry -> productionCalendar.utils.js` substituida por `Gantt geometry -> shared/planning-schedule/planningMachineOrder.js`; `productionCalendar.utils.js` mantem re-export temporario.
+- [x] REF-040 concluida: adapter compartilhado de schedule auditado e movido para `shared/planning-schedule/planningScheduleAdapter.js`; evidencia em `docs/refactor/REF-040_SCHEDULE_ADAPTER_NEUTRALIZATION.md`.
+- [x] Baseline REF-040: branch `rebuild-production-calendar`, HEAD `9f44924`, worktree limpo, `node --test tests/*.js` inicial com 96/96.
+- [x] Exports REF-040 auditados: `adaptPlanningResultToProductionCalendar`, `buildProductionStageIndex`, `buildProductionMembershipIndex` e helpers privados internos do adapter.
+- [x] Mapa de identidade REF-040 registrado: `allocationId`, `operationId`, `productionId`, `calendarParentOperationId`, `parentOperationId`, IDs `readonly:*`, IDs derivados/fallback, `memberships`, `machineId`, `sequence` e `stage`; `parentAllocationId`, `splitParentId` e `splitOrder` preservados como ausencia atual do adapter.
+- [x] Fronteira neutra REF-040 encontrada: nucleo sem DOM, sem estado visual V2, sem API, sem scheduler, sem persistencia e sem alteracao comportamental.
+- [x] Neutralizacao REF-040: cadeia `PlanningPage.js -> production-calendar/index.js -> productionCalendar.adapter.js` substituida por `PlanningPage.js -> shared/planning-schedule/planningScheduleAdapter.js`.
+- [x] Re-export REF-040: `shared/production-calendar/productionCalendar.adapter.js` mantem `adaptPlanningResultToProductionCalendar` como compatibilidade legada para consumidores V2 antigos.
+- [x] Testes REF-040: teste neutro `tests/planningScheduleAdapter.test.js` criado; validacoes focadas e suite completa registradas no historico da missao.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
@@ -2375,6 +2383,30 @@ Homologacao: nao executada em browser; mudanca estrutural de import/export e hel
 Checkboxes atualizados: REF-039 registrada como concluida em Fase 3; consumidores, gate, cadeia antes/depois, re-export e blockers restantes registrados.
 Riscos/pendencias: REF-013 homologacao manual, fallback/renderer V2, `ProductionCalendar`, editor/split visual compartilhado, adapter, demais utilities V2, stock-only, identidade manual, autosave/descarte, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade permanecem pendentes.
 Proxima missao sugerida: neutralizar o adapter de schedule com re-export, preservando `allocationId`, memberships e IDs `readonly:*`.
+
+---
+
+### 2026-08-10 - REF-040 - Auditar e neutralizar o adapter compartilhado de schedule
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao estrutural; auditoria read-only por Rogerio Ceni; analise tecnica de testes por Toto Wolff
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `9f44924`
+Baseline: worktree inicial limpo; `node --test tests/*.js` inicial com 96 testes, 96 aprovados e 0 falhas.
+Objetivo: auditar `productionCalendar.adapter.js` e mover somente o nucleo neutro de adaptacao de schedule quando a fronteira fosse segura.
+Arquivos lidos: `AGENTS.md`, este plano, `docs/refactor/REF-038_CALENDARIO_V2_COUPLING_NEUTRALIZATION.md`, `docs/refactor/REF-039_MACHINE_HELPERS_NEUTRALIZATION.md`, `shared/production-calendar/productionCalendar.adapter.js`, `shared/production-calendar/index.js`, `pages/PlanningPage.js`, `shared/planning-schedule-view/*`, consumidores diretos localizados por `rg` e testes relacionados a memberships, grid, stage, Gantt, renderer e batch stock.
+Arquivos alterados: `shared/planning-schedule/planningScheduleAdapter.js`, `shared/production-calendar/productionCalendar.adapter.js`, `pages/PlanningPage.js`, `tests/planningScheduleAdapter.test.js`, `tests/planningDailyBatchStock.service.test.js`, `tests/productionCalendarStage.test.js`, `docs/refactor/REF-040_SCHEDULE_ADAPTER_NEUTRALIZATION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: o nucleo do adapter foi movido mecanicamente para `shared/planning-schedule/planningScheduleAdapter.js`; o export neutro principal passou a ser `adaptPlanningResultToScheduleSnapshot`; o caminho antigo reexporta `adaptPlanningResultToProductionCalendar` para compatibilidade; `PlanningPage.js` e o teste de batch stock passaram a importar a fonte neutra; testes V2 antigos continuam validando o re-export legado.
+Gate registrado: `adaptPlanningResultToProductionCalendar`, `buildProductionStageIndex` e `buildProductionMembershipIndex` nao dependem de DOM, estado visual V2, API, scheduler, persistencia ou regra de render; preservam assinatura/retorno via re-export antigo e mantem IDs/memberships/ordem sem alteracao comportamental.
+Mapa de identidade registrado: `allocationId` existente vence o fallback; fallback `readonly:*` preservado; `operationId`, `productionId`, `calendarParentOperationId`, `parentOperationId`, `machineId`, `sequence`, `productionStage` e `productionMemberships` preservados; `parentAllocationId`, `splitParentId` e `splitOrder` seguem nao materializados pelo adapter atual, sem criacao de campo novo.
+Cadeia antes: `PlanningPage.js -> production-calendar/index.js -> productionCalendar.adapter.js`; testes diretos -> `production-calendar/productionCalendar.adapter.js`.
+Cadeia depois: `PlanningPage.js -> shared/planning-schedule/planningScheduleAdapter.js`; `planningDailyBatchStock` -> modulo neutro; `production-calendar/index.js -> productionCalendar.adapter.js -> modulo neutro` para compatibilidade V2.
+Testes/comandos: `node --check shared/production-calendar/productionCalendar.adapter.js`; `node --check shared/planning-schedule/planningScheduleAdapter.js`; `node --check pages/PlanningPage.js`; `node --test tests/planningScheduleAdapter.test.js`; `node --test tests/planningDailyBatchStock.service.test.js`; `node --test tests/productionCalendarMemberships.test.js`; `node --test tests/productionCalendarGrid.test.js`; `node --test tests/productionCalendarStage.test.js`; `node --test tests/ganttApsRenderer.test.js`; `node --test tests/planningScheduleRenderer.test.js`; `node --test tests/*.js`; `git diff --check`.
+Resultado: testes focados aprovados; suite final com 97 testes, 97 aprovados e 0 falhas; `git diff --check` sem erros, apenas avisos conhecidos LF -> CRLF.
+Homologacao: nao executada em browser; mudanca estrutural de import/export e adapter puro, sem alteracao de renderer, DOM, movimento manual, persistencia, estoque, solver, capacidade ou CSS.
+Checkboxes atualizados: REF-040 registrada como concluida em Fase 3; baseline, exports auditados, mapa de identidade, fronteira neutra, extracao, re-export e testes registrados.
+Riscos/pendencias: REF-013 homologacao manual, fallback/renderer V2, `ProductionCalendar`, editor/split visual, demais utilities V2, stock-only, identidade manual nao neutralizada, autosave/descarte, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade permanecem pendentes.
+Proxima missao sugerida: neutralizar helpers de dia/snapshot ainda usados fora do grid V2, sem tocar renderer/fallback.
 
 ---
 

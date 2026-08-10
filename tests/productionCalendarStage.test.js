@@ -164,7 +164,7 @@ try {
   globalThis.document = previousDocument;
 }
 
-const adapterSource = readFileSync(fileURLToPath(new URL('../shared/production-calendar/productionCalendar.adapter.js', import.meta.url)), 'utf8');
+const adapterSource = readFileSync(fileURLToPath(new URL('../shared/planning-schedule/planningScheduleAdapter.js', import.meta.url)), 'utf8');
 const stageFunction = adapterSource.slice(
   adapterSource.indexOf('export function buildProductionStageIndex'),
   adapterSource.indexOf('function productionRoots')

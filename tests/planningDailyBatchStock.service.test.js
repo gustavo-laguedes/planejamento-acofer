@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { buildPlan } from '../services/planning.service.js';
-import { adaptPlanningResultToProductionCalendar } from '../shared/production-calendar/productionCalendar.adapter.js';
+import { adaptPlanningResultToScheduleSnapshot as adaptPlanningResultToProductionCalendar } from '../shared/planning-schedule/planningScheduleAdapter.js';
 
 const shifts = [{
   shiftId: 'day',
