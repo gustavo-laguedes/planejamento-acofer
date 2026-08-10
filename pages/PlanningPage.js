@@ -51,6 +51,9 @@ import {
   bindPlanningFlowEvents
 } from '../shared/planning-presentation/planningFlowEvents.js';
 import {
+  createPlanningHistoryController
+} from '../shared/planning-controller/planningHistoryController.js';
+import {
   addCalendarMonths,
   dateOnlyFromDate,
   isValidDateOnly,
@@ -122,14 +125,6 @@ import {
   persistAutomaticBaselineDiscard,
   restoreAutomaticSimulationBaseline
 } from '../services/automaticSimulationBaseline.service.js';
-import {
-  createManualScheduleHistory,
-  recordManualScheduleHistory,
-  redoManualScheduleHistory,
-  resetManualScheduleHistory,
-  undoManualScheduleHistory
-} from '../services/manualScheduleHistory.service.js';
-
 const USE_PRODUCTION_CALENDAR_V2 = true;
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
 const STOCK_MINIMUM_DAYS_KEY = 'acofer.stock.minimumDays';
@@ -1274,7 +1269,26 @@ export function PlanningPage() {
   let productionCalendarExclusiveView = null;
   let planningScheduleRendererHost = null;
   let manualScheduleDraft = draft.manualScheduleDraft || null;
-  let manualScheduleHistory = createManualScheduleHistory();
+  const manualScheduleHistory = createPlanningHistoryController({
+    captureSnapshot: cloneDraftPlanningState,
+    restoreSnapshot: restoreDraftPlanningState,
+    onBeforeRestore: () => {
+      productionCalendarVisualState = {
+        ...productionCalendarVisualState,
+        selectedAllocationId: null
+      };
+    },
+    onAfterRestore: () => {
+      const flowsTarget = target.querySelector('.production-flows-target');
+      if (flowsTarget && currentSimulation) {
+        renderProductionFlowDom(flowsTarget, renderProductionFlows(currentSimulation), {
+          root: page,
+          requestAnimationFrame,
+          productionTheme
+        });
+      }
+    }
+  });
   let hasPendingSimulationChanges = false;
   let autosaveTimer = null;
   let recalculationTimer = null;
@@ -1570,37 +1584,15 @@ export function PlanningPage() {
   }
 
   function recordAcceptedManualState(previousState) {
-    manualScheduleHistory = recordManualScheduleHistory(
-      manualScheduleHistory,
-      previousState,
-      cloneDraftPlanningState()
-    );
-  }
-
-  function applyManualHistoryResult(result) {
-    if (!result?.changed || !result.state) return;
-    manualScheduleHistory = result.history;
-    productionCalendarVisualState = {
-      ...productionCalendarVisualState,
-      selectedAllocationId: null
-    };
-    restoreDraftPlanningState(result.state);
-    const flowsTarget = target.querySelector('.production-flows-target');
-    if (flowsTarget && currentSimulation) {
-      renderProductionFlowDom(flowsTarget, renderProductionFlows(currentSimulation), {
-        root: page,
-        requestAnimationFrame,
-        productionTheme
-      });
-    }
+    manualScheduleHistory.record(previousState);
   }
 
   function undoLastProductionCalendarChange() {
-    applyManualHistoryResult(undoManualScheduleHistory(manualScheduleHistory));
+    manualScheduleHistory.undo();
   }
 
   function redoProductionCalendarChange() {
-    applyManualHistoryResult(redoManualScheduleHistory(manualScheduleHistory));
+    manualScheduleHistory.redo();
   }
 
   function findSimulationOperation(detail = {}) {
@@ -2826,7 +2818,7 @@ export function PlanningPage() {
     lastPayload = draft.lastPayload;
     productionCalendarVisualState = {};
     hasPendingSimulationChanges = false;
-    manualScheduleHistory = resetManualScheduleHistory(cloneDraftPlanningState());
+    manualScheduleHistory.resetFromCurrent();
     currentPlanningStockAlerts = new Map();
     refreshTimelineOnly();
     const flowsTarget = target.querySelector('.production-flows-target');
@@ -4219,8 +4211,8 @@ export function PlanningPage() {
           manualScheduleDraft,
           planningDraft: draft
         }),
-        canUndoManualChange: canWritePlanning && manualScheduleHistory.past.length > 0,
-        canRedoManualChange: canWritePlanning && manualScheduleHistory.future.length > 0,
+        canUndoManualChange: canWritePlanning && manualScheduleHistory.canUndo(),
+        canRedoManualChange: canWritePlanning && manualScheduleHistory.canRedo(),
         stockAlerts: Boolean(options.stockAlerts)
       }
     };
@@ -4555,8 +4547,8 @@ export function PlanningPage() {
       : null;
     draft.dailyTeamOverrides = JSON.parse(JSON.stringify(manualScheduleDraft?.dailyTeamOverrides || draft.dailyTeamOverrides || {}));
     draft.manualWorkDates = [...(manualScheduleDraft?.manualWorkDates || draft.manualWorkDates || [])];
-    if (captureAutomaticBaseline || !manualScheduleHistory.present) {
-      manualScheduleHistory = resetManualScheduleHistory(cloneDraftPlanningState());
+    if (captureAutomaticBaseline || !manualScheduleHistory.getHistory().present) {
+      manualScheduleHistory.resetFromCurrent();
     }
     saveDraftNow();
     hasPendingSimulationChanges = false;
@@ -4769,7 +4761,7 @@ export function PlanningPage() {
     currentSimulation = null;
     currentAutomaticBaseline = null;
     manualScheduleDraft = null;
-        manualScheduleHistory = resetManualScheduleHistory();
+        manualScheduleHistory.reset();
         backdrop.remove();
         window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Calendário manual do planejamento ${saved.plan.code || saved.plan.id} salvo.` }));
         activeTab = 'history';
@@ -5008,7 +5000,7 @@ export function PlanningPage() {
     draft.currentSimulation = currentSimulation;
     draft.manualScheduleDraft = manualScheduleDraft;
     draft.automaticBaseline = cloneAutomaticBaselineValue(currentAutomaticBaseline);
-    manualScheduleHistory = resetManualScheduleHistory(cloneDraftPlanningState());
+    manualScheduleHistory.resetFromCurrent();
     saveDraftNow();
     activeTab = 'simulation';
     sessionStorage.setItem('planejamento_planning_tab', activeTab);
@@ -5107,7 +5099,7 @@ export function PlanningPage() {
       currentSimulation = null;
       currentAutomaticBaseline = null;
       manualScheduleDraft = null;
-      manualScheduleHistory = resetManualScheduleHistory();
+      manualScheduleHistory.reset();
       lastPayload = null;
       currentPlanningStockAlerts = new Map();
       hasPendingSimulationChanges = false;
@@ -5595,7 +5587,7 @@ export function PlanningPage() {
       currentSimulation = null;
       currentAutomaticBaseline = null;
       manualScheduleDraft = null;
-      manualScheduleHistory = resetManualScheduleHistory();
+      manualScheduleHistory.reset();
       draft.lastPayload = null;
       draft.currentSimulation = null;
       draft.manualScheduleDraft = null;

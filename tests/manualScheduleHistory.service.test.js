@@ -54,20 +54,19 @@ assert.equal(cleared.past.length, 0);
 assert.equal(cleared.future.length, 0);
 
 const planningSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
+const controllerSource = readFileSync(new URL('../shared/planning-controller/planningHistoryController.js', import.meta.url), 'utf8');
 const toolbarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarToolbar.js', import.meta.url), 'utf8');
 const calendarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendar.js', import.meta.url), 'utf8');
 const cssSource = readFileSync(new URL('../shared/production-calendar/production-calendar.css', import.meta.url), 'utf8');
-const historyHandlers = planningSource.slice(
-  planningSource.indexOf('function applyManualHistoryResult'),
-  planningSource.indexOf('function findSimulationOperation')
-);
 
-assert.match(historyHandlers, /undoManualScheduleHistory/);
-assert.match(historyHandlers, /redoManualScheduleHistory/);
-assert.match(historyHandlers, /restoreDraftPlanningState/);
-assert.doesNotMatch(historyHandlers, /simulatePlanningRequest|reoptimizePlanningFuture|scheduler|scheduleOperations/i);
+assert.match(controllerSource, /undoManualScheduleHistory/);
+assert.match(controllerSource, /redoManualScheduleHistory/);
+assert.match(controllerSource, /recordManualScheduleHistory/);
+assert.match(controllerSource, /restoreSnapshot/);
+assert.doesNotMatch(controllerSource, /simulatePlanningRequest|reoptimizePlanningFuture|scheduler|scheduleOperations/i);
+assert.match(planningSource, /createPlanningHistoryController/);
 assert.match(planningSource, /recordAcceptedManualState\(previousManualState\)/);
-assert.match(planningSource, /manualScheduleHistory = resetManualScheduleHistory\(cloneDraftPlanningState\(\)\)/);
+assert.match(planningSource, /manualScheduleHistory\.resetFromCurrent\(\)/);
 assert.match(toolbarSource, /label: '←'/);
 assert.match(toolbarSource, /label: '→'/);
 assert.match(toolbarSource, /Desfazer última alteração/);

@@ -709,6 +709,10 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Funcoes extraidas na REF-031: `bindPlanningFlowEvents` e `extractPlanningFlowNodeData`. A pagina passou a injetar `root: target` e callback `onActivateNode`, mantendo abertura de detalhes antes de solicitar foco.
 - [x] Funcoes rejeitadas/retidas na REF-031: `openFlowNodeDetailsModal`, `renderPlanFlowDetail`, `resolvePlanningFlowAllocation`, `focusPlanningFlowAllocation`, integracao Flow -> Gantt, renderer/Gantt, estoque operacional, draft/state, API, persistencia, Calendario V2, movimento manual e split.
 - [x] Testes REF-031: criado `tests/planningFlowEvents.test.js`; sintaxe de `planningFlowEvents` e `PlanningPage` aprovada; teste focado aprovado; suite final `node --test tests/*.js` com 82/82; `git diff --check` OK com avisos LF/CRLF; contagem canonica da `PlanningPage.js` reduziu de 6713 para 6707 linhas.
+- [x] REF-032 concluida: auditoria e extracao do controlador neutro de historico manual para `shared/planning-controller/planningHistoryController.js`; baseline inicial `85e6ff8`, worktree limpo, `node --test tests/*.js` com 82/82, contagem inicial da `PlanningPage.js`: 6707 linhas.
+- [x] Funcoes/blocos extraidos na REF-032: orquestracao de `record`, `reset`, `resetFromCurrent`, `undo`, `redo`, `canUndo`, `canRedo` e `getHistory` sobre `services/manualScheduleHistory.service.js`, com callbacks explicitos de captura/restauracao.
+- [x] Funcoes rejeitadas/retidas na REF-032: `cloneDraftPlanningState`, `restoreDraftPlanningState`, re-render DOM do Flow, `saveDraftNow`, `refreshTimelineOnly`, API, solver, reotimizacao, movimento, split, transporte, estoque, persistencia, Gantt, Calendario V2 e capacidade.
+- [x] Testes REF-032: criado `tests/planningHistoryController.test.js`; ajuste estritamente necessario em `tests/manualScheduleHistory.service.test.js`; sintaxe de `planningHistoryController` e `PlanningPage` aprovada; testes focados aprovados; suite final `node --test tests/*.js` com 83/83; `git diff --check` OK com avisos LF/CRLF; contagem canonica da `PlanningPage.js` reduziu de 6707 para 6699 linhas.
 - [ ] `productiveMinutes` permanece pendente.
 - [ ] `generatePlanningCode` permanece nao autorizado.
 - [ ] Helpers de turno (`defaultShift`, `normalizeShiftTimes` e relacionados) permanecem pendentes.
@@ -1810,6 +1814,25 @@ Próxima missão sugerida:
 ```
 
 ## Entradas
+
+### 2026-08-10 - REF-032 - Extrair controlador de historico manual
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao de extracao pequena e delimitada
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-manual-calendar`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `85e6ff8`
+Objetivo: auditar e extrair somente a orquestracao neutra do historico manual, preservando snapshots, IDs, redo invalidado, restauracao e disponibilidade de undo/redo.
+Arquivos lidos: `AGENTS.md`, este plano, skills carregadas, `docs/refactor/REF-020_TECHNICAL_CHECKPOINT.md`, `docs/refactor/REF-031_PLANNING_FLOW_EVENTS_EXTRACTION.md`, `pages/PlanningPage.js`, `services/manualScheduleHistory.service.js`, `tests/manualScheduleHistory.service.test.js` e `package.json`.
+Arquivos alterados: `pages/PlanningPage.js`, `shared/planning-controller/planningHistoryController.js`, `tests/planningHistoryController.test.js`, `tests/manualScheduleHistory.service.test.js`, `docs/refactor/REF-032_PLANNING_HISTORY_CONTROLLER_EXTRACTION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: criado modulo `planningHistoryController` sobre o service canonico; `PlanningPage.js` deixou de importar o service diretamente e passou a usar controlador com `captureSnapshot`, `restoreSnapshot`, `onBeforeRestore` e `onAfterRestore`; DOM do Flow e mutacao do draft permaneceram na pagina.
+Testes/comandos: baseline inicial com `git status --short`, branch, `git rev-parse HEAD`, contagem canonica e `node --test tests/*.js`; validacao focada com `node --check shared/planning-controller/planningHistoryController.js`, `node --check pages/PlanningPage.js`, `node --test tests/planningHistoryController.test.js` e `node --test tests/manualScheduleHistory.service.test.js`; suite final `node --test tests/*.js`; `git diff --check`.
+Resultado: baseline inicial 82/82; auditoria confirmou fronteira segura por callbacks; `PlanningPage.js` passou de 6707 para 6699 linhas pelo metodo canonico; suite final 83/83; `git diff --check` OK com avisos LF/CRLF.
+Homologacao: nao marcada; mudanca estrutural sem UI nova. REF-013 manual permanece pendente.
+Checkboxes atualizados: REF-032 registrada como concluida no quadro de extracoes; nenhuma missao futura foi marcada como concluida.
+Riscos/pendencias: REF-013 homologacao manual, modal/foco do Flow, Calendario V2, identidade do calendario manual, manual move/split, transporte, estoque, persistencia, `productiveMinutes`, `generatePlanningCode` e turnos/capacidade seguem pendentes.
+Proxima missao sugerida: auditar e, se seguro, extrair somente os handlers neutros de selecao/restauracao visual do calendario manual, mantendo movimento, split, transporte, estoque, persistencia e Gantt fora do escopo.
+
+---
 
 ### 2026-08-10 - REF-031 - Extrair eventos click/keyboard do Flow
 
