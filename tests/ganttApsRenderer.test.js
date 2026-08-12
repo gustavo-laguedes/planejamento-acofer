@@ -444,6 +444,9 @@ assert.match(
 assert.match(pageSource, /renderer:\s*'gantt-aps'/);
 assert.doesNotMatch(pageSource, /USE_PRODUCTION_CALENDAR_V2/);
 assert.doesNotMatch(pageSource, /CalendarTimeline/);
+assert.doesNotMatch(pageSource, /shared\/production-calendar\/index\.js/);
+assert.doesNotMatch(pageSource, /renderProductionCalendarSnapshot/);
+assert.doesNotMatch(pageSource, /\bProductionCalendar\(\{/);
 assert.doesNotMatch(
   pageSource,
   /const\s+calendar\s*=\s*ProductionCalendar\(\{[\s\S]{0,3000}onRequestMove:\s*handleProductionCalendarMoveRequest/,

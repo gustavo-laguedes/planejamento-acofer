@@ -210,6 +210,9 @@ assert.doesNotMatch(pageSource, /gantt-aps__bar/, 'foco externo nao deve conhece
 assert.doesNotMatch(pageSource, /USE_PRODUCTION_CALENDAR_V2/);
 assert.doesNotMatch(pageSource, /CalendarTimeline/);
 assert.doesNotMatch(pageSource, /globalThis\.PLANNING_SCHEDULE_RENDERER/);
+assert.doesNotMatch(pageSource, /shared\/production-calendar\/index\.js/);
+assert.doesNotMatch(pageSource, /renderProductionCalendarSnapshot/);
+assert.doesNotMatch(pageSource, /\bProductionCalendar\(\{/);
 assert.doesNotMatch(pageSource, /'production-calendar-v2':\s*\(\)\s*=>\s*createProductionCalendarV2Renderer/);
 assert.doesNotMatch(pageSource, /createProductionCalendarV2Renderer/);
 assert.doesNotMatch(pageSource, /rollback para o Calendário V2/);

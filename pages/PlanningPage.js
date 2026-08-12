@@ -1,12 +1,12 @@
 ﻿import { api } from '../shared/api.js';
 import { getCurrentUser } from '../shared/api.js';
 import {
-  ProductionCalendar,
   buildProductionCalendarDayPresentation,
   buildProductionCalendarDayProductivity,
   extendProductionCalendarDayRange
-} from '../shared/production-calendar/index.js';
+} from '../shared/production-calendar/productionCalendar.utils.js';
 import { PlanningAllocationEditor } from '../shared/planning-editor/PlanningAllocationEditor.js';
+import { ensurePlanningAllocationEditorCss } from '../shared/planning-editor/planningAllocationEditorCss.js';
 import {
   adaptPlanningResultToScheduleSnapshot as adaptPlanningResultToProductionCalendar
 } from '../shared/planning-schedule/planningScheduleAdapter.js';
@@ -149,6 +149,9 @@ import {
   persistAutomaticBaselineDiscard,
   restoreAutomaticSimulationBaseline
 } from '../services/automaticSimulationBaseline.service.js';
+
+ensurePlanningAllocationEditorCss();
+
 export {
   buildPlanningStockCalendarAlert,
   buildPlanningStockModalModel,
@@ -2525,19 +2528,6 @@ export function PlanningPage() {
     }
   }
 
-  function renderProductionCalendarWarning(calendar, errorCount) {
-    if (!errorCount) return;
-    const warning = document.createElement('p');
-    warning.className = 'muted-text production-calendar-adapter-warning';
-    warning.textContent = `Algumas alocações inválidas não foram exibidas. (${errorCount})`;
-    const toolbar = calendar.querySelector('.production-calendar-toolbar');
-    if (toolbar) {
-      toolbar.insertAdjacentElement('afterend', warning);
-    } else {
-      calendar.prepend(warning);
-    }
-  }
-
   function currentProductionCalendarSnapshot() {
     if (!currentSimulation) return buildProductionCalendarSnapshot({ days: [], operations: [], calendarOperations: [] });
     return buildProductionCalendarSnapshot(currentSimulation, { stockAlerts: currentPlanningStockAlerts });
@@ -3807,55 +3797,6 @@ export function PlanningPage() {
     productionCalendarExclusiveView = createProductionCalendarExclusivePage(calendar, {
       onClose: () => { productionCalendarExclusiveView = null; }
     });
-  }
-
-  function renderProductionCalendarSnapshot(targetElement, snapshot) {
-    targetElement.innerHTML = '';
-    const calendar = ProductionCalendar({
-      days: Array.isArray(snapshot?.days) ? snapshot.days : [],
-      machines: Array.isArray(snapshot?.machines) ? snapshot.machines : [],
-      allocations: Array.isArray(snapshot?.allocations) ? snapshot.allocations : [],
-      validation: snapshot?.validation || null,
-      permissions: snapshot?.permissions || { readOnly: true },
-      visualState: snapshot?.visualState || {},
-      onOpenDay: day => openPlanningStockProjectionModal(day?.date),
-      onOpenFullscreen: openProductionCalendarExclusiveView,
-      onHorizonChange: () => refreshTimelineOnly(),
-      onDiscardAllChanges: discardAllProductionCalendarChanges,
-      onOptimizeUtilization: snapshot?.permissions?.canEditAllocations ? handleProductionCalendarUtilizationOptimization : undefined,
-      onUndoManualChange: undoLastProductionCalendarChange,
-      onRedoManualChange: redoProductionCalendarChange,
-      onEditAllocation: allocation => openProductionCalendarAllocationEditor(allocation),
-      onTransportAllocation: allocation => openProductionCalendarTransportModal(allocation),
-      onSplitAllocation: allocation => openProductionCalendarAllocationEditor(allocation, { startSplit: true }),
-      onToggleManualWorkDate: snapshot?.permissions?.canEditDaySettings ? handleProductionCalendarManualWorkDate : undefined,
-      onSaveDailyTeam: snapshot?.permissions?.canEditDaySettings ? handleProductionCalendarDailyTeam : undefined,
-      onVisualStateChange: nextVisualState => {
-        productionCalendarVisualState = {
-          ...productionCalendarVisualState,
-          ...(nextVisualState || {})
-        };
-      }
-    });
-    targetElement.appendChild(calendar);
-    renderProductionCalendarWarning(calendar, Array.isArray(snapshot?.errors) ? snapshot.errors.length : 0);
-    const presentation = snapshot?.validation?.presentation;
-    if (presentation?.issues?.length) {
-      const details = document.createElement('details');
-      details.className = 'production-calendar-validation-details';
-      const group = (label, items) => items.length
-        ? `<li><strong>${escapeHtml(label)}</strong><ul>${items.map(item => `<li><strong>${escapeHtml(item.title)}</strong>: ${escapeHtml(item.message)}</li>`).join('')}</ul></li>`
-        : '';
-      details.innerHTML = `
-        <summary>Diagnósticos do calendário (${presentation.issues.length})</summary>
-        <ul>
-          ${group('Erros', presentation.errors || [])}
-          ${group('Avisos', presentation.warnings || [])}
-        </ul>
-      `;
-      calendar.appendChild(details);
-    }
-    return calendar;
   }
 
   function renderProductionCalendar(targetElement, result, options = {}) {

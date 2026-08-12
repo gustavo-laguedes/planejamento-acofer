@@ -151,6 +151,7 @@ const gridSource = readFileSync(new URL('../shared/production-calendar/Productio
 const calendarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendar.js', import.meta.url), 'utf8');
 const dragSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarDrag.js', import.meta.url), 'utf8');
 const editorSource = readFileSync(new URL('../shared/planning-editor/PlanningAllocationEditor.js', import.meta.url), 'utf8');
+const editorCssLoaderSource = readFileSync(new URL('../shared/planning-editor/planningAllocationEditorCss.js', import.meta.url), 'utf8');
 const legacyEditorSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarEditor.js', import.meta.url), 'utf8');
 const editorCss = readFileSync(new URL('../shared/production-calendar/production-calendar.css', import.meta.url), 'utf8');
 const pageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
@@ -162,12 +163,18 @@ assert.match(calendarSource, /onEditAllocation:\s*permissions\.canEditAllocation
 assert.match(dragSource, /\.production-calendar-card-selector, button, input, select, textarea/);
 assert.match(dragSource, /if \(isInteractivePointerTarget\(event\.target, card\)\) return false/);
 assert.match(editorSource, /\[data-editor-cancel\][\s\S]*addEventListener\('click', close\)/);
-assert.match(pageSource, /onEditAllocation:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\)/);
+assert.doesNotMatch(pageSource, /shared\/production-calendar\/index\.js/);
+assert.doesNotMatch(pageSource, /renderProductionCalendarSnapshot/);
+assert.doesNotMatch(pageSource, /\bProductionCalendar\(\{/);
+assert.doesNotMatch(pageSource, /onEditAllocation:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\)/);
 assert.match(pageSource, /onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\)/);
 assert.match(pageSource, /onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\)/);
 assert.match(pageSource, /const\s+allocationId\s*=\s*allocation\?\.allocationId\s*\?\?\s*allocation\?\.id/);
 assert.match(pageSource, /PlanningAllocationEditor\(\{[\s\S]*onSave:\s*payload\s*=>\s*handleProductionCalendarAllocationSave\(\{\s*\.\.\.payload,\s*productivityRows\s*\}\)/);
 assert.match(pageSource, /getDistributionPreview:\s*\(previewAllocation,\s*percents,\s*options\)\s*=>\s*buildManualScheduleAllocationParts\(previewAllocation,\s*percents,\s*options\)/);
+assert.match(pageSource, /ensurePlanningAllocationEditorCss\(\)/);
+assert.match(editorCssLoaderSource, /production-calendar\/production-calendar\.css/);
+assert.match(editorCssLoaderSource, /data-production-calendar-css/);
 assert.match(legacyEditorSource, /PlanningAllocationEditor/);
 assert.match(legacyEditorSource, /buildManualScheduleAllocationParts/);
 assert.doesNotMatch(editorSource, /\.\.\/\.\.\/services\//);
