@@ -1,14 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   createPlanningScheduleRendererHost,
   normalizePlanningScheduleRenderer,
   PLANNING_SCHEDULE_RENDERERS,
   resolvePlanningScheduleRenderer
 } from '../shared/planning-schedule-view/planningScheduleRenderer.js';
-import {
-  createProductionCalendarV2Renderer
-} from '../shared/planning-schedule-view/productionCalendarV2.renderer.js';
 
 assert.equal(normalizePlanningScheduleRenderer('production-calendar-v2'), 'auto');
 assert.equal(normalizePlanningScheduleRenderer('gantt-aps'), 'gantt-aps');
@@ -202,57 +199,10 @@ function assertThrowsMessage(callback, expectedMessage) {
   assert.deepEqual(events, ['gantt:mount', 'gantt:destroy']);
 }
 
-{
-  const events = [];
-  const classes = new Set();
-  const card = {
-    classList: {
-      add: value => classes.add(value),
-      remove: value => classes.delete(value)
-    },
-    closest: () => null,
-    scrollIntoView: () => events.push('card:scroll'),
-    focus: () => events.push('card:focus')
-  };
-  const root = {
-    dataset: { zoom: '1' },
-    querySelector: selector => {
-      events.push(`query:${selector}`);
-      return selector.includes('allocation-1') ? card : null;
-    },
-    querySelectorAll: () => [],
-    remove: () => events.push('root:remove'),
-    __productionCalendarDestroy: () => events.push('root:destroy')
-  };
-  const renderer = createProductionCalendarV2Renderer({
-    renderSnapshot: (_container, snapshot) => {
-      events.push(`render:${snapshot.allocations[0].allocationId}`);
-      return root;
-    }
-  });
-  renderer.mount({}, {
-    calendar: { days: [] },
-    resources: [],
-    tasks: [{
-      id: 'allocation-1',
-      resourceId: 'machine-1',
-      start: { date: '2026-07-24', time: '07:00' },
-      end: { date: '2026-07-24', time: '08:00' }
-    }],
-    projections: {},
-    permissions: {},
-    metadata: {}
-  });
-  assert.equal(renderer.focusAllocation('allocation-1'), true);
-  assert.ok(classes.has('is-flow-focused'));
-  renderer.destroy();
-  assert.ok(events.indexOf('root:destroy') < events.indexOf('root:remove'));
-}
-
 const pageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
 const analysisSource = readFileSync(new URL('../pages/AnalysisPage.js', import.meta.url), 'utf8');
 const calendarTimelineSource = readFileSync(new URL('../shared/CalendarTimeline.js', import.meta.url), 'utf8');
-const productionCalendarV2RendererSource = readFileSync(new URL('../shared/planning-schedule-view/productionCalendarV2.renderer.js', import.meta.url), 'utf8');
+const productionCalendarV2RendererUrl = new URL('../shared/planning-schedule-view/productionCalendarV2.renderer.js', import.meta.url);
 assert.match(pageSource, /function focusFlowNodeInSchedule\(flowNode\)/);
 assert.match(pageSource, /focusPlanningFlowAllocation\(\{[\s\S]*rendererHost:\s*planningScheduleRendererHost/);
 assert.doesNotMatch(pageSource, /production-calendar-card\[data-allocation-id/, 'foco externo nao deve conhecer DOM do renderer');
@@ -270,11 +220,12 @@ assert.match(
 assert.match(pageSource, /renderer:\s*'gantt-aps'/);
 const indexSource = readFileSync(new URL('../shared/planning-schedule-view/index.js', import.meta.url), 'utf8');
 assert.doesNotMatch(indexSource, /createProductionCalendarV2Renderer/);
+assert.doesNotMatch(indexSource, /productionCalendarV2\.renderer/);
 assert.match(indexSource, /createGanttApsRenderer/);
 assert.match(analysisSource, /import\s*\{\s*CalendarTimeline,\s*productionCalendarColor\s*\}\s*from\s*['"]\.\.\/shared\/CalendarTimeline\.js['"]/);
 assert.match(analysisSource, /CalendarTimeline\(detail\.days\s*\|\|\s*\[\],\s*detail\.operations\s*\|\|\s*\[\],\s*summary\)/);
 assert.match(analysisSource, /CalendarTimeline\(days,\s*currentEvents\.map\(commercialTimelineOperation\),\s*\{/);
 assert.match(calendarTimelineSource, /export function CalendarTimeline\(days\s*=\s*\[\],\s*operations\s*=\s*\[\],\s*config\s*=\s*\{\}\)/);
-assert.match(productionCalendarV2RendererSource, /export function createProductionCalendarV2Renderer/);
+assert.equal(existsSync(productionCalendarV2RendererUrl), false, 'renderer V2 fisico deve ter sido removido');
 
 console.log('planningScheduleRenderer.test.js ok');

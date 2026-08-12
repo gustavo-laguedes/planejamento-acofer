@@ -4,9 +4,6 @@ import {
   buildPlanningScheduleViewModel,
   PLANNING_SCHEDULE_VIEW_CONTRACT_VERSION
 } from '../shared/planning-schedule-view/planningScheduleViewModel.js';
-import {
-  planningScheduleViewToProductionCalendarSnapshot
-} from '../shared/planning-schedule-view/productionCalendarV2.renderer.js';
 
 const baseAllocation = {
   allocationId: 'allocation-1',
@@ -78,17 +75,6 @@ assert.ok(Object.isFrozen(model));
 assert.ok(Object.isFrozen(model.tasks[0]));
 assert.throws(() => { model.tasks[0].quantity = 99; }, TypeError);
 
-const v2Snapshot = planningScheduleViewToProductionCalendarSnapshot(model);
-assert.equal(v2Snapshot.allocations[0].allocationId, 'allocation-1');
-assert.equal(v2Snapshot.allocations[0].machineId, 'machine-1');
-assert.equal(v2Snapshot.allocations[0].date, '2026-07-24');
-assert.equal(v2Snapshot.allocations[0].startTime, '07:00');
-assert.equal(v2Snapshot.allocations[0].endDate, '2026-07-25');
-assert.equal(v2Snapshot.allocations[0].endTime, '01:00');
-assert.equal(v2Snapshot.allocations[0].quantity, 12.5);
-assert.equal(v2Snapshot.machines[0].machineId, 'machine-1');
-assert.deepEqual(source, sourceBefore, 'roundtrip visual também não pode mutar a origem');
-
 for (const snapshot of [
   { allocations: [baseAllocation] },
   { allocations: [{ ...baseAllocation, source: 'manual-draft-v2' }] },
@@ -110,11 +96,11 @@ assert.equal(
 );
 
 const moduleSource = [
-  readFileSync(new URL('../shared/planning-schedule-view/planningScheduleViewModel.js', import.meta.url), 'utf8'),
-  readFileSync(new URL('../shared/planning-schedule-view/productionCalendarV2.renderer.js', import.meta.url), 'utf8')
+  readFileSync(new URL('../shared/planning-schedule-view/planningScheduleViewModel.js', import.meta.url), 'utf8')
 ].join('\n');
-assert.doesNotMatch(moduleSource, /\bfetch\s*\(|\bapi\s*\(/, 'contrato/adapter não podem fazer HTTP');
-assert.doesNotMatch(moduleSource, /scheduleOperations|simulateCurrent|buildPlan\s*\(/, 'contrato/adapter não podem chamar scheduler');
+assert.doesNotMatch(moduleSource, /\bfetch\s*\(|\bapi\s*\(/, 'contrato neutro não pode fazer HTTP');
+assert.doesNotMatch(moduleSource, /scheduleOperations|simulateCurrent|buildPlan\s*\(/, 'contrato neutro não pode chamar scheduler');
 assert.doesNotMatch(moduleSource, /onRequestMove|onEditAllocation|onSplitAllocation/, 'read model não transporta callbacks mutáveis');
+assert.doesNotMatch(moduleSource, /planningScheduleViewToProductionCalendarSnapshot/);
 
 console.log('planningScheduleViewModel.test.js ok');

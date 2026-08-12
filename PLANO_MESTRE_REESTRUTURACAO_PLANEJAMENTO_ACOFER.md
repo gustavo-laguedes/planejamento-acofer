@@ -121,7 +121,7 @@ O pacote analisado contém uma árvore de trabalho com muitas alterações modif
 
 ### 3.4 Situação atual do Gantt e do Calendário V2
 
-Foram identificados no código atual:
+No baseline historico de 06/08/2026, foram identificados:
 
 - `USE_PRODUCTION_CALENDAR_V2 = true` em `pages/PlanningPage.js`;
 - renderer host com opções `production-calendar-v2`, `gantt-aps` e `auto`;
@@ -762,7 +762,7 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 
 ### Missão REF-011 — Criar cenários de caracterização do planejamento
 
-**Status:** `[ ] PENDENTE`
+**Status:** `[ ] PARCIAL`
 
 #### Cenários mínimos
 
@@ -1102,16 +1102,16 @@ O V2 fica fisicamente presente, porém desligado, durante o gate de homologaçã
 
 ### Missão REF-040 — Remover renderer e fallback V2
 
-**Status:** `[ ] PENDENTE`
+**Status:** `[ ] PARCIAL`
 
-- [ ] remover `PRODUCTION_CALENDAR_V2` do enum ativo;
-- [ ] remover `createProductionCalendarV2Renderer`;
-- [ ] remover `productionCalendarV2.renderer.js`;
+- [x] remover `PRODUCTION_CALENDAR_V2` do enum ativo;
+- [x] remover `createProductionCalendarV2Renderer`;
+- [x] remover `productionCalendarV2.renderer.js`;
 - [ ] simplificar renderer host para um renderer ou host genérico sem fallback legado;
 - [ ] remover mensagem de rollback V2;
 - [x] remover `USE_PRODUCTION_CALENDAR_V2`;
-- [ ] remover `globalThis.PLANNING_SCHEDULE_RENDERER` se não houver outro uso válido;
-- [ ] atualizar testes de lifecycle.
+- [x] remover `globalThis.PLANNING_SCHEDULE_RENDERER` se não houver outro uso válido;
+- [x] atualizar testes de lifecycle.
 
 ---
 
@@ -2590,6 +2590,29 @@ Homologacao: browser nao executado; esta REF nao conclui REF-013.
 Checkboxes atualizados: item `remover USE_PRODUCTION_CALENDAR_V2` marcado; Fase 4 e Fase 5 continuam abertas por homologacao e remocao fisica V2 pendentes.
 Riscos/pendencias: REF-013 homologacao manual; remocao fisica de renderer/ProductionCalendar/grid/CSS/wrappers/testes V2; consumidores Analise/Comercial bloqueiam remocao global de `CalendarTimeline`; documentacao historica ainda menciona estados antigos.
 Proxima missao sugerida: auditar `ProductionCalendar` fisico e `productionCalendarV2.renderer.js` para separar consumidores reais antes de qualquer remocao definitiva do V2.
+
+---
+
+### 2026-08-12 - REF-047 - Remover productionCalendarV2.renderer.js
+
+Status: CONCLUIDA TECNICAMENTE
+Executor/agent: Codex em missao pequena de remocao fisica do adapter V2; metodologia JARVIS/Toto aplicada pelo coordenador.
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-testing`.
+Branch/commit de referencia: `rebuild-production-calendar` / `8f1a6ad`.
+Baseline: worktree inicial limpo; `node --test tests/*.js` inicial com 98 testes, 98 aprovados e 0 falhas.
+Objetivo: auditar consumidores e remover fisicamente somente `shared/planning-schedule-view/productionCalendarV2.renderer.js`, sem remover componentes internos de `shared/production-calendar/*`.
+Arquivos lidos: `AGENTS.md`, este plano, `docs/refactor/REF-045_REMOVE_V2_RENDERER_SELECTION.md`, `docs/refactor/REF-046_REMOVE_PLANNING_CALENDAR_TIMELINE_FALLBACK.md`, `shared/planning-schedule-view/productionCalendarV2.renderer.js`, `shared/planning-schedule-view/index.js`, `shared/planning-schedule-view/planningScheduleRenderer.js`, `pages/PlanningPage.js`, `shared/production-calendar/index.js`, `tests/planningScheduleRenderer.test.js`, `tests/planningScheduleViewModel.test.js`, `tests/ganttApsRenderer.test.js` e ocorrencias via `rg`.
+Arquivos alterados/removidos: removido `shared/planning-schedule-view/productionCalendarV2.renderer.js`; alterados `tests/planningScheduleRenderer.test.js`, `tests/planningScheduleViewModel.test.js`, `docs/refactor/REF-047_REMOVE_PRODUCTION_CALENDAR_V2_RENDERER.md` e este plano.
+Resumo do diff: removido o adapter/renderer V2 fisico e as caracterizacoes que importavam artificialmente `createProductionCalendarV2Renderer` e `planningScheduleViewToProductionCalendarSnapshot`; testes passaram a proteger ausencia fisica do arquivo, ausencia no barrel/pagina e manutencao do contrato neutro/Gantt.
+Gate registrado: `PlanningPage` monta factory unica Gantt APS; barrel operacional nao exporta V2; host nao seleciona V2; `production-calendar-v2` normaliza para Gantt; nenhum runtime importa `createProductionCalendarV2Renderer`; nenhum runtime usa `planningScheduleViewToProductionCalendarSnapshot`; Gantt mantem move/edit/split.
+Funcoes removidas: `planningScheduleViewToProductionCalendarSnapshot`, `createProductionCalendarV2Renderer`, `cloneValue`, `defaultRenderSnapshot` e `escapeSelectorValue`.
+Componentes preservados: `ProductionCalendar.js`, `ProductionCalendarGrid.js`, cards, drag/state, toolbar, details, CSS, wrappers editor/split, helpers legados e testes fisicos de componentes V2.
+Testes/comandos: `node --check pages/PlanningPage.js`; `node --check shared/planning-schedule-view/planningScheduleRenderer.js`; `node --test tests/planningScheduleRenderer.test.js`; `node --test tests/ganttApsRenderer.test.js`; `node --test tests/productionCalendarEditButton.test.js`; `node --test tests/productionCalendarSplitEditor.test.js`; `node --test tests/planningScheduleViewModel.test.js`; `node --test tests/*.js`; `git diff --check`; buscas finais por `productionCalendarV2.renderer`, `createProductionCalendarV2Renderer`, `planningScheduleViewToProductionCalendarSnapshot`.
+Resultado: testes focados aprovados; suite final `node --test tests/*.js` com 98 testes, 98 aprovados e 0 falhas; `git diff --check` sem erros, apenas avisos conhecidos LF -> CRLF; busca final sem consumidores runtime do renderer removido.
+Homologacao: browser nao executado; esta REF nao conclui REF-013.
+Checkboxes atualizados: REF-040 marcada como parcial, com enum, factory, arquivo fisico, global override e testes de lifecycle concluidos; Fase 5 continua aberta por componentes/CSS/wrappers V2 remanescentes.
+Riscos/pendencias: REF-013 homologacao manual; remocao fisica de `ProductionCalendar`, grid, toolbar, details, drag/state, CSS, wrappers legados e testes exclusivos V2; documentacao historica antiga ainda registra estados anteriores.
+Proxima missao sugerida: auditar `ProductionCalendar.js` e seus consumidores diretos para decidir a proxima remocao fisica segura, preservando CSS/wrappers ate prova propria.
 
 ---
 
