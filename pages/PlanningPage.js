@@ -3184,8 +3184,9 @@ export function PlanningPage() {
 
   function openProductionCalendarAllocationEditor(allocation, { startSplit = false } = {}) {
     const snapshot = currentProductionCalendarSnapshot();
-    const current = (manualScheduleDraft?.allocations || []).find(item => String(item.allocationId) === String(allocation?.allocationId))
-      || (snapshot?.allocations || []).find(item => String(item.allocationId) === String(allocation?.allocationId))
+    const allocationId = allocation?.allocationId ?? allocation?.id;
+    const current = (manualScheduleDraft?.allocations || []).find(item => String(item.allocationId) === String(allocationId))
+      || (snapshot?.allocations || []).find(item => String(item.allocationId) === String(allocationId))
       || allocation;
     const editorAllocation = { ...allocation, ...current };
     const material = resolveProductivityMaterial({ reference: editorAllocation, materials });
@@ -3885,7 +3886,9 @@ export function PlanningPage() {
             renderSnapshot: renderProductionCalendarSnapshot
           }),
           'gantt-aps': () => createGanttApsRenderer({
-            onRequestMove: handleProductionCalendarMoveRequest
+            onRequestMove: handleProductionCalendarMoveRequest,
+            onRequestEdit: allocation => openProductionCalendarAllocationEditor(allocation),
+            onRequestSplit: allocation => openProductionCalendarAllocationEditor(allocation, { startSplit: true })
           })
         },
         onLifecycleError: ({ error, rendererId, phase }) => {

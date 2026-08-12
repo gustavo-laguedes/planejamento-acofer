@@ -402,10 +402,13 @@ const cssSource = readFileSync(
 const pageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
 assert.doesNotMatch(rendererSource, /\bfetch\s*\(|\bapi\s*\(|XMLHttpRequest/);
 assert.doesNotMatch(rendererSource, /onEditAllocation|onSplitAllocation|dragstart/);
-assert.match(rendererSource, /createGanttApsRenderer\(\{\s*onRequestMove\s*\}\s*=\s*\{\}\)/);
+assert.match(rendererSource, /createGanttApsRenderer\(\{\s*onRequestMove,\s*onRequestEdit,\s*onRequestSplit\s*\}\s*=\s*\{\}\)/);
 assert.match(rendererSource, /source:\s*'gantt-drag'/);
 assert.match(rendererSource, /type:\s*'MOVE_ALLOCATION'/);
 assert.match(rendererSource, /capabilities\?\.manualMove\s*===\s*true/);
+assert.match(rendererSource, /onRequestEdit\(task\)/);
+assert.match(rendererSource, /onRequestSplit\(task\)/);
+assert.doesNotMatch(rendererSource, /runPlanningAllocationEditorController|applyManualScheduleTransaction|simulateCurrent|buildPlan/);
 assert.doesNotMatch(rendererSource, /stackGanttApsTasks/, 'renderer 1:1 não deve empilhar allocations');
 assert.doesNotMatch(geometrySource, /projectGanttApsVisualTasks|visualRowId/);
 assert.doesNotMatch(rendererSource, /Produções associadas|membershipBackground/);
@@ -435,8 +438,8 @@ assert.match(rendererSource, /dataset\.allocationId\s*=\s*String\(task\.id\)/);
 assert.match(indexSource, /createGanttApsRenderer/);
 assert.match(
   pageSource,
-  /'gantt-aps':\s*\(\)\s*=>\s*createGanttApsRenderer\(\{\s*onRequestMove:\s*handleProductionCalendarMoveRequest\s*\}\)/,
-  'PlanningPage deve conectar somente o Gantt APS ao callback de movimento'
+  /'gantt-aps':\s*\(\)\s*=>\s*createGanttApsRenderer\(\{\s*onRequestMove:\s*handleProductionCalendarMoveRequest,\s*onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\),\s*onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\)/,
+  'PlanningPage deve conectar o Gantt APS aos callbacks neutros de movimento, edicao e split'
 );
 assert.doesNotMatch(
   pageSource,
@@ -1021,6 +1024,8 @@ try {
 
   {
     const moveRequests = [];
+    const editRequests = [];
+    const splitRequests = [];
     const dragModel = {
       contractVersion: 'planning-schedule-view/v1',
       capabilities: { inspect: true, mutate: false, manualMove: true },
@@ -1053,12 +1058,37 @@ try {
     };
     const dragContainer = new FakeElement('div');
     const dragRenderer = createGanttApsRenderer({
-      onRequestMove: intent => moveRequests.push(intent)
+      onRequestMove: intent => moveRequests.push(intent),
+      onRequestEdit: allocation => editRequests.push(allocation),
+      onRequestSplit: allocation => splitRequests.push(allocation)
     });
     dragRenderer.mount(dragContainer, dragModel);
     const dragRoot = dragRenderer.getRootElement();
     assert.equal(dragRoot.dataset.manualMove, 'true');
+    assert.equal(dragRoot.dataset.manualEdit, 'true');
+    assert.equal(dragRoot.dataset.manualSplit, 'true');
     const dragBar = dragRoot.querySelector('.gantt-aps__bar');
+    dragBar.click();
+    const editAction = dragRoot.querySelector('[data-action="edit-allocation"]');
+    const splitAction = dragRoot.querySelector('[data-action="split-allocation"]');
+    assert.ok(editAction, 'Gantt editavel deve expor acao explicita de edicao');
+    assert.ok(splitAction, 'Gantt editavel deve expor acao explicita de split');
+    editAction.dispatchEvent({
+      type: 'pointerdown',
+      button: 0,
+      pointerId: 6,
+      clientX: 10,
+      clientY: 10
+    });
+    assert.equal(dragBar.dataset.dragging, undefined, 'acao de edicao nao pode iniciar drag');
+    assert.equal(dragBar.capturedPointerId, undefined, 'acao de edicao nao pode capturar ponteiro da barra');
+    editAction.click();
+    splitAction.click();
+    assert.equal(editRequests.length, 1, 'acao editar deve chamar callback uma unica vez');
+    assert.equal(splitRequests.length, 1, 'acao split deve chamar callback uma unica vez');
+    assert.equal(editRequests[0].id, 'allocation:drag:1');
+    assert.equal(splitRequests[0].id, 'allocation:drag:1');
+    assert.equal(moveRequests.length, 0, 'acoes de editar/split nao podem emitir movimento');
     const dragRow = dragRoot.querySelector('.gantt-aps__row--allocation');
     const dragLane = dragRow.querySelector('.gantt-aps__lane');
     dragLane.rect = { left: 0, top: 0, width: 576, height: 40 };
@@ -1125,6 +1155,11 @@ try {
     });
     const readonlyRoot = readonlyRenderer.getRootElement();
     assert.equal(readonlyRoot.dataset.manualMove, 'false');
+    assert.equal(readonlyRoot.dataset.manualEdit, 'false');
+    assert.equal(readonlyRoot.dataset.manualSplit, 'false');
+    readonlyRoot.querySelector('.gantt-aps__bar').click();
+    assert.equal(readonlyRoot.querySelector('[data-action="edit-allocation"]'), null);
+    assert.equal(readonlyRoot.querySelector('[data-action="split-allocation"]'), null);
     readonlyRoot.querySelector('.gantt-aps__bar').dispatchEvent({
       type: 'pointerdown',
       button: 0,

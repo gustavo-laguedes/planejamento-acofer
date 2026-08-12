@@ -163,6 +163,9 @@ assert.match(dragSource, /\.production-calendar-card-selector, button, input, se
 assert.match(dragSource, /if \(isInteractivePointerTarget\(event\.target, card\)\) return false/);
 assert.match(editorSource, /\[data-editor-cancel\][\s\S]*addEventListener\('click', close\)/);
 assert.match(pageSource, /onEditAllocation:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\)/);
+assert.match(pageSource, /onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\)/);
+assert.match(pageSource, /onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\)/);
+assert.match(pageSource, /const\s+allocationId\s*=\s*allocation\?\.allocationId\s*\?\?\s*allocation\?\.id/);
 assert.match(pageSource, /PlanningAllocationEditor\(\{[\s\S]*onSave:\s*payload\s*=>\s*handleProductionCalendarAllocationSave\(\{\s*\.\.\.payload,\s*productivityRows\s*\}\)/);
 assert.match(pageSource, /getDistributionPreview:\s*\(previewAllocation,\s*percents,\s*options\)\s*=>\s*buildManualScheduleAllocationParts\(previewAllocation,\s*percents,\s*options\)/);
 assert.match(legacyEditorSource, /PlanningAllocationEditor/);

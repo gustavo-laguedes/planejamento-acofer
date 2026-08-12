@@ -258,7 +258,7 @@ assert.match(pageSource, /'production-calendar-v2':\s*\(\)\s*=>\s*createProducti
 assert.doesNotMatch(pageSource, /rollback para o Calendário V2/);
 assert.match(
   pageSource,
-  /'gantt-aps':\s*\(\)\s*=>\s*createGanttApsRenderer\(\{\s*onRequestMove:\s*handleProductionCalendarMoveRequest\s*\}\)/
+  /'gantt-aps':\s*\(\)\s*=>\s*createGanttApsRenderer\(\{\s*onRequestMove:\s*handleProductionCalendarMoveRequest,\s*onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\),\s*onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\)/
 );
 
 console.log('planningScheduleRenderer.test.js ok');

@@ -2542,3 +2542,26 @@ Resultado: testes focados aprovados; suite final 98 testes, 98 aprovados e 0 fal
 Homologacao: browser nao executado; registrada apenas homologacao estrutural/read-only. Esta REF nao conclui REF-013.
 Riscos/pendencias: REF-013 homologacao manual, remocao fisica do renderer/ProductionCalendar/grid V2, CSS V2/compartilhado, flags/config legado, helpers V2 puros, `productiveMinutes`, turnos/capacidade, stock-only, identidade manual restante, autosave/descarte e `generatePlanningCode` permanecem pendentes.
 Proxima missao sugerida: remover a selecao explicita/config legado do V2, mantendo ainda os arquivos fisicos ate a missao de remocao definitiva.
+
+---
+
+### 2026-08-12 - REF-044 - Paridade de edicao e split no Gantt APS
+
+Status: CONCLUIDA
+Executor/agent: Codex em missao pequena de Gantt-only parcial; metodologia JARVIS/Toto aplicada pelo coordenador.
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-production-calendar-ui`, `acofer-testing`
+Branch/commit de referencia: `rebuild-production-calendar` / `3127ed2`
+Baseline: worktree inicial limpo; `node --test tests/*.js` inicial com 98 testes, 98 aprovados e 0 falhas.
+Objetivo: dar ao Gantt APS paridade operacional minima para solicitar edicao e split de allocation pelo editor neutro, sem usar o renderer V2 para abrir o editor.
+Arquivos lidos: `AGENTS.md`, este plano, `docs/refactor/REF-043_GANTT_DISABLE_V2_AUTOMATIC_FALLBACK.md`, `shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js`, `shared/planning-schedule-view/gantt-aps/index.js`, `shared/planning-schedule-view/planningScheduleViewModel.js`, `pages/PlanningPage.js`, `shared/planning-editor/PlanningAllocationEditor.js`, `shared/planning-controller/planningAllocationEditorController.js`, `tests/ganttApsRenderer.test.js`, `tests/productionCalendarEditButton.test.js`, `tests/productionCalendarSplitEditor.test.js`.
+Arquivos alterados: `shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js`, `pages/PlanningPage.js`, `tests/ganttApsRenderer.test.js`, `tests/productionCalendarEditButton.test.js`, `tests/planningScheduleRenderer.test.js`, `docs/refactor/REF-044_GANTT_EDIT_SPLIT_PARITY.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Gate registrado: `planningScheduleTask` preserva `allocationId` como `task.id`; barras/rows usam `data-allocation-id`; `PlanningPage` resolve pelo draft/snapshot e agora aceita `allocation.allocationId ?? allocation.id`; `PlanningAllocationEditor` suporta edit e `startSplit`; save segue por `runPlanningAllocationEditorController`; solver nao foi alterado.
+Resumo do diff: `createGanttApsRenderer` passou a aceitar `onRequestEdit` e `onRequestSplit`; o painel de inspecao da allocation exibe acoes explicitas quando a capability manual permite e a task e persistivel; `PlanningPage` liga edit/split ao editor neutro; testes protegem callbacks, read-only, drag, ausencia de controller/service no renderer e ponte da pagina.
+Contrato final: editar chama `openProductionCalendarAllocationEditor(allocation)`; split chama `openProductionCalendarAllocationEditor(allocation, { startSplit: true })`; renderer visual apenas emite intencao e nao executa transacao.
+Read-only/drag: com `manualMove=false` as acoes nao aparecem; botoes ficam fora da barra e pointerdown neles nao inicia drag nem emite `onRequestMove`.
+Compatibilidade V2: `ProductionCalendar`, renderer V2, grid V2, factory/selecao V2, CSS V2, wrappers legados e testes fisicos V2 permanecem presentes.
+Testes/comandos: `node --check shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js`; `node --check pages/PlanningPage.js`; `node --test tests/ganttApsRenderer.test.js`; `node --test tests/productionCalendarEditButton.test.js`; `node --test tests/productionCalendarSplitEditor.test.js`; `node --test tests/planningAllocationEditorController.test.js`; `node --test tests/planningScheduleRenderer.test.js`; `node --test tests/*.js`; `git diff --check`.
+Resultado: testes focados aprovados; suite final 98 testes, 98 aprovados e 0 falhas; `git diff --check` sem erros, apenas avisos conhecidos LF -> CRLF.
+Homologacao: browser nao executado; esta REF nao conclui REF-013.
+Riscos/pendencias: REF-013 homologacao manual, remocao fisica do renderer/ProductionCalendar/grid V2, CSS V2/compartilhado, flags/config legado, helpers V2 puros, `productiveMinutes`, turnos/capacidade, stock-only, identidade manual restante, autosave/descarte e `generatePlanningCode` permanecem pendentes.
+Proxima missao sugerida: remover a selecao explicita/config legado do V2, mantendo ainda os arquivos fisicos ate a missao de remocao definitiva.

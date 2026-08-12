@@ -483,7 +483,7 @@ function isNonWorkingDay(day) {
   return weekDay === 0 || weekDay === 6;
 }
 
-function buildInspectPanel(task, machineName) {
+function buildInspectPanel(task, machineName, { canEdit = false, canSplit = false } = {}) {
   const panel = element('aside', 'gantt-aps__inspect');
   panel.style.setProperty('--gantt-aps-production-background', ganttApsProductionBackground(task));
   panel.setAttribute('aria-live', 'polite');
@@ -516,6 +516,26 @@ function buildInspectPanel(task, machineName) {
     list.append(element('dt', '', label), element('dd', '', value || '—'));
   });
   panel.append(list);
+  if (canEdit || canSplit) {
+    const actions = element('div', 'gantt-aps__inspect-actions');
+    if (canEdit) {
+      const edit = element('button', 'gantt-aps__inspect-close', 'Editar');
+      edit.type = 'button';
+      edit.dataset.action = 'edit-allocation';
+      edit.dataset.allocationId = String(task.id);
+      edit.setAttribute('aria-label', `Editar alocação ${task.id}`);
+      actions.append(edit);
+    }
+    if (canSplit) {
+      const split = element('button', 'gantt-aps__inspect-close', 'Dividir');
+      split.type = 'button';
+      split.dataset.action = 'split-allocation';
+      split.dataset.allocationId = String(task.id);
+      split.setAttribute('aria-label', `Dividir alocação ${task.id}`);
+      actions.append(split);
+    }
+    panel.append(actions);
+  }
   return panel;
 }
 
@@ -549,7 +569,7 @@ function taskMoveIntent(task, targetDate, resourceId) {
   };
 }
 
-export function createGanttApsRenderer({ onRequestMove } = {}) {
+export function createGanttApsRenderer({ onRequestMove, onRequestEdit, onRequestSplit } = {}) {
   let container = null;
   let root = null;
   let model = null;
@@ -608,6 +628,8 @@ export function createGanttApsRenderer({ onRequestMove } = {}) {
     root.dataset.renderer = 'gantt-aps';
     root.dataset.readonly = 'true';
     root.dataset.manualMove = String(nextModel.capabilities?.manualMove === true && typeof onRequestMove === 'function');
+    root.dataset.manualEdit = String(nextModel.capabilities?.manualMove === true && typeof onRequestEdit === 'function');
+    root.dataset.manualSplit = String(nextModel.capabilities?.manualMove === true && typeof onRequestSplit === 'function');
     root.setAttribute('aria-label', 'Gantt APS');
     root.addEventListener('click', onClick);
     root.addEventListener('pointerdown', onPointerDown);
@@ -1041,7 +1063,13 @@ export function createGanttApsRenderer({ onRequestMove } = {}) {
       bar.dataset.selected = String(bar.dataset.allocationId === String(task.id));
     });
     selectedAllocationId = String(task.id);
-    root.append(buildInspectPanel(task, resource?.name || task.machineName || task.resourceId || '—'));
+    const canEdit = model?.capabilities?.manualMove === true
+      && task.persistable !== false
+      && typeof onRequestEdit === 'function';
+    const canSplit = model?.capabilities?.manualMove === true
+      && task.persistable !== false
+      && typeof onRequestSplit === 'function';
+    root.append(buildInspectPanel(task, resource?.name || task.machineName || task.resourceId || '—', { canEdit, canSplit }));
     return true;
   };
 
@@ -1050,6 +1078,21 @@ export function createGanttApsRenderer({ onRequestMove } = {}) {
     const action = actionNode?.dataset?.action;
     if (action === 'close-inspect') {
       root?.querySelector?.('.gantt-aps__inspect')?.remove();
+      return;
+    }
+    if (action === 'edit-allocation' || action === 'split-allocation') {
+      const task = getTaskById(model, actionNode?.dataset?.allocationId);
+      if (
+        !task
+        || task.persistable === false
+        || model?.capabilities?.manualMove !== true
+      ) return;
+      if (action === 'edit-allocation' && typeof onRequestEdit === 'function') {
+        onRequestEdit(task);
+      }
+      if (action === 'split-allocation' && typeof onRequestSplit === 'function') {
+        onRequestSplit(task);
+      }
       return;
     }
     if (action === 'zoom-in' || action === 'zoom-out') {
