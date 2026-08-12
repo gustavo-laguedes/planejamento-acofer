@@ -1,6 +1,5 @@
 ﻿import { api } from '../shared/api.js';
 import { getCurrentUser } from '../shared/api.js';
-import { CalendarTimeline } from '../shared/CalendarTimeline.js';
 import {
   ProductionCalendar,
   buildProductionCalendarDayPresentation,
@@ -155,7 +154,6 @@ export {
   buildPlanningStockModalModel,
   getPlanningStockProjectionDay
 } from '../shared/planning-controller/planningStockProjectionController.js';
-const USE_PRODUCTION_CALENDAR_V2 = true;
 const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
 const STOCK_MINIMUM_DAYS_KEY = 'acofer.stock.minimumDays';
 const PCP_IDEAL_DAYS_KEY = 'acofer.analysis.pcpIdealDays';
@@ -3863,17 +3861,6 @@ export function PlanningPage() {
   function renderProductionCalendar(targetElement, result, options = {}) {
     const reopenExclusiveView = Boolean(productionCalendarExclusiveView);
     if (reopenExclusiveView) closeProductionCalendarExclusiveView({ restoreCalendar: false });
-    if (!USE_PRODUCTION_CALENDAR_V2) {
-      planningScheduleRendererHost?.destroy();
-      planningScheduleRendererHost = null;
-      targetElement.innerHTML = '';
-      targetElement.appendChild(CalendarTimeline(result.days, timelineOperations(result), {
-        mode: 'planning',
-        ...(result.summary || {}),
-        stockAlerts: options.stockAlerts || currentPlanningStockAlerts
-      }));
-      return;
-    }
 
     const snapshot = buildProductionCalendarSnapshot(result, options);
     const model = buildPlanningScheduleViewModel(snapshot);

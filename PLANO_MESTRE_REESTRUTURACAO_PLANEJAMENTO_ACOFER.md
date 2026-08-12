@@ -1109,7 +1109,7 @@ O V2 fica fisicamente presente, porém desligado, durante o gate de homologaçã
 - [ ] remover `productionCalendarV2.renderer.js`;
 - [ ] simplificar renderer host para um renderer ou host genérico sem fallback legado;
 - [ ] remover mensagem de rollback V2;
-- [ ] remover `USE_PRODUCTION_CALENDAR_V2`;
+- [x] remover `USE_PRODUCTION_CALENDAR_V2`;
 - [ ] remover `globalThis.PLANNING_SCHEDULE_RENDERER` se não houver outro uso válido;
 - [ ] atualizar testes de lifecycle.
 
@@ -2565,6 +2565,31 @@ Homologacao: browser nao executado; esta REF nao conclui REF-013.
 Checkboxes atualizados: REF-032/Gantt-only marcada como parcial, com montagem explicita Gantt, bloqueio de fallback V2, V2 fisico preservado e regressao completa registrados.
 Riscos/pendencias: REF-013 homologacao manual; remocao fisica do renderer/ProductionCalendar/grid/CSS/wrappers/testes V2; remocao do fallback morto `USE_PRODUCTION_CALENDAR_V2 -> CalendarTimeline` em missao propria; documentacao historica antiga ainda menciona rollback V2.
 Proxima missao sugerida: remover o fallback morto `USE_PRODUCTION_CALENDAR_V2 -> CalendarTimeline` da `PlanningPage`, preservando `CalendarTimeline` para Analise/Comercial.
+
+---
+
+### 2026-08-12 - REF-046 - Remover fallback CalendarTimeline da PlanningPage
+
+Status: CONCLUIDA TECNICAMENTE
+Executor/agent: Codex em missao pequena de Gantt-only; metodologia JARVIS/Toto aplicada pelo coordenador.
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-production-calendar-ui`, `acofer-testing`.
+Branch/commit de referencia: `rebuild-production-calendar` / `7ce0840`.
+Baseline: worktree inicial limpo; `node --test tests/*.js` inicial falhou no sandbox por `spawn EPERM`; repetido fora do sandbox com 98 testes, 98 aprovados e 0 falhas.
+Objetivo: remover somente o ramo morto `USE_PRODUCTION_CALENDAR_V2 -> CalendarTimeline` dentro da `PlanningPage`, sem remover `CalendarTimeline` globalmente.
+Arquivos lidos: `AGENTS.md`, este plano, `docs/refactor/REF-045_REMOVE_V2_RENDERER_SELECTION.md`, `pages/PlanningPage.js`, `shared/CalendarTimeline.js`, `tests/planningScheduleRenderer.test.js`, `tests/ganttApsRenderer.test.js`, `pages/AnalysisPage.js`, `pages/CommercialCalendarPage.js` e ocorrencias via `rg`.
+Arquivos alterados: `pages/PlanningPage.js`, `tests/planningScheduleRenderer.test.js`, `tests/ganttApsRenderer.test.js`, `docs/refactor/REF-046_REMOVE_PLANNING_CALENDAR_TIMELINE_FALLBACK.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: removidos o import de `CalendarTimeline`, a constante `USE_PRODUCTION_CALENDAR_V2` e o branch condicional morto que montava `CalendarTimeline`; o fluxo restante sempre constroi snapshot/view model e monta o host Gantt APS com `renderer: 'gantt-aps'`.
+Gate registrado: `PlanningPage` ja tinha factory unica Gantt; `CalendarTimeline` nao era fallback necessario; Gantt mantem move/edit/split; o ramo `!USE_PRODUCTION_CALENDAR_V2` era inalcancavel; `CalendarTimeline` segue ativo em Analise/Comercial.
+Helpers preservados: `timelineOperations` preservado por uso em `simulatedProductionByDate`; snapshot/adapters, stock helpers, diagnostics, fullscreen, callbacks de editor e `ProductionCalendar` fisico preservados.
+Helpers removidos: nenhum helper alem do branch/import/flag exclusivos do fallback morto.
+Contrato final: `PlanningPage` nao contem `USE_PRODUCTION_CALENDAR_V2`, nao importa/chama `CalendarTimeline`, monta Gantt APS, propaga erro pelo host e nao monta alternativa visual silenciosa.
+Compatibilidade preservada: `shared/CalendarTimeline.js`, consumidores de Analise/Comercial e `productionCalendarV2.renderer.js` permanecem fisicamente presentes.
+Testes/comandos: `node --check pages/PlanningPage.js`; `node --test tests/planningScheduleRenderer.test.js`; `node --test tests/ganttApsRenderer.test.js`; `node --test tests/productionCalendarEditButton.test.js`; `node --test tests/*.js`; `git diff --check`.
+Resultado: testes focados aprovados; suite final 98 testes, 98 aprovados e 0 falhas; `git diff --check` sem erros, apenas avisos conhecidos LF -> CRLF.
+Homologacao: browser nao executado; esta REF nao conclui REF-013.
+Checkboxes atualizados: item `remover USE_PRODUCTION_CALENDAR_V2` marcado; Fase 4 e Fase 5 continuam abertas por homologacao e remocao fisica V2 pendentes.
+Riscos/pendencias: REF-013 homologacao manual; remocao fisica de renderer/ProductionCalendar/grid/CSS/wrappers/testes V2; consumidores Analise/Comercial bloqueiam remocao global de `CalendarTimeline`; documentacao historica ainda menciona estados antigos.
+Proxima missao sugerida: auditar `ProductionCalendar` fisico e `productionCalendarV2.renderer.js` para separar consumidores reais antes de qualquer remocao definitiva do V2.
 
 ---
 

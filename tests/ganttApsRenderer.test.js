@@ -442,6 +442,8 @@ assert.match(
   'PlanningPage deve conectar o Gantt APS aos callbacks neutros de movimento, edicao e split'
 );
 assert.match(pageSource, /renderer:\s*'gantt-aps'/);
+assert.doesNotMatch(pageSource, /USE_PRODUCTION_CALENDAR_V2/);
+assert.doesNotMatch(pageSource, /CalendarTimeline/);
 assert.doesNotMatch(
   pageSource,
   /const\s+calendar\s*=\s*ProductionCalendar\(\{[\s\S]{0,3000}onRequestMove:\s*handleProductionCalendarMoveRequest/,

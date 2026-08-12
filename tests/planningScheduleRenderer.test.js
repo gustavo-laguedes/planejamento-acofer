@@ -250,10 +250,15 @@ function assertThrowsMessage(callback, expectedMessage) {
 }
 
 const pageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
+const analysisSource = readFileSync(new URL('../pages/AnalysisPage.js', import.meta.url), 'utf8');
+const calendarTimelineSource = readFileSync(new URL('../shared/CalendarTimeline.js', import.meta.url), 'utf8');
+const productionCalendarV2RendererSource = readFileSync(new URL('../shared/planning-schedule-view/productionCalendarV2.renderer.js', import.meta.url), 'utf8');
 assert.match(pageSource, /function focusFlowNodeInSchedule\(flowNode\)/);
 assert.match(pageSource, /focusPlanningFlowAllocation\(\{[\s\S]*rendererHost:\s*planningScheduleRendererHost/);
 assert.doesNotMatch(pageSource, /production-calendar-card\[data-allocation-id/, 'foco externo nao deve conhecer DOM do renderer');
 assert.doesNotMatch(pageSource, /gantt-aps__bar/, 'foco externo nao deve conhecer DOM do Gantt APS');
+assert.doesNotMatch(pageSource, /USE_PRODUCTION_CALENDAR_V2/);
+assert.doesNotMatch(pageSource, /CalendarTimeline/);
 assert.doesNotMatch(pageSource, /globalThis\.PLANNING_SCHEDULE_RENDERER/);
 assert.doesNotMatch(pageSource, /'production-calendar-v2':\s*\(\)\s*=>\s*createProductionCalendarV2Renderer/);
 assert.doesNotMatch(pageSource, /createProductionCalendarV2Renderer/);
@@ -266,5 +271,10 @@ assert.match(pageSource, /renderer:\s*'gantt-aps'/);
 const indexSource = readFileSync(new URL('../shared/planning-schedule-view/index.js', import.meta.url), 'utf8');
 assert.doesNotMatch(indexSource, /createProductionCalendarV2Renderer/);
 assert.match(indexSource, /createGanttApsRenderer/);
+assert.match(analysisSource, /import\s*\{\s*CalendarTimeline,\s*productionCalendarColor\s*\}\s*from\s*['"]\.\.\/shared\/CalendarTimeline\.js['"]/);
+assert.match(analysisSource, /CalendarTimeline\(detail\.days\s*\|\|\s*\[\],\s*detail\.operations\s*\|\|\s*\[\],\s*summary\)/);
+assert.match(analysisSource, /CalendarTimeline\(days,\s*currentEvents\.map\(commercialTimelineOperation\),\s*\{/);
+assert.match(calendarTimelineSource, /export function CalendarTimeline\(days\s*=\s*\[\],\s*operations\s*=\s*\[\],\s*config\s*=\s*\{\}\)/);
+assert.match(productionCalendarV2RendererSource, /export function createProductionCalendarV2Renderer/);
 
 console.log('planningScheduleRenderer.test.js ok');
