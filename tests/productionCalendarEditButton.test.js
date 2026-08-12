@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { ProductionCalendarCard } from '../shared/production-calendar/ProductionCalendarCard.js';
 import { buildManualScheduleAllocationParts } from '../services/manualScheduleDraft.service.js';
+import { ensurePlanningAllocationEditorCss } from '../shared/planning-editor/planningAllocationEditorCss.js';
 import {
   addPlanningAllocationSplitPart,
   equalPlanningAllocationSplitPercents,
@@ -152,6 +153,7 @@ const calendarSource = readFileSync(new URL('../shared/production-calendar/Produ
 const dragSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarDrag.js', import.meta.url), 'utf8');
 const editorSource = readFileSync(new URL('../shared/planning-editor/PlanningAllocationEditor.js', import.meta.url), 'utf8');
 const editorCssLoaderSource = readFileSync(new URL('../shared/planning-editor/planningAllocationEditorCss.js', import.meta.url), 'utf8');
+const planningEditorCss = readFileSync(new URL('../shared/planning-editor/planning-allocation-editor.css', import.meta.url), 'utf8');
 const legacyEditorSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarEditor.js', import.meta.url), 'utf8');
 const editorCss = readFileSync(new URL('../shared/production-calendar/production-calendar.css', import.meta.url), 'utf8');
 const pageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
@@ -173,8 +175,9 @@ assert.match(pageSource, /const\s+allocationId\s*=\s*allocation\?\.allocationId\
 assert.match(pageSource, /PlanningAllocationEditor\(\{[\s\S]*onSave:\s*payload\s*=>\s*handleProductionCalendarAllocationSave\(\{\s*\.\.\.payload,\s*productivityRows\s*\}\)/);
 assert.match(pageSource, /getDistributionPreview:\s*\(previewAllocation,\s*percents,\s*options\)\s*=>\s*buildManualScheduleAllocationParts\(previewAllocation,\s*percents,\s*options\)/);
 assert.match(pageSource, /ensurePlanningAllocationEditorCss\(\)/);
-assert.match(editorCssLoaderSource, /production-calendar\/production-calendar\.css/);
-assert.match(editorCssLoaderSource, /data-production-calendar-css/);
+assert.doesNotMatch(editorCssLoaderSource, /production-calendar\/production-calendar\.css|data-production-calendar-css/);
+assert.match(editorCssLoaderSource, /planning-allocation-editor\.css/);
+assert.match(editorCssLoaderSource, /data-planning-allocation-editor-css/);
 assert.match(legacyEditorSource, /PlanningAllocationEditor/);
 assert.match(legacyEditorSource, /buildManualScheduleAllocationParts/);
 assert.doesNotMatch(editorSource, /\.\.\/\.\.\/services\//);
@@ -243,6 +246,54 @@ const mainPreviewSource = editorSource.slice(editorSource.indexOf('const syncMai
 assert.match(mainPreviewSource, /preview\?\.startDate \|\| dateInput\.value/);
 assert.match(mainPreviewSource, /preview\?\.endDate \|\| allocation\?\.endDate \|\| allocation\?\.date/);
 assert.doesNotMatch(mainPreviewSource, /preview\?\.startTime|preview\?\.endTime/);
-assert.match(editorCss, /\.production-calendar-editor-form\s*\{[^}]*padding:\s*32px 20px 20px;/s);
+assert.match(planningEditorCss, /\.production-calendar-editor-form\s*\{[^}]*padding:\s*32px 20px 20px;/s);
+assert.ok(editorCss.length > 0, 'production-calendar.css deve permanecer fisicamente presente nesta REF');
+[
+  'production-calendar-editor-backdrop',
+  'production-calendar-editor-modal',
+  'production-calendar-unified-editor-modal',
+  'production-calendar-editor-scroll',
+  'production-calendar-editor-summary',
+  'production-calendar-editor-summary-editable',
+  'production-calendar-editor-lineage',
+  'production-calendar-editor-form',
+  'production-calendar-editor-fields',
+  'production-calendar-editor-preview',
+  'production-calendar-editor-distribution',
+  'production-calendar-editor-distribution-header',
+  'production-calendar-editor-parts',
+  'production-calendar-editor-part',
+  'production-calendar-editor-part-result',
+  'production-calendar-editor-header',
+  'production-calendar-editor-close',
+  'production-calendar-editor-error'
+].forEach(className => {
+  assert.match(planningEditorCss, new RegExp(`\\.${className}\\b`), `${className} deve estar coberta pelo CSS neutro`);
+});
+assert.match(planningEditorCss, /@media \(max-width: 520px\)/);
+assert.match(planningEditorCss, /@media \(max-width: 900px\)/);
+
+{
+  const previousDocumentForCss = globalThis.document;
+  const links = [];
+  globalThis.document = {
+    createElement: tagName => ({ tagName: String(tagName).toUpperCase(), dataset: {}, rel: '', href: '' }),
+    head: { appendChild: link => { links.push(link); } },
+    querySelector: selector => selector === 'link[data-planning-allocation-editor-css="true"]'
+      ? links.find(link => link.dataset.planningAllocationEditorCss === 'true') || null
+      : null
+  };
+  try {
+    ensurePlanningAllocationEditorCss();
+    ensurePlanningAllocationEditorCss();
+    assert.equal(links.length, 1, 'loader neutro deve permanecer idempotente');
+    assert.equal(links[0].rel, 'stylesheet');
+    assert.match(links[0].href, /planning-allocation-editor\.css$/);
+    assert.doesNotMatch(links[0].href, /production-calendar\.css/);
+    assert.equal(links[0].dataset.planningAllocationEditorCss, 'true');
+  } finally {
+    globalThis.document = previousDocumentForCss;
+  }
+}
 
 console.log('productionCalendarEditButton.test.js: ok');

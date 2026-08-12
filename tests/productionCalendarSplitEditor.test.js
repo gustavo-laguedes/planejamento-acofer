@@ -84,11 +84,28 @@ assert.equal(resolvePlanningAllocationSplitPreview(splitPreview, allocation, '30
 assert.equal(resolvePlanningAllocationSplitPreview(splitPreview, allocation, 'texto').valid, false);
 
 const splitEditorSource = readFileSync(new URL('../shared/planning-editor/PlanningAllocationSplitEditor.js', import.meta.url), 'utf8');
+const editorCssLoaderSource = readFileSync(new URL('../shared/planning-editor/planningAllocationEditorCss.js', import.meta.url), 'utf8');
+const planningEditorCss = readFileSync(new URL('../shared/planning-editor/planning-allocation-editor.css', import.meta.url), 'utf8');
 const legacySplitEditorSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarSplitEditor.js', import.meta.url), 'utf8');
 assert.doesNotMatch(splitEditorSource, /\.\.\/\.\.\/services\//);
 assert.doesNotMatch(splitEditorSource, /\.\.\/production-calendar|productionCalendar\.utils/);
+assert.doesNotMatch(editorCssLoaderSource, /production-calendar\/production-calendar\.css|data-production-calendar-css/);
+assert.match(editorCssLoaderSource, /planning-allocation-editor\.css/);
 assert.match(legacySplitEditorSource, /PlanningAllocationSplitEditor/);
 assert.match(legacySplitEditorSource, /buildManualScheduleAllocationSplit/);
+[
+  'production-calendar-editor-backdrop',
+  'production-calendar-editor-modal',
+  'production-calendar-editor-header',
+  'production-calendar-editor-close',
+  'production-calendar-editor-form',
+  'production-calendar-editor-preview',
+  'production-calendar-editor-error'
+].forEach(className => {
+  assert.match(planningEditorCss, new RegExp(`\\.${className}\\b`), `${className} deve estar coberta pelo CSS neutro`);
+});
+assert.match(splitEditorSource, /production-calendar-split-editor-modal/);
+assert.match(splitEditorSource, /production-calendar-split-preview/);
 
 const previousDocument = globalThis.document;
 const body = new FakeElement('body');

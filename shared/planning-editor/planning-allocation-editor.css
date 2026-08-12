@@ -1,0 +1,284 @@
+.production-calendar-editor-backdrop {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.58);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 10050;
+}
+
+.production-calendar-editor-modal {
+  background: #ffffff;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  width: min(440px, 100%);
+}
+
+.production-calendar-unified-editor-modal {
+  overflow: hidden;
+  width: min(1040px, 100%);
+}
+
+.production-calendar-editor-scroll {
+  max-height: calc(100vh - 118px);
+  overflow-y: auto;
+}
+
+.production-calendar-editor-summary {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  padding: 16px 20px 0;
+}
+
+.production-calendar-editor-summary > div {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+}
+
+.production-calendar-editor-summary > label {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+}
+
+.production-calendar-editor-summary span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.production-calendar-editor-summary strong {
+  color: #1e293b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.production-calendar-editor-summary-editable > div {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.production-calendar-editor-summary-editable input {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #172033;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  min-height: 28px;
+  min-width: 0;
+  padding: 4px 6px;
+  width: 100%;
+}
+
+.production-calendar-editor-summary-editable b {
+  color: #334155;
+  font-size: 12px;
+}
+
+.production-calendar-editor-lineage {
+  border-top: 1px solid #e2e8f0;
+  margin-top: 16px;
+}
+
+.production-calendar-editor-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+}
+
+.production-calendar-editor-form h3,
+.production-calendar-editor-distribution-header h3,
+.production-calendar-editor-distribution-header p {
+  margin: 0;
+}
+
+.production-calendar-editor-distribution {
+  border-top: 1px solid #e2e8f0;
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+}
+
+.production-calendar-editor-distribution[hidden] {
+  display: none;
+}
+
+.production-calendar-editor-distribution-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.production-calendar-editor-distribution-header > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.production-calendar-editor-parts {
+  display: grid;
+  gap: 10px;
+}
+
+.production-calendar-editor-part {
+  align-items: end;
+  background: #f8fafc;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: 74px 120px minmax(150px, 1fr) 92px 142px 105px minmax(170px, 1fr) auto;
+  padding: 12px;
+}
+
+.production-calendar-editor-part-result {
+  align-self: center;
+  color: #334155;
+  display: grid;
+  font-size: 11px;
+  gap: 3px;
+}
+
+.production-calendar-editor-header {
+  align-items: flex-start;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: space-between;
+  padding: 18px 20px;
+}
+
+.production-calendar-editor-header h2,
+.production-calendar-editor-header p {
+  margin: 0;
+}
+
+.production-calendar-editor-header h2 {
+  color: #172033;
+  font-size: 18px;
+}
+
+.production-calendar-editor-header p {
+  color: #64748b;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.production-calendar-editor-close {
+  background: transparent;
+  border: 0;
+  color: #475569;
+  cursor: pointer;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.production-calendar-editor-form {
+  display: grid;
+  gap: 16px;
+  padding: 32px 20px 20px;
+}
+
+.production-calendar-editor-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.production-calendar-editor-form label > span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.production-calendar-editor-form select,
+.production-calendar-editor-form input {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+  min-height: 40px;
+  padding: 7px 10px;
+  width: 100%;
+}
+
+.production-calendar-editor-preview {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+}
+
+.production-calendar-editor-preview div {
+  align-items: baseline;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.production-calendar-editor-preview span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.production-calendar-editor-preview strong {
+  color: #1e293b;
+  font-size: 12px;
+  text-align: right;
+}
+
+.production-calendar-editor-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #b91c1c;
+  font-size: 12px;
+  margin: 0;
+  padding: 9px 10px;
+}
+
+.production-calendar-editor-form footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+@media (max-width: 520px) {
+  .production-calendar-editor-backdrop {
+    padding: 12px;
+  }
+
+  .production-calendar-editor-form footer {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+}
+
+@media (max-width: 900px) {
+  .production-calendar-editor-fields,
+  .production-calendar-editor-part {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .production-calendar-editor-distribution-header {
+    display: grid;
+  }
+}
