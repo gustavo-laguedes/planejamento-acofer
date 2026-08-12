@@ -1119,6 +1119,8 @@ O V2 fica fisicamente presente, porém desligado, durante o gate de homologaçã
 
 **Status:** `[ ] PENDENTE`
 
+Auditoria REF-048 concluida em `docs/refactor/REF-048_PRODUCTION_CALENDAR_TREE_AUDIT.md`. A remocao fisica total ainda nao pode ser marcada como concluida: `PlanningPage.js` ainda importa `shared/production-calendar/index.js`, a funcao legada `renderProductionCalendarSnapshot(...)` ainda monta `ProductionCalendar(...)`, e `production-calendar.css` ainda estiliza o editor neutro.
+
 Candidatos a remoção após neutralização:
 
 - [ ] `ProductionCalendar.js`;
@@ -1133,6 +1135,17 @@ Candidatos a remoção após neutralização:
 - [ ] `shared/production-calendar/index.js`.
 
 `ProductionCalendarEditor`, split, cores, adapter e utils só podem ser removidos depois de migrados ou substituídos.
+
+Grupos REF-048:
+
+- Grupo A/removiveis agora: nenhum arquivo, por existir acoplamento de barrel, testes ativos, wrappers ou CSS compartilhado.
+- Grupo B/wrappers legados: `ProductionCalendarEditor.js`, `ProductionCalendarSplitEditor.js`, `productionCalendar.adapter.js`, `productionDisplayColor.js` e aliases legados de `productionCalendar.utils.js`.
+- Grupo C/dependencias compartilhadas: `production-calendar.css` nas classes do editor neutro, `productionCalendar.utils.js` para dia/produtividade/horizonte e `index.js` enquanto carregar CSS por side effect.
+- Grupo D/regra sensivel: helpers de dia/capacidade/produtividade e wrappers que chamam services canonicos de split.
+
+Proximos candidatos, somente em missao propria: desacoplar `PlanningPage.js` do barrel `shared/production-calendar/index.js`; depois remover em lote controlado `ProductionCalendar.js`, `ProductionCalendarGrid.js`, `ProductionCalendarToolbar.js`, `ProductionCalendarCard.js`, `ProductionCalendarDetails.js`, `ProductionCalendarDrag.js`, `ProductionCalendarState.js` e `productionCalendar.validation.js`.
+
+Blockers: CSS do editor neutro ainda usa `production-calendar-editor-*`; helpers `buildProductionCalendarDayPresentation`, `buildProductionCalendarDayProductivity` e `extendProductionCalendarDayRange` ainda sao usados pelo snapshot do Planejamento; testes `productionCalendar*.test.js` ainda caracterizam contratos fisicos V2; REF-013 segue pendente.
 
 ---
 
@@ -2613,6 +2626,28 @@ Homologacao: browser nao executado; esta REF nao conclui REF-013.
 Checkboxes atualizados: REF-040 marcada como parcial, com enum, factory, arquivo fisico, global override e testes de lifecycle concluidos; Fase 5 continua aberta por componentes/CSS/wrappers V2 remanescentes.
 Riscos/pendencias: REF-013 homologacao manual; remocao fisica de `ProductionCalendar`, grid, toolbar, details, drag/state, CSS, wrappers legados e testes exclusivos V2; documentacao historica antiga ainda registra estados anteriores.
 Proxima missao sugerida: auditar `ProductionCalendar.js` e seus consumidores diretos para decidir a proxima remocao fisica segura, preservando CSS/wrappers ate prova propria.
+
+---
+
+### 2026-08-12 - REF-048 - Auditar ProductionCalendar.js e a arvore shared/production-calendar
+
+Status: CONCLUIDA TECNICAMENTE SEM REMOCAO FISICA
+Executor/agent: Codex em missao de auditoria/documentacao; metodologia JARVIS/Toto aplicada pelo coordenador.
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-production-calendar-ui`, `acofer-testing`.
+Branch/commit de referencia: `rebuild-production-calendar` / `14838e6`.
+Baseline: worktree inicial limpo; `node --test tests/*.js` inicial com 98 testes, 98 aprovados e 0 falhas.
+Objetivo: mapear todos os arquivos/exportacoes de `shared/production-calendar/*`, consumidores runtime/teste, CSS/DOM acoplado e proximo lote seguro de remocao.
+Arquivos lidos: `AGENTS.md`, este plano, `docs/refactor/REF-042_PLANNING_EDITOR_VISUAL_NEUTRALIZATION.md`, `docs/refactor/REF-044_GANTT_EDIT_SPLIT_PARITY.md`, `docs/refactor/REF-045_REMOVE_V2_RENDERER_SELECTION.md`, `docs/refactor/REF-047_REMOVE_PRODUCTION_CALENDAR_V2_RENDERER.md`, `pages/PlanningPage.js`, `shared/production-calendar/*`, `shared/planning-editor/*`, testes `productionCalendar*.test.js`, `tests/ganttApsRenderer.test.js`, `tests/productionCalendarEditButton.test.js`, `tests/productionCalendarSplitEditor.test.js`, `tests/planningScheduleRenderer.test.js` e buscas globais via `rg`/`Select-String`.
+Arquivos alterados: `docs/refactor/REF-048_PRODUCTION_CALENDAR_TREE_AUDIT.md` e este plano.
+Resumo do diff: criada auditoria com arvore real de 15 arquivos, tabela por arquivo, grafo de dependencias, classificacao A/B/C/D, mapeamento CSS/editor neutro e proximo lote recomendado; Plano Mestre atualizado sem marcar remocao total do V2 como concluida.
+Consumidores runtime encontrados: `PlanningPage.js` ainda importa `shared/production-calendar/index.js`; `renderProductionCalendarSnapshot(...)` ainda monta `ProductionCalendar(...)`, mas o fluxo operacional atual `renderProductionCalendar(...)` monta factory unica `gantt-aps`; editor neutro nao importa JS V2, mas usa CSS `production-calendar-editor-*`.
+Grupos: Grupo A nenhum removivel agora; Grupo B wrappers legados (`ProductionCalendarEditor.js`, `ProductionCalendarSplitEditor.js`, `productionCalendar.adapter.js`, `productionDisplayColor.js`, aliases utils); Grupo C compartilhados (`production-calendar.css`, helpers de dia/produtividade/horizonte, `index.js`); Grupo D regra sensivel (helpers de dia/capacidade/produtividade e wrappers que chamam services canonicos de split).
+Remocao fisica: nenhuma, porque os gates de candidato sem consumidor runtime/teste/CSS compartilhado nao foram satisfeitos.
+Testes/comandos finais: `node --check pages/PlanningPage.js`; `node --test tests/ganttApsRenderer.test.js`; `node --test tests/productionCalendarEditButton.test.js`; `node --test tests/productionCalendarSplitEditor.test.js`; `node --test tests/productionCalendarGrid.test.js`; `node --test tests/productionCalendarDayHeader.test.js`; `node --test tests/planningScheduleRenderer.test.js`; `node --test tests/*.js`; `git diff --check`.
+Resultado: checks focados aprovados; suite final `node --test tests/*.js` com 98 testes, 98 aprovados e 0 falhas; `git diff --check` sem erros, apenas aviso conhecido de futura conversao LF -> CRLF no Plano Mestre.
+Homologacao: browser nao executado; esta REF nao conclui REF-013.
+Blockers: REF-013 pendente; `PlanningPage.js` ainda acoplada ao barrel V2; CSS do editor neutro ainda depende de `production-calendar.css`; testes V2 ainda caracterizam componentes fisicos.
+Proxima missao sugerida: desacoplar `PlanningPage.js` do barrel `shared/production-calendar/index.js` e remover a funcao legada `renderProductionCalendarSnapshot(...)` se a busca continuar confirmando ausencia de chamada operacional.
 
 ---
 
