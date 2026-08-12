@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   buildGanttApsWindow,
+  civilDateFromDayNumber,
   civilDayNumber,
   GANTT_APS_MAX_VISIBLE_DAYS,
   orderGanttApsTasks,
@@ -378,6 +379,20 @@ const longWindow = buildGanttApsWindow({
 });
 assert.equal(longWindow.days.length, GANTT_APS_MAX_VISIBLE_DAYS);
 assert.equal(longWindow.truncated, true);
+assert.ok(
+  GANTT_APS_MAX_VISIBLE_DAYS >= 34,
+  'limite visual deve comportar horizonte inicial curto mais expansao de +30 dias'
+);
+const expandedThirtyDaysWindow = buildGanttApsWindow({
+  calendar: {
+    days: Array.from({ length: 34 }, (_item, index) => ({
+      date: civilDateFromDayNumber(civilDayNumber('2026-07-28') + index)
+    }))
+  },
+  tasks: []
+});
+assert.equal(expandedThirtyDaysWindow.days.length, 34);
+assert.equal(expandedThirtyDaysWindow.truncated, false);
 
 const rendererSource = readFileSync(
   new URL('../shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js', import.meta.url),
@@ -402,12 +417,23 @@ const cssSource = readFileSync(
 const pageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
 assert.doesNotMatch(rendererSource, /\bfetch\s*\(|\bapi\s*\(|XMLHttpRequest/);
 assert.doesNotMatch(rendererSource, /onEditAllocation|onSplitAllocation|dragstart/);
-assert.match(rendererSource, /createGanttApsRenderer\(\{\s*onRequestMove,\s*onRequestEdit,\s*onRequestSplit\s*\}\s*=\s*\{\}\)/);
+assert.match(rendererSource, /createGanttApsRenderer\(\{[\s\S]*onRequestMove,[\s\S]*onRequestEdit,[\s\S]*onRequestSplit,[\s\S]*onRequestTransportAllocation,[\s\S]*onRequestOpenDay,[\s\S]*onRequestToggleManualWorkDate,[\s\S]*onRequestEditDailyTeam,[\s\S]*onRequestExpandHorizon,[\s\S]*onRequestDiscardAllChanges,[\s\S]*onRequestOptimizeUtilization,[\s\S]*onRequestUndoManualChange,[\s\S]*onRequestRedoManualChange/);
 assert.match(rendererSource, /source:\s*'gantt-drag'/);
 assert.match(rendererSource, /type:\s*'MOVE_ALLOCATION'/);
 assert.match(rendererSource, /capabilities\?\.manualMove\s*===\s*true/);
 assert.match(rendererSource, /onRequestEdit\(task\)/);
 assert.match(rendererSource, /onRequestSplit\(task\)/);
+assert.match(rendererSource, /onRequestDiscardAllChanges\(\)/);
+assert.match(rendererSource, /onRequestTransportAllocation\(task\)/);
+assert.match(rendererSource, /onRequestOpenDay\(actionNode\?\.dataset\?\.date\)/);
+assert.match(rendererSource, /onRequestToggleManualWorkDate\(\{/);
+assert.match(rendererSource, /onRequestEditDailyTeam\(\{/);
+assert.match(rendererSource, /onRequestExpandHorizon\(\{\s*days:/);
+assert.match(rendererSource, /onRequestOptimizeUtilization\(\)/);
+assert.match(rendererSource, /onRequestUndoManualChange\(\)/);
+assert.match(rendererSource, /onRequestRedoManualChange\(\)/);
+assert.doesNotMatch(rendererSource, /planningHistoryController|manualScheduleHistory\.service|manualScheduleHistory|undoManualScheduleHistory|redoManualScheduleHistory/);
+assert.doesNotMatch(rendererSource, /persistAutomaticBaselineDiscard|automaticSimulationBaseline|manualSchedulePersistence|planning\.routes|\/manual-schedule/);
 assert.doesNotMatch(rendererSource, /runPlanningAllocationEditorController|applyManualScheduleTransaction|simulateCurrent|buildPlan/);
 assert.doesNotMatch(rendererSource, /stackGanttApsTasks/, 'renderer 1:1 não deve empilhar allocations');
 assert.doesNotMatch(geometrySource, /projectGanttApsVisualTasks|visualRowId/);
@@ -438,9 +464,11 @@ assert.match(rendererSource, /dataset\.allocationId\s*=\s*String\(task\.id\)/);
 assert.match(indexSource, /createGanttApsRenderer/);
 assert.match(
   pageSource,
-  /'gantt-aps':\s*\(\)\s*=>\s*createGanttApsRenderer\(\{\s*onRequestMove:\s*handleProductionCalendarMoveRequest,\s*onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\),\s*onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\)/,
-  'PlanningPage deve conectar o Gantt APS aos callbacks neutros de movimento, edicao e split'
+  /'gantt-aps':\s*\(\)\s*=>\s*createGanttApsRenderer\(\{[\s\S]*onRequestMove:\s*handleProductionCalendarMoveRequest,[\s\S]*onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\),[\s\S]*onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\),[\s\S]*onRequestTransportAllocation:\s*allocation\s*=>\s*openProductionCalendarTransportModal\(allocation\),[\s\S]*onRequestOpenDay:\s*date\s*=>\s*openPlanningStockProjectionModal\(date\),[\s\S]*onRequestToggleManualWorkDate:\s*payload\s*=>\s*handleProductionCalendarManualWorkDate\(payload\),[\s\S]*onRequestEditDailyTeam:\s*payload\s*=>\s*handleProductionCalendarDailyTeam\(payload\),[\s\S]*onRequestExpandHorizon:\s*payload\s*=>\s*expandProductionCalendarHorizon\(payload\),[\s\S]*onRequestDiscardAllChanges:\s*\(\)\s*=>\s*discardAllProductionCalendarChanges\(\),[\s\S]*onRequestOptimizeUtilization:\s*\(\)\s*=>\s*handleProductionCalendarUtilizationOptimization\(\)/,
+  'PlanningPage deve conectar o Gantt APS aos callbacks neutros operacionais'
 );
+assert.match(pageSource, /onRequestUndoManualChange:\s*\(\)\s*=>\s*undoLastProductionCalendarChange\(\)/);
+assert.match(pageSource, /onRequestRedoManualChange:\s*\(\)\s*=>\s*redoProductionCalendarChange\(\)/);
 assert.match(pageSource, /renderer:\s*'gantt-aps'/);
 assert.doesNotMatch(pageSource, /USE_PRODUCTION_CALENDAR_V2/);
 assert.doesNotMatch(pageSource, /CalendarTimeline/);
@@ -696,6 +724,24 @@ class FakeElement {
 
   focus() {
     this.focused = true;
+  }
+
+  checkValidity() {
+    if (this.required === true && String(this.value ?? '').trim() === '') return false;
+    if (this.type === 'number') {
+      const raw = String(this.value ?? '').trim();
+      const value = Number(raw);
+      if (raw && !Number.isFinite(value)) return false;
+      if (raw && this.min !== undefined && value < Number(this.min)) return false;
+      if (raw && this.step !== undefined && this.step !== 'any') {
+        const step = Number(this.step);
+        const base = this.min === undefined ? 0 : Number(this.min);
+        if (Number.isFinite(step) && step > 0 && Math.abs((value - base) / step - Math.round((value - base) / step)) > 1e-9) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   dispatchEvent(event) {
@@ -1033,13 +1079,40 @@ try {
     const moveRequests = [];
     const editRequests = [];
     const splitRequests = [];
+    const transportRequests = [];
+    const stockRequests = [];
+    const manualWorkRequests = [];
+    const dailyTeamRequests = [];
+    const horizonRequests = [];
+    const discardRequests = [];
+    const optimizeRequests = [];
+    const undoRequests = [];
+    const redoRequests = [];
     const dragModel = {
       contractVersion: 'planning-schedule-view/v1',
-      capabilities: { inspect: true, mutate: false, manualMove: true },
+      capabilities: { inspect: true, mutate: false, manualMove: true, daySettings: true },
       calendar: {
         days: [
           { date: '2026-07-28', isWorkingDay: true },
-          { date: '2026-07-29', isWorkingDay: true },
+          {
+            date: '2026-07-29',
+            isWorkingDay: false,
+            isManuallyEnabled: false,
+            team: {
+              peakPeople: 3,
+              availablePeople: 5,
+              state: 'attention',
+              shifts: [
+                { shiftId: 'morning', label: 'Turno 1', peakPeople: 2, availablePeople: 5 },
+                { shiftId: 'afternoon', label: 'Turno 2', peakPeople: 1, availablePeople: 4 }
+              ]
+            },
+            productivity: { productivePeople: 2.4, availablePeople: 5, percent: 48 },
+            stockAlert: {
+              count: 2,
+              items: [{ key: 'critical', label: 'Critico', count: 2 }]
+            }
+          },
           { date: '2026-07-30', isWorkingDay: true },
           { date: '2026-07-31', isWorkingDay: true }
         ]
@@ -1061,25 +1134,55 @@ try {
         capacityPercent: 100,
         persistable: true
       }],
-      metadata: { visualState: {} }
+      metadata: { visualState: { hasManualChanges: true, canUndoManualChange: true, canRedoManualChange: true } }
     };
     const dragContainer = new FakeElement('div');
     const dragRenderer = createGanttApsRenderer({
       onRequestMove: intent => moveRequests.push(intent),
       onRequestEdit: allocation => editRequests.push(allocation),
-      onRequestSplit: allocation => splitRequests.push(allocation)
+      onRequestSplit: allocation => splitRequests.push(allocation),
+      onRequestTransportAllocation: allocation => transportRequests.push(allocation),
+      onRequestOpenDay: date => stockRequests.push(date),
+      onRequestToggleManualWorkDate: intent => manualWorkRequests.push(intent),
+      onRequestEditDailyTeam: intent => dailyTeamRequests.push(intent),
+      onRequestExpandHorizon: intent => horizonRequests.push(intent),
+      onRequestDiscardAllChanges: () => discardRequests.push('discard'),
+      onRequestOptimizeUtilization: () => optimizeRequests.push('optimize'),
+      onRequestUndoManualChange: () => undoRequests.push('undo'),
+      onRequestRedoManualChange: () => redoRequests.push('redo')
     });
     dragRenderer.mount(dragContainer, dragModel);
     const dragRoot = dragRenderer.getRootElement();
     assert.equal(dragRoot.dataset.manualMove, 'true');
     assert.equal(dragRoot.dataset.manualEdit, 'true');
     assert.equal(dragRoot.dataset.manualSplit, 'true');
+    assert.equal(dragRoot.dataset.manualTransport, 'true');
+    assert.equal(dragRoot.dataset.daySettings, 'true');
+    assert.equal(dragRoot.dataset.manualDiscard, 'true');
+    assert.equal(dragRoot.dataset.optimizeUtilization, 'true');
+    assert.equal(dragRoot.dataset.manualUndo, 'true');
+    assert.equal(dragRoot.dataset.manualRedo, 'true');
+    const discardAction = dragRoot.querySelector('[data-action="discard-all-changes"]');
+    const optimizeAction = dragRoot.querySelector('[data-action="optimize-utilization"]');
+    const undoAction = dragRoot.querySelector('[data-action="undo-manual-change"]');
+    const redoAction = dragRoot.querySelector('[data-action="redo-manual-change"]');
+    const horizonActions = dragRoot.querySelectorAll('[data-action="expand-horizon"]');
+    assert.ok(discardAction, 'Gantt editavel deve expor acao explicita de descarte global');
+    assert.ok(optimizeAction, 'Gantt editavel deve expor acao explicita de otimizacao de utilizacao');
+    assert.deepEqual(horizonActions.map(action => action.dataset.days), ['7', '15', '30']);
+    assert.ok(undoAction, 'Gantt editavel deve expor acao explicita de undo manual');
+    assert.ok(redoAction, 'Gantt editavel deve expor acao explicita de redo manual');
+    assert.equal(discardAction.disabled, false);
+    assert.equal(undoAction.disabled, false);
+    assert.equal(redoAction.disabled, false);
     const dragBar = dragRoot.querySelector('.gantt-aps__bar');
     dragBar.click();
     const editAction = dragRoot.querySelector('[data-action="edit-allocation"]');
     const splitAction = dragRoot.querySelector('[data-action="split-allocation"]');
+    const transportAction = dragRoot.querySelector('[data-action="transport-allocation"]');
     assert.ok(editAction, 'Gantt editavel deve expor acao explicita de edicao');
     assert.ok(splitAction, 'Gantt editavel deve expor acao explicita de split');
+    assert.ok(transportAction, 'Gantt editavel deve expor acao explicita de transporte');
     editAction.dispatchEvent({
       type: 'pointerdown',
       button: 0,
@@ -1089,13 +1192,114 @@ try {
     });
     assert.equal(dragBar.dataset.dragging, undefined, 'acao de edicao nao pode iniciar drag');
     assert.equal(dragBar.capturedPointerId, undefined, 'acao de edicao nao pode capturar ponteiro da barra');
+    undoAction.dispatchEvent({
+      type: 'pointerdown',
+      button: 0,
+      pointerId: 66,
+      clientX: 10,
+      clientY: 10
+    });
+    redoAction.dispatchEvent({
+      type: 'pointerdown',
+      button: 0,
+      pointerId: 67,
+      clientX: 10,
+      clientY: 10
+    });
+    assert.equal(dragBar.dataset.dragging, undefined, 'acoes undo/redo nao podem iniciar drag');
     editAction.click();
     splitAction.click();
+    transportAction.click();
+    undoAction.click();
+    redoAction.click();
+    discardAction.click();
+    optimizeAction.click();
+    const beforeExpandMoveCount = moveRequests.length;
+    const beforeExpandOptimizeCount = optimizeRequests.length;
+    assert.equal(
+      dragRoot.querySelector('.gantt-aps__day-header[data-date="2026-08-07"]'),
+      null,
+      'dia alem do horizonte inicial nao deve existir antes da expansao'
+    );
+    assert.equal(
+      dragRoot.querySelector('.gantt-aps__drop-cell[data-date="2026-08-07"]'),
+      null,
+      'dia alem do horizonte inicial nao deve ser drop target antes da expansao'
+    );
+    horizonActions[0].click();
     assert.equal(editRequests.length, 1, 'acao editar deve chamar callback uma unica vez');
     assert.equal(splitRequests.length, 1, 'acao split deve chamar callback uma unica vez');
+    assert.equal(transportRequests.length, 1, 'acao transporte deve chamar callback uma unica vez');
+    assert.equal(undoRequests.length, 1, 'acao undo deve chamar callback uma unica vez');
+    assert.equal(redoRequests.length, 1, 'acao redo deve chamar callback uma unica vez');
+    assert.equal(discardRequests.length, 1, 'acao descarte deve chamar callback uma unica vez');
+    assert.equal(optimizeRequests.length, 1, 'acao otimizar deve chamar callback uma unica vez');
+    assert.deepEqual(horizonRequests, [{ days: 7 }]);
+    assert.equal(moveRequests.length, beforeExpandMoveCount, 'expandir horizonte isoladamente nao pode emitir movimento');
+    assert.equal(optimizeRequests.length, beforeExpandOptimizeCount, 'expandir horizonte isoladamente nao pode reotimizar');
     assert.equal(editRequests[0].id, 'allocation:drag:1');
     assert.equal(splitRequests[0].id, 'allocation:drag:1');
-    assert.equal(moveRequests.length, 0, 'acoes de editar/split nao podem emitir movimento');
+    assert.equal(transportRequests[0].id, 'allocation:drag:1');
+    assert.equal(moveRequests.length, 0, 'acoes de editar/split/transporte/undo/redo/descarte/otimizar/horizonte nao podem emitir movimento');
+
+    const dayHeaderAction = dragRoot.querySelector('[data-action="open-day-details"][data-date="2026-07-29"]');
+    assert.ok(dayHeaderAction);
+    assert.equal(dayHeaderAction.textContent.includes('Eq. 3 / 5'), true, 'cabecalho deve apresentar equipe diaria pronta do snapshot');
+    assert.equal(dayHeaderAction.textContent.includes('Prod. 2,4 / 5 (48%)'), true, 'cabecalho deve apresentar produtividade diaria pronta do snapshot');
+    assert.equal(dayHeaderAction.textContent.includes('Est. 2 alerta(s)'), true, 'cabecalho deve apresentar alerta de estoque pronto do snapshot');
+    dayHeaderAction.click();
+    const dayDetails = dragRoot.querySelector('.gantt-aps__day-details[data-date="2026-07-29"]');
+    assert.ok(dayDetails, 'clique no dia deve abrir painel operacional do dia');
+    dayDetails.querySelector('[data-action="open-day-stock"]').click();
+    dayDetails.querySelector('[data-action="toggle-manual-work-date"]').click();
+    const restoreDailyTeamAction = dayDetails.querySelector('[data-action="restore-daily-team"]');
+    const saveDailyTeamAction = dayDetails.querySelector('[data-action="save-daily-team"]');
+    assert.ok(restoreDailyTeamAction, 'Gantt editavel deve expor restauracao de padrao da equipe diaria');
+    assert.ok(saveDailyTeamAction, 'Gantt editavel deve expor salvamento de equipe diaria');
+    assert.equal(dayDetails.querySelector('[data-shift-id="morning"]').required, true);
+    assert.equal(dayDetails.querySelector('[data-shift-id="afternoon"]').required, true);
+    dayDetails.querySelector('[data-shift-id="morning"]').value = '6';
+    dayDetails.querySelector('[data-shift-id="afternoon"]').value = '4';
+    saveDailyTeamAction.click();
+    restoreDailyTeamAction.click();
+    dayDetails.querySelector('[data-shift-id="morning"]').value = '';
+    dayDetails.querySelector('[data-shift-id="afternoon"]').value = '4';
+    saveDailyTeamAction.click();
+    assert.deepEqual(stockRequests, ['2026-07-29']);
+    assert.deepEqual(manualWorkRequests, [{ date: '2026-07-29', enabled: true }]);
+    assert.deepEqual(dailyTeamRequests, [
+      { date: '2026-07-29', overrides: { morning: 6, afternoon: 4 }, invalid: false },
+      {
+        date: '2026-07-29',
+        overrides: { morning: null, afternoon: null },
+        restore: true,
+        invalid: false
+      },
+      { date: '2026-07-29', overrides: null, invalid: true }
+    ]);
+    assert.doesNotMatch(
+      rendererSource,
+      /restore-daily-team[\s\S]*(simulateCurrent|buildPlan\s*\(|applyManualScheduleTransaction)/,
+      'renderer deve apenas emitir intencao de equipe diaria'
+    );
+
+    const readonlyDaySettingsRequests = [];
+    const readonlyDaySettingsContainer = new FakeElement('div');
+    const readonlyDaySettingsRenderer = createGanttApsRenderer({
+      onRequestEditDailyTeam: intent => readonlyDaySettingsRequests.push(intent)
+    });
+    readonlyDaySettingsRenderer.mount(readonlyDaySettingsContainer, {
+      ...dragModel,
+      capabilities: { ...dragModel.capabilities, daySettings: false }
+    });
+    const readonlyDaySettingsRoot = readonlyDaySettingsRenderer.getRootElement();
+    readonlyDaySettingsRoot.querySelector('[data-action="open-day-details"][data-date="2026-07-29"]').click();
+    const readonlyDayDetails = readonlyDaySettingsRoot.querySelector('.gantt-aps__day-details[data-date="2026-07-29"]');
+    assert.ok(readonlyDayDetails, 'painel diario readonly ainda deve abrir para inspecao');
+    assert.equal(readonlyDayDetails.querySelector('[data-action="save-daily-team"]'), null);
+    assert.equal(readonlyDayDetails.querySelector('[data-action="restore-daily-team"]'), null);
+    assert.deepEqual(readonlyDaySettingsRequests, []);
+    readonlyDaySettingsRenderer.destroy();
     const dragRow = dragRoot.querySelector('.gantt-aps__row--allocation');
     const dragLane = dragRow.querySelector('.gantt-aps__lane');
     dragLane.rect = { left: 0, top: 0, width: 576, height: 40 };
@@ -1154,6 +1358,83 @@ try {
     assert.equal(dragBar.dataset.dragging, undefined, 'estado visual de drag deve ser limpo ao soltar');
     assert.equal(targetDropCell.dataset.dragTarget, undefined, 'destaque de destino deve ser limpo ao soltar');
 
+    const expandedDragModel = {
+      ...dragModel,
+      calendar: {
+        days: [
+          ...dragModel.calendar.days,
+          ...Array.from({ length: 7 }, (_item, index) => ({
+            date: civilDateFromDayNumber(civilDayNumber('2026-07-31') + index + 1),
+            isWorkingDay: true
+          }))
+        ]
+      }
+    };
+    dragRenderer.update(expandedDragModel);
+    const expandedDragRoot = dragRenderer.getRootElement();
+    assert.ok(
+      expandedDragRoot.querySelector('.gantt-aps__day-header[data-date="2026-08-07"]'),
+      'dia criado pela expansao do host deve passar a existir no Gantt'
+    );
+    const expandedDropCell = expandedDragRoot.querySelector('.gantt-aps__drop-cell[data-date="2026-08-07"]');
+    assert.ok(expandedDropCell, 'dia criado pela expansao do host deve virar drop target');
+    const expandedDragBar = expandedDragRoot.querySelector('.gantt-aps__bar[data-allocation-id="allocation:drag:1"]');
+    const expandedDragRow = expandedDragRoot.querySelector('.gantt-aps__row--allocation');
+    const expandedDragLane = expandedDragRow.querySelector('.gantt-aps__lane');
+    expandedDragLane.rect = { left: 0, top: 0, width: 1584, height: 40 };
+    fakeDocument.pointedElement = expandedDropCell;
+    expandedDragBar.dispatchEvent({
+      type: 'pointerdown',
+      button: 0,
+      pointerId: 77,
+      clientX: 72,
+      clientY: 10,
+      preventDefault() {
+        this.defaultPrevented = true;
+      }
+    });
+    expandedDragRoot.dispatchEvent({
+      type: 'pointermove',
+      pointerId: 77,
+      clientX: (24 * 6 * 10) + 1,
+      clientY: 10,
+      preventDefault() {
+        this.defaultPrevented = true;
+      }
+    });
+    assert.equal(expandedDropCell.dataset.dragTarget, 'true', 'novo dia estendido deve destacar como destino valido');
+    expandedDragRoot.dispatchEvent({
+      type: 'pointerup',
+      pointerId: 77,
+      clientX: (24 * 6 * 10) + 1,
+      clientY: 10
+    });
+    assert.equal(moveRequests.length, 2);
+    assert.deepEqual(moveRequests[1], {
+      type: 'MOVE_ALLOCATION',
+      allocationId: 'allocation:drag:1',
+      operationId: 'operation-drag-1',
+      calendarParentOperationId: 'calendar-parent-drag-1',
+      parentOperationId: 'parent-drag-1',
+      productionId: 'production-drag-1',
+      productionIndex: 2,
+      from: {
+        date: '2026-07-29',
+        machineId: 'machine-drag'
+      },
+      to: {
+        date: '2026-08-07',
+        machineId: 'machine-drag'
+      },
+      source: 'gantt-drag',
+      destination: {
+        kind: 'empty',
+        occupiedAllocationIds: []
+      }
+    });
+    assert.equal(expandedDropCell.dataset.dragTarget, undefined, 'destaque do novo dia deve ser limpo ao soltar');
+
+    const moveCountBeforeReadonlyDrag = moveRequests.length;
     const readonlyRenderer = createGanttApsRenderer({ onRequestMove: intent => moveRequests.push(intent) });
     const readonlyContainer = new FakeElement('div');
     readonlyRenderer.mount(readonlyContainer, {
@@ -1164,9 +1445,20 @@ try {
     assert.equal(readonlyRoot.dataset.manualMove, 'false');
     assert.equal(readonlyRoot.dataset.manualEdit, 'false');
     assert.equal(readonlyRoot.dataset.manualSplit, 'false');
+    assert.equal(readonlyRoot.dataset.manualTransport, 'false');
+    assert.equal(readonlyRoot.dataset.daySettings, 'false');
+    assert.equal(readonlyRoot.dataset.manualDiscard, 'false');
+    assert.equal(readonlyRoot.dataset.optimizeUtilization, 'false');
+    assert.equal(readonlyRoot.dataset.manualUndo, 'false');
+    assert.equal(readonlyRoot.dataset.manualRedo, 'false');
     readonlyRoot.querySelector('.gantt-aps__bar').click();
     assert.equal(readonlyRoot.querySelector('[data-action="edit-allocation"]'), null);
     assert.equal(readonlyRoot.querySelector('[data-action="split-allocation"]'), null);
+    assert.equal(readonlyRoot.querySelector('[data-action="transport-allocation"]'), null);
+    assert.equal(readonlyRoot.querySelector('[data-action="discard-all-changes"]'), null);
+    assert.equal(readonlyRoot.querySelector('[data-action="optimize-utilization"]'), null);
+    assert.equal(readonlyRoot.querySelector('[data-action="undo-manual-change"]'), null);
+    assert.equal(readonlyRoot.querySelector('[data-action="redo-manual-change"]'), null);
     readonlyRoot.querySelector('.gantt-aps__bar').dispatchEvent({
       type: 'pointerdown',
       button: 0,
@@ -1180,9 +1472,36 @@ try {
       clientX: (24 * 6 * 3) + 1,
       clientY: 10
     });
-    assert.equal(moveRequests.length, 1, 'capability manualMove=false nao pode emitir movimento');
+    assert.equal(moveRequests.length, moveCountBeforeReadonlyDrag, 'capability manualMove=false nao pode emitir movimento');
+
+    const cleanRenderer = createGanttApsRenderer({
+      onRequestDiscardAllChanges: () => discardRequests.push('clean-discard'),
+      onRequestUndoManualChange: () => undoRequests.push('clean-undo'),
+      onRequestRedoManualChange: () => redoRequests.push('clean-redo')
+    });
+    const cleanContainer = new FakeElement('div');
+    cleanRenderer.mount(cleanContainer, {
+      ...dragModel,
+      metadata: { visualState: { hasManualChanges: false, canUndoManualChange: false, canRedoManualChange: false } }
+    });
+    const cleanDiscardAction = cleanRenderer.getRootElement().querySelector('[data-action="discard-all-changes"]');
+    const cleanUndoAction = cleanRenderer.getRootElement().querySelector('[data-action="undo-manual-change"]');
+    const cleanRedoAction = cleanRenderer.getRootElement().querySelector('[data-action="redo-manual-change"]');
+    assert.ok(cleanDiscardAction, 'Gantt editavel deve manter acao visivel quando o usuario pode editar');
+    assert.equal(cleanDiscardAction.disabled, true, 'sem alteracoes manuais a acao deve ficar desabilitada');
+    assert.ok(cleanUndoAction, 'Gantt editavel deve manter undo visivel quando o usuario pode editar');
+    assert.ok(cleanRedoAction, 'Gantt editavel deve manter redo visivel quando o usuario pode editar');
+    assert.equal(cleanUndoAction.disabled, true, 'canUndo=false deve desabilitar undo');
+    assert.equal(cleanRedoAction.disabled, true, 'canRedo=false deve desabilitar redo');
+    cleanUndoAction.click();
+    cleanRedoAction.click();
+    cleanDiscardAction.click();
+    assert.equal(discardRequests.length, 1, 'acao desabilitada nao pode emitir descarte');
+    assert.equal(undoRequests.length, 1, 'acao undo desabilitada nao pode emitir callback');
+    assert.equal(redoRequests.length, 1, 'acao redo desabilitada nao pode emitir callback');
     dragRenderer.destroy();
     readonlyRenderer.destroy();
+    cleanRenderer.destroy();
     fakeDocument.pointedElement = null;
   }
 
@@ -1209,7 +1528,8 @@ try {
     assert.equal(dayHeader.dataset.labelMode, 'full');
     assert.equal(dayHeader.children[0].textContent, '24/07/26');
     assert.equal(dayHeader.children[1].textContent, 'sexta');
-    assert.equal(dayHeader.attributes.get('aria-label'), '24/07/2026 · sexta · Feriado municipal');
+    assert.equal(dayHeader.attributes.get('aria-label').includes('24/07/2026'), true);
+    assert.equal(dayHeader.title.includes('Dia nao util'), true);
     assert.equal(dayHeader.dataset.nonWorking, 'true', 'feriado deve preservar a hachura de dia nao util');
     const totalCells = totalRoot.querySelectorAll('[data-production-total="start"]');
     assert.equal(totalCells.length, 5, 'cada bloco de produção/unidade deve apresentar um único total');
@@ -1312,7 +1632,7 @@ try {
     assert.equal(dayHeader.dataset.labelMode, 'compact');
     assert.equal(dayHeader.children[0].textContent, '24/07/26');
     assert.equal(dayHeader.children[1].textContent, 'sexta');
-    assert.equal(dayHeader.attributes.get('aria-label'), '24/07/2026 · sexta · Feriado municipal');
+    assert.equal(dayHeader.attributes.get('aria-label').includes('24/07/2026'), true);
     assert.equal(dayHeader.dataset.nonWorking, 'true');
     totalRenderer.destroy();
     assert.equal(totalContainer.children.length, 0, 'destroy deve remover o renderer com totais');

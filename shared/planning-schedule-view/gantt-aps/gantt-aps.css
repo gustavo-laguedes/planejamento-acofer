@@ -103,6 +103,24 @@
   padding: 4px 9px;
 }
 
+.gantt-aps__controls .gantt-aps__discard {
+  border-color: #fecaca;
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.gantt-aps__controls .gantt-aps__discard:disabled {
+  color: #94a3b8;
+  cursor: default;
+  opacity: .58;
+}
+
+.gantt-aps__controls .gantt-aps__history-action:disabled {
+  color: #94a3b8;
+  cursor: default;
+  opacity: .58;
+}
+
 .gantt-aps__controls button:focus-visible,
 .gantt-aps__bar:focus-visible,
 .gantt-aps__inspect-close:focus-visible,
@@ -299,6 +317,10 @@
   text-align: center;
 }
 
+.gantt-aps__day-header[role="button"] {
+  cursor: pointer;
+}
+
 .gantt-aps__day-header strong {
   font-size: 11px;
   line-height: 1.15;
@@ -308,6 +330,16 @@
   color: #64748b;
   font-size: 10px;
   line-height: 1.15;
+}
+
+.gantt-aps__day-metrics {
+  display: grid;
+  gap: 1px;
+  margin-top: 2px;
+}
+
+.gantt-aps__day-metrics span {
+  font-size: 8px;
 }
 
 .gantt-aps__day-header strong,
@@ -502,7 +534,8 @@
   display: none;
 }
 
-.gantt-aps__inspect {
+.gantt-aps__inspect,
+.gantt-aps__day-details {
   background: #fff;
   border-left: 1px solid #cbd5e1;
   bottom: 0;
@@ -515,6 +548,22 @@
   top: 55px;
   width: 340px;
   z-index: 9;
+}
+
+.gantt-aps__day-alerts,
+.gantt-aps__day-team-form {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+}
+
+.gantt-aps__day-team-form input {
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  font: inherit;
+  margin-left: 6px;
+  padding: 4px 6px;
+  width: 70px;
 }
 
 .gantt-aps__inspect-header {

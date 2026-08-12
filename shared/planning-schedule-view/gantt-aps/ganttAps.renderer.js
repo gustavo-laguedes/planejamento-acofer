@@ -233,6 +233,41 @@ function formatPeople(value) {
   return formatted === '—' ? formatted : `${formatted} pessoa(s)`;
 }
 
+function dayTeamLabel(day = {}) {
+  const team = day.team || {};
+  if (team.peakPeople === undefined && team.availablePeople === undefined) return 'Equipe: -';
+  return `Equipe: ${formatNumber(team.peakPeople, 0)} / ${formatNumber(team.availablePeople, 0)}`;
+}
+
+function dayProductivityLabel(day = {}) {
+  const productivity = day.productivity || {};
+  if (productivity.percent === undefined && productivity.productivePeople === undefined) return 'Prod.: -';
+  return `Prod.: ${formatNumber(productivity.productivePeople)} / ${formatNumber(productivity.availablePeople)} (${formatPercent(productivity.percent)})`;
+}
+
+function dayStockAlertLabel(day = {}) {
+  const alert = day.stockAlert || {};
+  const count = Number(alert.count);
+  if (!Number.isFinite(count) || count <= 0) return 'Estoque: OK';
+  return `Estoque: ${count} alerta(s)`;
+}
+
+function dayStatusLabel(day = {}) {
+  if (day.isManuallyEnabled === true) return 'Liberado manualmente';
+  if (isNonWorkingDay(day)) return 'Dia nao util';
+  return 'Dia util';
+}
+
+function dayPanelTitle(day = {}) {
+  return [
+    formatDate(day.date),
+    dayStatusLabel(day),
+    dayTeamLabel(day),
+    dayProductivityLabel(day),
+    dayStockAlertLabel(day)
+  ].filter(Boolean).join(' | ');
+}
+
 function pageSlice(items, page, pageSize) {
   const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
   const safePage = Math.max(0, Math.min(Number(page) || 0, pageCount - 1));
@@ -483,7 +518,7 @@ function isNonWorkingDay(day) {
   return weekDay === 0 || weekDay === 6;
 }
 
-function buildInspectPanel(task, machineName, { canEdit = false, canSplit = false } = {}) {
+function buildInspectPanel(task, machineName, { canEdit = false, canSplit = false, canTransport = false } = {}) {
   const panel = element('aside', 'gantt-aps__inspect');
   panel.style.setProperty('--gantt-aps-production-background', ganttApsProductionBackground(task));
   panel.setAttribute('aria-live', 'polite');
@@ -516,7 +551,7 @@ function buildInspectPanel(task, machineName, { canEdit = false, canSplit = fals
     list.append(element('dt', '', label), element('dd', '', value || '—'));
   });
   panel.append(list);
-  if (canEdit || canSplit) {
+  if (canEdit || canSplit || canTransport) {
     const actions = element('div', 'gantt-aps__inspect-actions');
     if (canEdit) {
       const edit = element('button', 'gantt-aps__inspect-close', 'Editar');
@@ -534,7 +569,93 @@ function buildInspectPanel(task, machineName, { canEdit = false, canSplit = fals
       split.setAttribute('aria-label', `Dividir alocação ${task.id}`);
       actions.append(split);
     }
+    if (canTransport) {
+      const transport = element('button', 'gantt-aps__inspect-close', 'Transporte');
+      transport.type = 'button';
+      transport.dataset.action = 'transport-allocation';
+      transport.dataset.allocationId = String(task.id);
+      transport.setAttribute('aria-label', `Configurar transporte da alocacao ${task.id}`);
+      actions.append(transport);
+    }
     panel.append(actions);
+  }
+  return panel;
+}
+
+function buildDayDetailsPanel(day, { canEditDaySettings = false } = {}) {
+  const panel = element('aside', 'gantt-aps__day-details');
+  panel.dataset.date = String(day?.date || '');
+  panel.setAttribute('aria-live', 'polite');
+  const heading = element('h3', '', formatDate(day?.date));
+  const close = element('button', 'gantt-aps__inspect-close', 'x');
+  close.type = 'button';
+  close.dataset.action = 'close-day-details';
+  close.setAttribute('aria-label', 'Fechar detalhe do dia');
+  const header = element('div', 'gantt-aps__inspect-header');
+  header.append(heading, close);
+  panel.append(header);
+
+  const fields = [
+    ['Status', dayStatusLabel(day)],
+    ['Equipe', dayTeamLabel(day).replace(/^Equipe:\s*/, '')],
+    ['Produtividade', dayProductivityLabel(day).replace(/^Prod\.\:\s*/, '')],
+    ['Estoque', dayStockAlertLabel(day).replace(/^Estoque:\s*/, '')]
+  ];
+  const list = element('dl', 'gantt-aps__inspect-fields');
+  fields.forEach(([label, value]) => {
+    list.append(element('dt', '', label), element('dd', '', value || '-'));
+  });
+  panel.append(list);
+
+  if (day?.stockAlert?.count > 0 && Array.isArray(day.stockAlert.items)) {
+    const alerts = element('ul', 'gantt-aps__day-alerts');
+    day.stockAlert.items.forEach(item => {
+      alerts.append(element('li', '', `${item.label || item.key || 'Alerta'}: ${formatNumber(item.count, 0)}`));
+    });
+    panel.append(alerts);
+  }
+
+  const actions = element('div', 'gantt-aps__inspect-actions');
+  const stock = element('button', 'gantt-aps__inspect-close', 'Estoque');
+  stock.type = 'button';
+  stock.dataset.action = 'open-day-stock';
+  stock.dataset.date = String(day?.date || '');
+  actions.append(stock);
+  if (canEditDaySettings && (isNonWorkingDay(day) || day?.isManuallyEnabled === true)) {
+    const toggle = element('button', 'gantt-aps__inspect-close', day?.isManuallyEnabled === true ? 'Voltar ao padrao' : 'Liberar dia');
+    toggle.type = 'button';
+    toggle.dataset.action = 'toggle-manual-work-date';
+    toggle.dataset.date = String(day?.date || '');
+    toggle.dataset.enabled = String(day?.isManuallyEnabled !== true);
+    actions.append(toggle);
+  }
+  panel.append(actions);
+
+  if (canEditDaySettings && Array.isArray(day?.team?.shifts) && day.team.shifts.length) {
+    const form = element('div', 'gantt-aps__day-team-form');
+    day.team.shifts.forEach(shift => {
+      const label = element('label', '', `${shift.label || shift.shiftId || 'Turno'} `);
+      const input = element('input');
+      input.type = 'number';
+      input.min = '0';
+      input.step = '1';
+      input.required = true;
+      input.value = String(Number.isFinite(Number(shift.availablePeople)) ? Number(shift.availablePeople) : 0);
+      input.dataset.shiftId = String(shift.shiftId || '');
+      label.append(input);
+      form.append(label);
+    });
+    const restore = element('button', 'gantt-aps__inspect-close', 'Restaurar padrão');
+    restore.type = 'button';
+    restore.dataset.action = 'restore-daily-team';
+    restore.dataset.date = String(day?.date || '');
+    form.append(restore);
+    const save = element('button', 'gantt-aps__inspect-close', 'Salvar equipe');
+    save.type = 'button';
+    save.dataset.action = 'save-daily-team';
+    save.dataset.date = String(day?.date || '');
+    form.append(save);
+    panel.append(form);
   }
   return panel;
 }
@@ -569,7 +690,20 @@ function taskMoveIntent(task, targetDate, resourceId) {
   };
 }
 
-export function createGanttApsRenderer({ onRequestMove, onRequestEdit, onRequestSplit } = {}) {
+export function createGanttApsRenderer({
+  onRequestMove,
+  onRequestEdit,
+  onRequestSplit,
+  onRequestTransportAllocation,
+  onRequestOpenDay,
+  onRequestToggleManualWorkDate,
+  onRequestEditDailyTeam,
+  onRequestExpandHorizon,
+  onRequestDiscardAllChanges,
+  onRequestOptimizeUtilization,
+  onRequestUndoManualChange,
+  onRequestRedoManualChange
+} = {}) {
   let container = null;
   let root = null;
   let model = null;
@@ -630,6 +764,12 @@ export function createGanttApsRenderer({ onRequestMove, onRequestEdit, onRequest
     root.dataset.manualMove = String(nextModel.capabilities?.manualMove === true && typeof onRequestMove === 'function');
     root.dataset.manualEdit = String(nextModel.capabilities?.manualMove === true && typeof onRequestEdit === 'function');
     root.dataset.manualSplit = String(nextModel.capabilities?.manualMove === true && typeof onRequestSplit === 'function');
+    root.dataset.manualTransport = String(nextModel.capabilities?.manualMove === true && typeof onRequestTransportAllocation === 'function');
+    root.dataset.daySettings = String(nextModel.capabilities?.daySettings === true);
+    root.dataset.manualDiscard = String(nextModel.capabilities?.manualMove === true && typeof onRequestDiscardAllChanges === 'function');
+    root.dataset.optimizeUtilization = String(nextModel.capabilities?.manualMove === true && typeof onRequestOptimizeUtilization === 'function');
+    root.dataset.manualUndo = String(nextModel.capabilities?.manualMove === true && typeof onRequestUndoManualChange === 'function');
+    root.dataset.manualRedo = String(nextModel.capabilities?.manualMove === true && typeof onRequestRedoManualChange === 'function');
     root.setAttribute('aria-label', 'Gantt APS');
     root.addEventListener('click', onClick);
     root.addEventListener('pointerdown', onPointerDown);
@@ -650,6 +790,50 @@ export function createGanttApsRenderer({ onRequestMove, onRequestEdit, onRequest
       element('span', '', 'Somente leitura · agrupado por máquina')
     );
     const controls = element('div', 'gantt-aps__controls');
+    if (nextModel.capabilities?.manualMove === true && typeof onRequestUndoManualChange === 'function') {
+      const undo = element('button', 'gantt-aps__history-action', 'Desfazer');
+      undo.type = 'button';
+      undo.dataset.action = 'undo-manual-change';
+      undo.disabled = nextModel.metadata?.visualState?.canUndoManualChange !== true;
+      undo.setAttribute('aria-label', 'Desfazer ultima alteracao manual');
+      undo.title = 'Desfazer ultima alteracao manual';
+      controls.append(undo);
+    }
+    if (nextModel.capabilities?.manualMove === true && typeof onRequestRedoManualChange === 'function') {
+      const redo = element('button', 'gantt-aps__history-action', 'Refazer');
+      redo.type = 'button';
+      redo.dataset.action = 'redo-manual-change';
+      redo.disabled = nextModel.metadata?.visualState?.canRedoManualChange !== true;
+      redo.setAttribute('aria-label', 'Refazer alteracao manual');
+      redo.title = 'Refazer alteracao manual';
+      controls.append(redo);
+    }
+    if (nextModel.capabilities?.manualMove === true && typeof onRequestDiscardAllChanges === 'function') {
+      const discard = element('button', 'gantt-aps__discard', 'Descartar alterações');
+      discard.type = 'button';
+      discard.dataset.action = 'discard-all-changes';
+      discard.disabled = nextModel.metadata?.visualState?.hasManualChanges !== true;
+      discard.setAttribute('aria-label', 'Descartar todas as alterações manuais');
+      discard.title = 'Remover todas as edições manuais e restaurar a simulação automática';
+      controls.append(discard);
+    }
+    if (nextModel.capabilities?.manualMove === true && typeof onRequestOptimizeUtilization === 'function') {
+      const optimize = element('button', 'gantt-aps__optimize', 'Otimizar');
+      optimize.type = 'button';
+      optimize.dataset.action = 'optimize-utilization';
+      optimize.setAttribute('aria-label', 'Otimizar utilizacao do calendario');
+      optimize.title = 'Reorganizar producoes para maximizar pessoas, produtividade e menor tempo';
+      controls.append(optimize);
+    }
+    [7, 15, 30].forEach(dayCount => {
+      const expand = element('button', 'gantt-aps__horizon-action', `+${dayCount}d`);
+      expand.type = 'button';
+      expand.dataset.action = 'expand-horizon';
+      expand.dataset.days = String(dayCount);
+      expand.setAttribute('aria-label', `Exibir mais ${dayCount} dias`);
+      expand.title = `Exibir mais ${dayCount} dias`;
+      controls.append(expand);
+    });
     const zoomOut = element('button', '', '−');
     zoomOut.type = 'button';
     zoomOut.dataset.action = 'zoom-out';
@@ -670,11 +854,18 @@ export function createGanttApsRenderer({ onRequestMove, onRequestEdit, onRequest
     const metadataErrors = Array.isArray(nextModel.metadata?.errors)
       ? nextModel.metadata.errors
       : [];
-    if (metadataErrors.length) {
+    const metadataWarnings = Array.isArray(nextModel.metadata?.warnings)
+      ? nextModel.metadata.warnings
+      : [];
+    const validationIssues = Array.isArray(nextModel.metadata?.validationIssues)
+      ? nextModel.metadata.validationIssues
+      : [];
+    const diagnosticCount = metadataErrors.length + metadataWarnings.length + validationIssues.length;
+    if (diagnosticCount) {
       const errorSummary = element(
         'div',
         'gantt-aps__error',
-        `${metadataErrors.length} inconsistência(s) recebida(s) no snapshot. Dados válidos continuam visíveis.`
+        `${diagnosticCount} diagnostico(s) recebido(s) no snapshot. Dados validos continuam visiveis.`
       );
       errorSummary.setAttribute('role', 'status');
       root.append(errorSummary);
@@ -777,10 +968,22 @@ export function createGanttApsRenderer({ onRequestMove, onRequestEdit, onRequest
       dayHeader.setAttribute('aria-label', presentation.fullLabel);
       if (isNonWorkingDay(day)) dayHeader.dataset.nonWorking = 'true';
       if (day.isManuallyEnabled === true) dayHeader.dataset.manualWorkDate = 'true';
+      dayHeader.dataset.action = 'open-day-details';
+      dayHeader.tabIndex = 0;
+      dayHeader.setAttribute('role', 'button');
+      dayHeader.title = dayPanelTitle(day);
+      dayHeader.setAttribute('aria-label', dayPanelTitle(day));
       dayHeader.append(
         element('strong', '', presentation.dateLabel),
         element('span', '', presentation.secondaryLabel)
       );
+      const metrics = element('span', 'gantt-aps__day-metrics');
+      metrics.append(
+        element('span', 'gantt-aps__day-team', dayTeamLabel(day).replace(/^Equipe:\s*/, 'Eq. ')),
+        element('span', 'gantt-aps__day-productivity', dayProductivityLabel(day).replace(/^Prod\.\:\s*/, 'Prod. ')),
+        element('span', 'gantt-aps__day-stock', dayStockAlertLabel(day).replace(/^Estoque:\s*/, 'Est. '))
+      );
+      dayHeader.append(metrics);
       timelineHeader.append(dayHeader);
     });
     header.append(tableHeader, timelineHeader);
@@ -1069,7 +1272,20 @@ export function createGanttApsRenderer({ onRequestMove, onRequestEdit, onRequest
     const canSplit = model?.capabilities?.manualMove === true
       && task.persistable !== false
       && typeof onRequestSplit === 'function';
-    root.append(buildInspectPanel(task, resource?.name || task.machineName || task.resourceId || '—', { canEdit, canSplit }));
+    const canTransport = model?.capabilities?.manualMove === true
+      && task.persistable !== false
+      && typeof onRequestTransportAllocation === 'function';
+    root.append(buildInspectPanel(task, resource?.name || task.machineName || task.resourceId || '—', { canEdit, canSplit, canTransport }));
+    return true;
+  };
+
+  const openDayDetails = date => {
+    const day = (model?.calendar?.days || []).find(item => String(item.date) === String(date));
+    if (!day) return false;
+    root?.querySelector?.('.gantt-aps__day-details')?.remove();
+    root?.append(buildDayDetailsPanel(day, {
+      canEditDaySettings: model?.capabilities?.daySettings === true
+    }));
     return true;
   };
 
@@ -1080,7 +1296,78 @@ export function createGanttApsRenderer({ onRequestMove, onRequestEdit, onRequest
       root?.querySelector?.('.gantt-aps__inspect')?.remove();
       return;
     }
-    if (action === 'edit-allocation' || action === 'split-allocation') {
+    if (action === 'close-day-details') {
+      root?.querySelector?.('.gantt-aps__day-details')?.remove();
+      return;
+    }
+    if (action === 'open-day-details') {
+      openDayDetails(actionNode?.dataset?.date);
+      return;
+    }
+    if (action === 'open-day-stock') {
+      if (typeof onRequestOpenDay === 'function') onRequestOpenDay(actionNode?.dataset?.date);
+      return;
+    }
+    if (action === 'toggle-manual-work-date') {
+      if (
+        model?.capabilities?.daySettings !== true
+        || typeof onRequestToggleManualWorkDate !== 'function'
+      ) return;
+      onRequestToggleManualWorkDate({
+        date: actionNode?.dataset?.date,
+        enabled: actionNode?.dataset?.enabled === 'true'
+      });
+      return;
+    }
+    if (action === 'restore-daily-team') {
+      if (
+        model?.capabilities?.daySettings !== true
+        || typeof onRequestEditDailyTeam !== 'function'
+      ) return;
+      const day = (Array.isArray(model?.calendar?.days) ? model.calendar.days : [])
+        .find(item => String(item?.date || '') === String(actionNode?.dataset?.date || ''));
+      if (!Array.isArray(day?.team?.shifts) || !day.team.shifts.length) return;
+      const overrides = {};
+      day.team.shifts.forEach(shift => {
+        overrides[String(shift.shiftId || '')] = null;
+      });
+      onRequestEditDailyTeam({
+        date: actionNode?.dataset?.date,
+        overrides,
+        restore: true,
+        invalid: false
+      });
+      return;
+    }
+    if (action === 'save-daily-team') {
+      if (
+        model?.capabilities?.daySettings !== true
+        || typeof onRequestEditDailyTeam !== 'function'
+      ) return;
+      const panel = actionNode?.closest?.('.gantt-aps__day-details');
+      const overrides = {};
+      let invalid = false;
+      panel?.querySelectorAll?.('input[data-shift-id]').forEach(input => {
+        const raw = String(input.value ?? '').trim();
+        const value = Number(raw);
+        if (
+          !raw
+          || !input.checkValidity?.()
+          || !Number.isInteger(value)
+          || value < 0
+        ) {
+          invalid = true;
+        }
+        overrides[input.dataset.shiftId] = value;
+      });
+      onRequestEditDailyTeam({
+        date: actionNode?.dataset?.date,
+        overrides: invalid ? null : overrides,
+        invalid
+      });
+      return;
+    }
+    if (action === 'edit-allocation' || action === 'split-allocation' || action === 'transport-allocation') {
       const task = getTaskById(model, actionNode?.dataset?.allocationId);
       if (
         !task
@@ -1092,6 +1379,9 @@ export function createGanttApsRenderer({ onRequestMove, onRequestEdit, onRequest
       }
       if (action === 'split-allocation' && typeof onRequestSplit === 'function') {
         onRequestSplit(task);
+      }
+      if (action === 'transport-allocation' && typeof onRequestTransportAllocation === 'function') {
+        onRequestTransportAllocation(task);
       }
       return;
     }
@@ -1126,6 +1416,51 @@ export function createGanttApsRenderer({ onRequestMove, onRequestEdit, onRequest
     if (action === 'fullscreen') {
       if (document.fullscreenElement === root) document.exitFullscreen?.();
       else root?.requestFullscreen?.();
+      return;
+    }
+    if (action === 'expand-horizon') {
+      if (typeof onRequestExpandHorizon === 'function') {
+        onRequestExpandHorizon({ days: Number(actionNode?.dataset?.days) });
+      }
+      return;
+    }
+    if (action === 'optimize-utilization') {
+      if (
+        actionNode?.disabled
+        || model?.capabilities?.manualMove !== true
+        || typeof onRequestOptimizeUtilization !== 'function'
+      ) return;
+      onRequestOptimizeUtilization();
+      return;
+    }
+    if (action === 'discard-all-changes') {
+      if (
+        actionNode?.disabled
+        || model?.capabilities?.manualMove !== true
+        || model?.metadata?.visualState?.hasManualChanges !== true
+        || typeof onRequestDiscardAllChanges !== 'function'
+      ) return;
+      onRequestDiscardAllChanges();
+      return;
+    }
+    if (action === 'undo-manual-change') {
+      if (
+        actionNode?.disabled
+        || model?.capabilities?.manualMove !== true
+        || model?.metadata?.visualState?.canUndoManualChange !== true
+        || typeof onRequestUndoManualChange !== 'function'
+      ) return;
+      onRequestUndoManualChange();
+      return;
+    }
+    if (action === 'redo-manual-change') {
+      if (
+        actionNode?.disabled
+        || model?.capabilities?.manualMove !== true
+        || model?.metadata?.visualState?.canRedoManualChange !== true
+        || typeof onRequestRedoManualChange !== 'function'
+      ) return;
+      onRequestRedoManualChange();
       return;
     }
     const bar = event.target?.closest?.('[data-allocation-id]');

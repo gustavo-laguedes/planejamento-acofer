@@ -44,8 +44,20 @@ const source = {
       quantity: 7
     }
   ],
-  validation: { valid: true, warnings: [] },
-  permissions: { readOnly: true, canEditAllocations: true },
+  validation: {
+    valid: true,
+    warnings: [],
+    presentation: {
+      issues: [{
+        code: 'TEAM_DAILY_CAPACITY',
+        severity: 'warning',
+        message: 'Equipe diaria abaixo do pico',
+        date: '2026-07-24',
+        resourceId: 'machine-1'
+      }]
+    }
+  },
+  permissions: { readOnly: true, canEditAllocations: true, canEditDaySettings: true },
   visualState: { zoom: 1.25, selectedAllocationId: 'allocation-1' },
   errors: []
 };
@@ -54,7 +66,7 @@ const sourceBefore = structuredClone(source);
 const model = buildPlanningScheduleViewModel(source);
 assert.deepEqual(source, sourceBefore, 'derivação não pode mutar o snapshot aceito');
 assert.equal(model.contractVersion, PLANNING_SCHEDULE_VIEW_CONTRACT_VERSION);
-assert.deepEqual(model.capabilities, { inspect: true, mutate: false, manualMove: true });
+assert.deepEqual(model.capabilities, { inspect: true, mutate: false, manualMove: true, daySettings: true });
 assert.equal(model.tasks[0].id, String(baseAllocation.allocationId));
 assert.equal(model.tasks[0].persistable, true);
 assert.equal(model.tasks[1].persistable, false, 'ID readonly de adapter nunca pode ser persistível');
@@ -68,12 +80,24 @@ assert.equal(model.tasks[1].startCapacityPercent, 82.5);
 assert.equal(model.tasks[1].endCapacityPercent, 165);
 assert.equal(model.tasks[1].capacityOverrunPercent, 65);
 assert.equal(model.metadata.warnings[0].code, 'GANTT_INTRADAY_CAPACITY_OVERFLOW');
+assert.deepEqual(model.metadata.validationIssues, [{
+  code: 'TEAM_DAILY_CAPACITY',
+  severity: 'warning',
+  message: 'Equipe diaria abaixo do pico',
+  date: '2026-07-24',
+  resourceId: 'machine-1'
+}]);
+assert.notEqual(model.metadata.validationIssues, source.validation.presentation.issues);
+assert.notEqual(model.metadata.validationIssues[0], source.validation.presentation.issues[0]);
 assert.equal(model.tasks[0].presentation.productionColor, '#123456');
 assert.deepEqual(model.tasks[0].presentation.productionMemberships, baseAllocation.productionMemberships);
 assert.deepEqual(model.tasks[0].productionMemberships, baseAllocation.productionMemberships);
 assert.ok(Object.isFrozen(model));
 assert.ok(Object.isFrozen(model.tasks[0]));
+assert.ok(Object.isFrozen(model.metadata.validationIssues));
+assert.ok(Object.isFrozen(model.metadata.validationIssues[0]));
 assert.throws(() => { model.tasks[0].quantity = 99; }, TypeError);
+assert.throws(() => { model.metadata.validationIssues[0].message = 'mutado'; }, TypeError);
 
 for (const snapshot of [
   { allocations: [baseAllocation] },

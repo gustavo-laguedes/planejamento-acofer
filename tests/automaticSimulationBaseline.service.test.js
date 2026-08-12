@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   createAutomaticSimulationBaseline,
   hasManualChangesAgainstAutomaticBaseline,
@@ -103,8 +103,6 @@ assert.ok(storedSnapshot.calendarOperations.length, 'plano salvo deve derivar ca
 
 const planningSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
 const persistenceControllerSource = readFileSync(new URL('../shared/planning-controller/planningPersistenceController.js', import.meta.url), 'utf8');
-const toolbarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarToolbar.js', import.meta.url), 'utf8');
-const calendarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendar.js', import.meta.url), 'utf8');
 const routeSource = readFileSync(new URL('../server/routes/planning.routes.js', import.meta.url), 'utf8');
 const discardStart = planningSource.indexOf('async function discardAllProductionCalendarChanges');
 const discardEnd = planningSource.indexOf('function findProductionCalendarMachine', discardStart);
@@ -113,12 +111,16 @@ const routeStart = routeSource.indexOf("router.delete('/plans/:id/manual-schedul
 const routeEnd = routeSource.indexOf("router.put('/plans/:id/manual-schedule'", routeStart);
 const discardRoute = routeSource.slice(routeStart, routeEnd);
 
-assert.match(toolbarSource, /Descartar todas as alterações/);
-assert.match(toolbarSource, /danger-button/);
-assert.match(toolbarSource, /discardButton\.disabled = !state\.hasManualChanges/);
-assert.match(calendarSource, /Descartar todas as alterações do calendário\?/);
-assert.match(calendarSource, /Todos os arrastos, divisões, junções, alterações de equipe/);
-assert.ok(calendarSource.indexOf("if (!confirmed) return") < calendarSource.indexOf('await onDiscardAllChanges'), 'cancelar não pode executar descarte');
+assert.match(planningSource, /onRequestDiscardAllChanges:\s*\(\)\s*=>\s*discardAllProductionCalendarChanges\(\)/);
+assert.match(discardSource, /const\s+confirmed\s*=\s*confirm\(/);
+assert.match(discardSource, /if\s*\(!confirmed\)\s*return;/);
+assert.ok(
+  discardSource.indexOf('if (!confirmed) return;') < discardSource.indexOf('persistAutomaticBaselineDiscard'),
+  'cancelar confirmacao deve sair antes de persistir o descarte'
+);
+assert.equal(existsSync(new URL('../shared/production-calendar/ProductionCalendarToolbar.js', import.meta.url)), false);
+assert.equal(existsSync(new URL('../shared/production-calendar/ProductionCalendar.js', import.meta.url)), false);
+assert.doesNotMatch(planningSource, /Descartar todas as alterações do calendário\?/);
 assert.match(discardSource, /persistAutomaticBaselineDiscard/);
 assert.match(discardSource, /productionCalendarVisualState = \{\}/);
 assert.doesNotMatch(discardSource, /simulatePlanningRequest|reoptimizePlanningFuture|scheduleOperations|scheduler/i);

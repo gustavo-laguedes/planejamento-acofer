@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   createManualScheduleHistory,
   recordManualScheduleHistory,
@@ -55,9 +55,7 @@ assert.equal(cleared.future.length, 0);
 
 const planningSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
 const controllerSource = readFileSync(new URL('../shared/planning-controller/planningHistoryController.js', import.meta.url), 'utf8');
-const toolbarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarToolbar.js', import.meta.url), 'utf8');
-const calendarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendar.js', import.meta.url), 'utf8');
-const cssSource = readFileSync(new URL('../shared/production-calendar/production-calendar.css', import.meta.url), 'utf8');
+const rendererSource = readFileSync(new URL('../shared/planning-schedule-view/gantt-aps/ganttAps.renderer.js', import.meta.url), 'utf8');
 
 assert.match(controllerSource, /undoManualScheduleHistory/);
 assert.match(controllerSource, /redoManualScheduleHistory/);
@@ -67,15 +65,17 @@ assert.doesNotMatch(controllerSource, /simulatePlanningRequest|reoptimizePlannin
 assert.match(planningSource, /createPlanningHistoryController/);
 assert.match(planningSource, /recordAcceptedManualState\(previousManualState\)/);
 assert.match(planningSource, /manualScheduleHistory\.resetFromCurrent\(\)/);
-assert.match(toolbarSource, /label: '←'/);
-assert.match(toolbarSource, /label: '→'/);
-assert.match(toolbarSource, /Desfazer última alteração/);
-assert.match(toolbarSource, /Refazer alteração/);
-assert.match(toolbarSource, /production-calendar-manual-actions/);
-assert.match(calendarSource, /onUndoManualChange/);
-assert.match(calendarSource, /onRedoManualChange/);
-assert.match(cssSource, /production-calendar-manual-actions[\s\S]*grid-area:\s*manual/);
-assert.match(cssSource, /production-calendar-discard-button[\s\S]*background:\s*#dc2626/);
-assert.match(cssSource, /production-calendar-toolbar[\s\S]*grid-template-areas:[\s\S]*manual/);
+assert.equal(existsSync(new URL('../shared/production-calendar/ProductionCalendarToolbar.js', import.meta.url)), false);
+assert.equal(existsSync(new URL('../shared/production-calendar/ProductionCalendar.js', import.meta.url)), false);
+assert.match(planningSource, /canUndoManualChange|canRedoManualChange/);
+assert.match(planningSource, /function\s+undoLastProductionCalendarChange\(\)\s*\{\s*manualScheduleHistory\.undo\(\);\s*\}/);
+assert.match(planningSource, /function\s+redoProductionCalendarChange\(\)\s*\{\s*manualScheduleHistory\.redo\(\);\s*\}/);
+assert.match(planningSource, /onRequestUndoManualChange:\s*\(\)\s*=>\s*undoLastProductionCalendarChange\(\)/);
+assert.match(planningSource, /onRequestRedoManualChange:\s*\(\)\s*=>\s*redoProductionCalendarChange\(\)/);
+assert.match(rendererSource, /data-action'\s*,\s*'undo-manual-change'|dataset\.action\s*=\s*'undo-manual-change'/);
+assert.match(rendererSource, /data-action'\s*,\s*'redo-manual-change'|dataset\.action\s*=\s*'redo-manual-change'/);
+assert.match(controllerSource, /undoManualScheduleHistory|redoManualScheduleHistory/);
+assert.doesNotMatch(rendererSource, /planningHistoryController|manualScheduleHistory\.service|undoManualScheduleHistory|redoManualScheduleHistory/);
+assert.doesNotMatch(rendererSource, /simulateCurrent|reoptimizePlanningFuture|persistAutomaticBaselineDiscard|savePlanningManualSchedule|buildPlan|scheduler/i);
 
 console.log('manualScheduleHistory.service.test.js ok');

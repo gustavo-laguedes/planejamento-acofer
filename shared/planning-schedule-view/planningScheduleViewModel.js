@@ -175,7 +175,8 @@ export function buildPlanningScheduleViewModel(snapshot = {}) {
     capabilities: {
       inspect: true,
       mutate: false,
-      manualMove: snapshot.permissions?.canEditAllocations === true
+      manualMove: snapshot.permissions?.canEditAllocations === true,
+      daySettings: snapshot.permissions?.canEditDaySettings === true
     },
     resources,
     tasks: intraday.tasks,
@@ -198,6 +199,11 @@ export function buildPlanningScheduleViewModel(snapshot = {}) {
         ...cloneValue(Array.isArray(snapshot.warnings) ? snapshot.warnings : []),
         ...intraday.warnings
       ],
+      validationIssues: cloneValue(
+        Array.isArray(snapshot.validation?.presentation?.issues)
+          ? snapshot.validation.presentation.issues
+          : []
+      ),
       visualState: cloneValue(snapshot.visualState || {})
     }
   };

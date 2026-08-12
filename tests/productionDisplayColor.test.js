@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   getProductionCalendarAllocationColor,
   getProductionDisplayColor,
@@ -54,8 +54,8 @@ const planningFlowDomSource = readFileSync(
   new URL('../shared/planning-presentation/planningFlowDom.js', import.meta.url),
   'utf8'
 );
-const cardSource = readFileSync(
-  new URL('../shared/production-calendar/ProductionCalendarCard.js', import.meta.url),
+const legacyDisplayColorSource = readFileSync(
+  new URL('../shared/production-calendar/productionDisplayColor.js', import.meta.url),
   'utf8'
 );
 const ganttRendererSource = readFileSync(
@@ -95,11 +95,8 @@ assert.match(
   planningFlowDomSource,
   /const color = productionTheme\(productionIndex,\s*edge\.color\)\.border/
 );
-assert.match(
-  cardSource,
-  /from\s*['"]\.\.\/planning-presentation\/productionDisplayColor\.js['"]/
-);
-assert.doesNotMatch(cardSource, /getProductionDisplayColor\(explicitColor,/);
+assert.equal(existsSync(new URL('../shared/production-calendar/ProductionCalendarCard.js', import.meta.url)), false);
+assert.match(legacyDisplayColorSource, /planning-presentation\/productionDisplayColor\.js/);
 assert.match(
   ganttRendererSource,
   /from\s*['"]\.\.\/\.\.\/planning-presentation\/productionDisplayColor\.js['"]/
@@ -108,7 +105,6 @@ assert.doesNotMatch(
   ganttRendererSource,
   /from\s*['"]\.\.\/\.\.\/production-calendar\/ProductionCalendarCard\.js['"]/
 );
-assert.doesNotMatch(cardSource, /CARD_PALETTE/);
 assert.doesNotMatch(planningPageSource, /const PRODUCTION_(?:COLOR_PALETTE|THEMES|THEME_SEQUENCE)/);
 
 console.log('productionDisplayColor.test.js: ok');

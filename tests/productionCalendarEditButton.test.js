@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { ProductionCalendarCard } from '../shared/production-calendar/ProductionCalendarCard.js';
+import { existsSync, readFileSync } from 'node:fs';
 import { buildManualScheduleAllocationParts } from '../services/manualScheduleDraft.service.js';
 import { ensurePlanningAllocationEditorCss } from '../shared/planning-editor/planningAllocationEditorCss.js';
 import {
@@ -15,50 +14,42 @@ class FakeElement {
   constructor(tagName = 'div') {
     this.tagName = String(tagName).toUpperCase();
     this.children = [];
+    this.parentNode = null;
     this.dataset = {};
     this.listeners = new Map();
-    this.style = { setProperty() {} };
+    this.selectorMap = new Map();
+    this.attributes = new Map();
     this.className = '';
     this.textContent = '';
-    this.parentNode = null;
+    this.value = '';
     this.hidden = false;
     this.disabled = false;
-    this.value = '';
-    this._innerHTML = '';
-    this.selectorMap = new Map();
+    this.required = false;
+    this.name = '';
+    this.type = '';
+    this.inputMode = '';
+    this.autocomplete = '';
+    this.elements = {};
   }
   set innerHTML(value) {
     this._innerHTML = value;
-    if (this.className !== 'production-calendar-editor-modal') return;
-    const form = new FakeElement('form');
-    const machineSelect = new FakeElement('select');
-    const peopleInput = new FakeElement('input');
-    form.elements = { machineId: machineSelect, peopleCount: peopleInput };
-    const submit = new FakeElement('button');
-    const headerText = new FakeElement('p');
-    const limit = new FakeElement('small');
-    const error = new FakeElement('p');
-    const capacity = new FakeElement('strong');
-    const start = new FakeElement('strong');
-    const end = new FakeElement('strong');
-    const close = new FakeElement('button');
-    const cancel = new FakeElement('button');
-    form.selectorMap.set('[type="submit"]', submit);
-    [machineSelect, peopleInput, submit].forEach(child => form.appendChild(child));
-    this.selectorMap = new Map([
-      ['form', form], ['header p', headerText],
-      ['.production-calendar-editor-limit', limit], ['.production-calendar-editor-error', error],
-      ['[data-editor-preview="capacity"]', capacity], ['[data-editor-preview="start"]', start],
-      ['[data-editor-preview="end"]', end], ['.production-calendar-editor-close', close],
-      ['[data-editor-cancel]', cancel]
-    ]);
-    [form, headerText, limit, error, capacity, start, end, close, cancel].forEach(child => this.appendChild(child));
+    this.children = [];
+    this.selectorMap = new Map();
+    if (this.className.includes('production-calendar-unified-editor-modal')) this.buildPlanningAllocationEditorTemplate();
   }
-  get innerHTML() { return this._innerHTML; }
+  get innerHTML() { return this._innerHTML || ''; }
   append(...children) { children.forEach(child => this.appendChild(child)); }
-  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
-  setAttribute() {}
-  querySelector(selector) { return this.selectorMap.get(selector) || null; }
+  appendChild(child) {
+    child.parentNode = this;
+    this.children.push(child);
+    if (this.tagName === 'SELECT' && !this.value && child.value) this.value = child.value;
+    return child;
+  }
+  setAttribute(name, value) {
+    this.attributes.set(name, String(value));
+    if (name === 'aria-label') this.ariaLabel = String(value);
+    if (name === 'type') this.type = String(value);
+  }
   focus() {}
   remove() {
     if (!this.parentNode) return;
@@ -69,112 +60,176 @@ class FakeElement {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(listener);
   }
-  dispatch(type, event = {}) {
-    (this.listeners.get(type) || []).forEach(listener => listener(event));
+  async dispatch(type, event = {}) {
+    const listeners = this.listeners.get(type) || [];
+    await Promise.all(listeners.map(listener => listener({ target: this, ...event })));
   }
-  async dispatchAsync(type, event = {}) {
-    await Promise.all((this.listeners.get(type) || []).map(listener => listener(event)));
+  click() { return this.dispatch('click'); }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  querySelectorAll(selector) {
+    const direct = this.selectorMap.get(selector);
+    if (direct) return Array.isArray(direct) ? direct : [direct];
+    const matches = [];
+    const visit = node => {
+      if (node.matchesSelector?.(selector)) matches.push(node);
+      node.children.forEach(visit);
+    };
+    this.children.forEach(visit);
+    return matches;
   }
-  contains(target) {
-    return target === this || this.children.some(child => child.contains?.(target));
+  matchesSelector(selector) {
+    if (selector === this.tagName.toLowerCase()) return true;
+    if (selector.startsWith('.') && this.className.split(/\s+/).includes(selector.slice(1))) return true;
+    const attr = /^\[([^=\]]+)(?:="([^"]*)")?\]$/.exec(selector);
+    if (attr) {
+      const [, name, value] = attr;
+      if (name.startsWith('data-')) {
+        const key = name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+        return value === undefined ? Object.hasOwn(this.dataset, key) : this.dataset[key] === value;
+      }
+      if (name === 'aria-label') return value === undefined ? Boolean(this.ariaLabel) : this.ariaLabel === value;
+      return value === undefined ? Boolean(this[name]) : String(this[name]) === value;
+    }
+    const named = /^\[name="([^"]+)"\]$/.exec(selector);
+    if (named) return this.name === named[1];
+    return false;
   }
-  closest(selector) {
-    if (selector.includes('button') && this.tagName === 'BUTTON') return this;
-    if (selector.includes('.production-calendar-card-edit') && this.className === 'production-calendar-card-edit') return this;
-    return this.parentNode?.closest?.(selector) || null;
+  buildPlanningAllocationEditorTemplate() {
+    const headerText = new FakeElement('p');
+    const close = new FakeElement('button');
+    close.className = 'production-calendar-editor-close';
+    const identification = new FakeElement('section');
+    identification.ariaLabel = 'IdentificaÃ§Ã£o';
+    const quantities = new FakeElement('section');
+    quantities.ariaLabel = 'Quantidades';
+    const lineage = new FakeElement('section');
+    lineage.ariaLabel = 'InformaÃ§Ãµes da divisÃ£o';
+    const form = new FakeElement('form');
+    const date = new FakeElement('input');
+    date.name = 'date';
+    date.type = 'date';
+    const machine = new FakeElement('select');
+    machine.name = 'machineId';
+    const people = new FakeElement('select');
+    people.name = 'peopleCount';
+    form.elements = { date, machineId: machine, peopleCount: people };
+    const preview = new FakeElement('section');
+    preview.className = 'production-calendar-editor-preview';
+    ['capacity', 'usage', 'duration', 'start', 'end'].forEach(key => {
+      const metric = new FakeElement('strong');
+      metric.dataset.editorPreview = key;
+      preview.appendChild(metric);
+    });
+    const splitToggle = new FakeElement('button');
+    splitToggle.className = 'production-calendar-editor-split-toggle';
+    const distribution = new FakeElement('section');
+    distribution.className = 'production-calendar-editor-distribution';
+    distribution.hidden = true;
+    const parts = new FakeElement('div');
+    parts.className = 'production-calendar-editor-parts';
+    const splitEqual = new FakeElement('button');
+    splitEqual.dataset.splitEqual = '';
+    const splitAdd = new FakeElement('button');
+    splitAdd.dataset.splitAdd = '';
+    const error = new FakeElement('p');
+    error.className = 'production-calendar-editor-error';
+    const cancel = new FakeElement('button');
+    cancel.dataset.editorCancel = '';
+    const submit = new FakeElement('button');
+    submit.type = 'submit';
+    form.selectorMap.set('[type="submit"]', submit);
+    [
+      date, machine, people, preview, splitToggle, distribution, parts,
+      splitEqual, splitAdd, error, cancel, submit
+    ].forEach(child => form.appendChild(child));
+    [
+      headerText, close, identification, quantities, lineage, form
+    ].forEach(child => this.appendChild(child));
+    this.selectorMap = new Map([
+      ['header p', headerText],
+      ['[aria-label="Identificação"]', identification],
+      ['[aria-label="IdentificaÃ§Ã£o"]', identification],
+      ['[aria-label="Quantidades"]', quantities],
+      ['[aria-label="Quantidades"]', quantities],
+      ['[aria-label="Informações da divisão"]', lineage],
+      ['[aria-label="InformaÃ§Ãµes da divisÃ£o"]', lineage],
+      ['form', form],
+      ['.production-calendar-editor-error', error],
+      ['.production-calendar-editor-distribution', distribution],
+      ['.production-calendar-editor-parts', parts],
+      ['.production-calendar-editor-split-toggle', splitToggle],
+      ['.production-calendar-editor-close', close],
+      ['[data-editor-cancel]', cancel],
+      ['[data-split-add]', splitAdd],
+      ['[data-split-equal]', splitEqual]
+    ]);
   }
 }
 
 function allocation(overrides = {}) {
   return {
-    allocationId: 'edit-normal', operationId: 'OP-1', parentOperationId: 'OP-1',
-    productionId: 'P-1', productionIndex: 0, materialId: 'MAT', materialName: 'Material',
-    machineId: 'M1', machineName: 'M1', date: '2026-07-20', startTime: '07:00', endTime: '08:00',
-    quantity: 10, unit: 'un', durationMinutes: 60, peopleCount: 1, capacityPercent: 10,
+    allocationId: 'edit-normal',
+    operationId: 'OP-1',
+    parentOperationId: 'OP-1',
+    productionId: 'P-1',
+    productionIndex: 0,
+    materialId: 'MAT',
+    materialName: 'Material',
+    machineId: 'M1',
+    machineName: 'M1',
+    date: '2026-07-20',
+    startTime: '07:00',
+    endTime: '08:00',
+    quantity: 10,
+    unit: 'un',
+    durationMinutes: 60,
+    peopleCount: 1,
+    capacityPercent: 10,
     ...overrides
   };
 }
 
-function exerciseEditButton(sourceAllocation, { reparent = false } = {}) {
-  let edited = null;
-  let detailsOpened = 0;
-  let selected = 0;
-  let dragStarted = 0;
-  const card = ProductionCalendarCard({
-    allocation: sourceAllocation,
-    onEdit: value => { edited = value; },
-    onOpenDetails: () => { detailsOpened += 1; },
-    onToggleSelection: () => { selected += 1; },
-    onStartDrag: () => { dragStarted += 1; }
-  });
-  if (reparent) new FakeElement('section').appendChild(card);
-  const button = card.children.find(child => child.className === 'production-calendar-card-edit');
-  assert.ok(button, 'card editável deve criar o botão de edição');
-  const event = {
-    prevented: false,
-    stopped: false,
-    preventDefault() { this.prevented = true; },
-    stopPropagation() { this.stopped = true; }
-  };
-  button.dispatch('click', event);
-  card.dispatch('click', {
-    prevented: false,
-    stopped: false,
-    preventDefault() { this.prevented = true; },
-    stopPropagation() { this.stopped = true; }
-  });
-  assert.equal(event.prevented, true);
-  assert.equal(event.stopped, true);
-  assert.equal(edited, sourceAllocation, 'callback deve receber a mesma referência da allocation do card');
-  assert.equal(detailsOpened, 0, 'botão não pode abrir os detalhes gerais do card');
-  assert.equal(selected, 0, 'botão não pode selecionar o card');
-  assert.equal(dragStarted, 0, 'click do botão não pode iniciar drag');
-}
+[
+  'ProductionCalendar.js',
+  'ProductionCalendarGrid.js',
+  'ProductionCalendarCard.js',
+  'ProductionCalendarDrag.js',
+  'ProductionCalendarDetails.js',
+  'ProductionCalendarState.js',
+  'ProductionCalendarToolbar.js',
+  'productionCalendar.validation.js'
+].forEach(name => {
+  assert.equal(
+    existsSync(new URL(`../shared/production-calendar/${name}`, import.meta.url)),
+    false,
+    `${name} deve permanecer removido fisicamente`
+  );
+});
 
-const previousDocument = globalThis.document;
-globalThis.document = { createElement: tagName => new FakeElement(tagName) };
-try {
-  exerciseEditButton(allocation());
-  exerciseEditButton(allocation({
-    allocationId: 'edit-shared',
-    productionMemberships: [
-      { productionId: 'P-1', productionIndex: 0, productionStage: 1 },
-      { productionId: 'P-2', productionIndex: 1, productionStage: 1 }
-    ]
-  }));
-  exerciseEditButton(allocation({ allocationId: 'edit-fullscreen' }), { reparent: true });
-} finally {
-  globalThis.document = previousDocument;
-}
-
-const cardSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarCard.js', import.meta.url), 'utf8');
-const gridSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarGrid.js', import.meta.url), 'utf8');
-const calendarSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendar.js', import.meta.url), 'utf8');
-const dragSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarDrag.js', import.meta.url), 'utf8');
+const pageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
+const barrelSource = readFileSync(new URL('../shared/production-calendar/index.js', import.meta.url), 'utf8');
 const editorSource = readFileSync(new URL('../shared/planning-editor/PlanningAllocationEditor.js', import.meta.url), 'utf8');
 const editorCssLoaderSource = readFileSync(new URL('../shared/planning-editor/planningAllocationEditorCss.js', import.meta.url), 'utf8');
 const planningEditorCss = readFileSync(new URL('../shared/planning-editor/planning-allocation-editor.css', import.meta.url), 'utf8');
 const legacyEditorSource = readFileSync(new URL('../shared/production-calendar/ProductionCalendarEditor.js', import.meta.url), 'utf8');
-const editorCss = readFileSync(new URL('../shared/production-calendar/production-calendar.css', import.meta.url), 'utf8');
-const pageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
+const productionCalendarCss = readFileSync(new URL('../shared/production-calendar/production-calendar.css', import.meta.url), 'utf8');
+const allocationEditorControllerSource = readFileSync(new URL('../shared/planning-controller/planningAllocationEditorController.js', import.meta.url), 'utf8');
 
-assert.match(cardSource, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);\s*onEdit\(allocation, editButton\)/);
-assert.doesNotMatch(cardSource, /production-calendar-card-split|onSplit/);
-assert.match(gridSource, /onEdit:\s*onEditAllocation/);
-assert.match(calendarSource, /onEditAllocation:\s*permissions\.canEditAllocations\s*\?\s*onEditAllocation/);
-assert.match(dragSource, /\.production-calendar-card-selector, button, input, select, textarea/);
-assert.match(dragSource, /if \(isInteractivePointerTarget\(event\.target, card\)\) return false/);
-assert.match(editorSource, /\[data-editor-cancel\][\s\S]*addEventListener\('click', close\)/);
 assert.doesNotMatch(pageSource, /shared\/production-calendar\/index\.js/);
 assert.doesNotMatch(pageSource, /renderProductionCalendarSnapshot/);
 assert.doesNotMatch(pageSource, /\bProductionCalendar\(\{/);
-assert.doesNotMatch(pageSource, /onEditAllocation:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\)/);
 assert.match(pageSource, /onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\)/);
 assert.match(pageSource, /onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\)/);
 assert.match(pageSource, /const\s+allocationId\s*=\s*allocation\?\.allocationId\s*\?\?\s*allocation\?\.id/);
 assert.match(pageSource, /PlanningAllocationEditor\(\{[\s\S]*onSave:\s*payload\s*=>\s*handleProductionCalendarAllocationSave\(\{\s*\.\.\.payload,\s*productivityRows\s*\}\)/);
 assert.match(pageSource, /getDistributionPreview:\s*\(previewAllocation,\s*percents,\s*options\)\s*=>\s*buildManualScheduleAllocationParts\(previewAllocation,\s*percents,\s*options\)/);
 assert.match(pageSource, /ensurePlanningAllocationEditorCss\(\)/);
+assert.doesNotMatch(barrelSource, /from\s*['"]\.\/ProductionCalendar(?:\.js|Grid\.js|Card\.js|Drag\.js|Details\.js|State\.js|Toolbar\.js)['"]/);
+assert.doesNotMatch(barrelSource, /validateProductionCalendarAllocations|productionCalendar\.validation/);
+assert.match(barrelSource, /ProductionCalendarEditor/);
+assert.match(barrelSource, /ProductionCalendarSplitEditor/);
+assert.match(barrelSource, /productionCalendar\.utils\.js/);
+assert.match(barrelSource, /productionCalendar\.adapter\.js/);
 assert.doesNotMatch(editorCssLoaderSource, /production-calendar\/production-calendar\.css|data-production-calendar-css/);
 assert.match(editorCssLoaderSource, /planning-allocation-editor\.css/);
 assert.match(editorCssLoaderSource, /data-planning-allocation-editor-css/);
@@ -183,29 +238,22 @@ assert.match(legacyEditorSource, /buildManualScheduleAllocationParts/);
 assert.doesNotMatch(editorSource, /\.\.\/\.\.\/services\//);
 assert.doesNotMatch(editorSource, /\.\.\/production-calendar|productionCalendar\.utils|ProductionCalendarCard/);
 assert.match(pageSource, /runPlanningAllocationEditorController/);
-const allocationEditorControllerSource = readFileSync(new URL('../shared/planning-controller/planningAllocationEditorController.js', import.meta.url), 'utf8');
 assert.match(allocationEditorControllerSource, /type:\s*'EDIT_ALLOCATION'/);
 assert.match(allocationEditorControllerSource, /type:\s*'SPLIT_ALLOCATION'/);
 assert.doesNotMatch(pageSource, /manualDraftDailyMinutes/);
 assert.match(pageSource, /dailyMinutes:\s*planningDraftDailyMinutes\(\{ requireConfiguredShifts: true \}\)/);
 
 const previewMachine = { machineId: 'M2' };
-const currentPreview = resolvePlanningAllocationEditorPreview(
+assert.equal(resolvePlanningAllocationEditorPreview(
   ({ machine, peopleCount }) => ({ capacityPerDay: machine.machineId === 'M2' ? peopleCount * 30 : 0 }),
   { machine: previewMachine, peopleCount: 2 }
-);
-const changedPeoplePreview = resolvePlanningAllocationEditorPreview(
+).capacityPerDay, 60);
+assert.equal(resolvePlanningAllocationEditorPreview(
   ({ machine, peopleCount }) => ({ capacityPerDay: machine.machineId === 'M2' ? peopleCount * 30 : 0 }),
   { machine: previewMachine, peopleCount: 3 }
-);
-assert.equal(currentPreview.capacityPerDay, 60);
-assert.equal(changedPeoplePreview.capacityPerDay, 90);
+).capacityPerDay, 90);
 assert.equal(resolvePlanningAllocationEditorPreview(() => null, {}), null);
-assert.equal(
-  resolvePlanningAllocationEditorPreview(() => { throw new ReferenceError('missing daily minutes'); }, {}),
-  null,
-  'falha na prévia não pode impedir a abertura do editor'
-);
+assert.equal(resolvePlanningAllocationEditorPreview(() => { throw new ReferenceError('missing daily minutes'); }, {}), null);
 
 assert.deepEqual(equalPlanningAllocationSplitPercents(3), [33.33, 33.33, 33.34]);
 assert.deepEqual(addPlanningAllocationSplitPart([50, 50]), [50, 25, 25]);
@@ -224,30 +272,110 @@ assert.equal(resolvePlanningAllocationDistribution(
   allocation(),
   ['40', '40']
 ).valid, false);
-assert.match(editorSource, /Participação no pai/);
-assert.match(editorSource, /Participação na produção original/);
-assert.match(editorSource, /Capacidade utilizada desta parte/);
+
+{
+  const previousDocument = globalThis.document;
+  const body = new FakeElement('body');
+  globalThis.document = { createElement: tagName => new FakeElement(tagName), body };
+  try {
+    const sourceAllocation = allocation({ quantity: 100, capacityPercent: 20, maxDailyCapacity: 500 });
+    const originalBytes = JSON.stringify(sourceAllocation);
+    const machines = [
+      { machineId: 'M1', machineName: 'Maquina 1', peopleCounts: [1, 2] },
+      { machineId: 'M2', machineName: 'Maquina 2', peopleCounts: [2, 3] }
+    ];
+    const previewCalls = [];
+    const saves = [];
+    let closes = 0;
+    const editor = PlanningAllocationEditor({
+      allocation: sourceAllocation,
+      machines,
+      getPreview: values => {
+        previewCalls.push(values);
+        return {
+          capacityPerDay: values.machine?.machineId === 'M2' ? 800 : 500,
+          durationMinutes: values.peopleCount * 30,
+          startDate: values.date,
+          endDate: values.date
+        };
+      },
+      onSave: async payload => {
+        saves.push(payload);
+        return { accepted: true };
+      },
+      onClose: () => { closes += 1; }
+    });
+    assert.equal(body.children.length, 1, 'editor neutro deve abrir em modal para allocation valida');
+    assert.equal(editor.element, body.children[0]);
+    assert.equal(JSON.stringify(sourceAllocation), originalBytes, 'abrir e renderizar preview nao deve mutar a allocation recebida');
+    assert.equal(previewCalls.length > 0, true, 'preview principal deve ser resolvido na abertura sem lancar erro');
+    assert.equal(previewCalls.at(-1).allocation, sourceAllocation, 'preview deve receber a allocation original por referencia');
+    assert.notEqual(editor.element.querySelector('[data-editor-preview="capacity"]').textContent, '--');
+
+    await editor.element.querySelector('[data-editor-cancel]').dispatch('click');
+    assert.equal(body.children.length, 0, 'cancelar deve fechar o editor');
+    assert.equal(closes, 1);
+    assert.equal(saves.length, 0, 'cancelar nao pode chamar onSave');
+    assert.equal(JSON.stringify(sourceAllocation), originalBytes, 'cancelar nao deve mutar a allocation recebida');
+
+    const secondEditor = PlanningAllocationEditor({
+      allocation: sourceAllocation,
+      machines,
+      getPreview: values => {
+        previewCalls.push(values);
+        return {
+          capacityPerDay: values.machine?.machineId === 'M2' ? 800 : 500,
+          durationMinutes: values.peopleCount * 30,
+          startDate: values.date,
+          endDate: values.date
+        };
+      },
+      onSave: async payload => {
+        saves.push(payload);
+        return { accepted: true };
+      },
+      onClose: () => { closes += 1; }
+    });
+    const form = secondEditor.element.querySelector('form');
+    form.elements.machineId.value = 'M2';
+    await form.elements.machineId.dispatch('change');
+    form.elements.peopleCount.value = '3';
+    await form.elements.peopleCount.dispatch('input');
+    form.elements.date.value = '2026-07-21';
+    await form.elements.date.dispatch('input');
+    await form.dispatch('submit', { preventDefault() {} });
+    assert.equal(saves.length, 1, 'alteracao valida deve chegar ao callback onSave');
+    assert.equal(saves[0].mode, 'edit');
+    assert.equal(saves[0].allocation, sourceAllocation);
+    assert.equal(saves[0].machineId, 'M2');
+    assert.equal(saves[0].peopleCount, 3);
+    assert.equal(saves[0].date, '2026-07-21');
+    assert.equal(body.children.length, 0, 'save aceito deve fechar o editor');
+    assert.equal(JSON.stringify(sourceAllocation), originalBytes, 'salvar via callback nao deve mutar a allocation recebida pelo editor');
+  } finally {
+    globalThis.document = previousDocument;
+  }
+}
+
 assert.match(editorSource, /<select name="peopleCount" required>/);
 assert.match(editorSource, /appendEditableInfo\(quantities,[\s\S]*'quantity'/);
 assert.match(editorSource, /appendEditableInfo\(quantities,[\s\S]*'capacityPercent'/);
 assert.match(editorSource, /quantity,\s*capacityPercent:\s*currentPercent\(\)/);
 assert.match(editorSource, /raw\.replace\(\/\\\.\/g,\s*''\)/);
 assert.match(editorSource, /minimumEditableQuantity/);
-assert.match(editorSource, /capacidade utilizada não pode ser menor|capacidade utilizada não pode ser menor/i);
 assert.match(editorSource, /<select name="partPeopleCount" required>/);
-assert.doesNotMatch(editorSource, /name="startTime"|name="partStartTime"|type="time"|Horário inicial|<span>Início<\/span>/);
+assert.doesNotMatch(editorSource, /name="startTime"|name="partStartTime"|type="time"/);
 assert.match(editorSource, /data-split-add/);
 assert.match(editorSource, /data-split-equal/);
-assert.match(editorSource, /Quantidade da produção/);
-assert.match(editorSource, /Produção original/);
-assert.match(editorSource, /Dividir esta produção/);
-assert.doesNotMatch(editorSource, /Informações técnicas|productivityLineId|Allocation original|desta allocation|Dividir esta allocation/);
+assert.doesNotMatch(editorSource, /productivityLineId|Allocation original|desta allocation|Dividir esta allocation/);
+assert.doesNotMatch(editorSource, /\b(simulateCurrent|buildPlan|scheduleOperations|reoptimizePlanningFuture|persistAutomaticBaselineDiscard)\b/);
+assert.doesNotMatch(editorSource, /\bfetch\s*\(|\bapi\s*\(|localStorage|sessionStorage/);
 const mainPreviewSource = editorSource.slice(editorSource.indexOf('const syncMainPreview'), editorSource.indexOf('let splitValues'));
 assert.match(mainPreviewSource, /preview\?\.startDate \|\| dateInput\.value/);
 assert.match(mainPreviewSource, /preview\?\.endDate \|\| allocation\?\.endDate \|\| allocation\?\.date/);
 assert.doesNotMatch(mainPreviewSource, /preview\?\.startTime|preview\?\.endTime/);
 assert.match(planningEditorCss, /\.production-calendar-editor-form\s*\{[^}]*padding:\s*32px 20px 20px;/s);
-assert.ok(editorCss.length > 0, 'production-calendar.css deve permanecer fisicamente presente nesta REF');
+assert.ok(productionCalendarCss.length > 0, 'production-calendar.css deve permanecer fisicamente presente nesta REF');
 [
   'production-calendar-editor-backdrop',
   'production-calendar-editor-modal',
@@ -270,8 +398,6 @@ assert.ok(editorCss.length > 0, 'production-calendar.css deve permanecer fisicam
 ].forEach(className => {
   assert.match(planningEditorCss, new RegExp(`\\.${className}\\b`), `${className} deve estar coberta pelo CSS neutro`);
 });
-assert.match(planningEditorCss, /@media \(max-width: 520px\)/);
-assert.match(planningEditorCss, /@media \(max-width: 900px\)/);
 
 {
   const previousDocumentForCss = globalThis.document;

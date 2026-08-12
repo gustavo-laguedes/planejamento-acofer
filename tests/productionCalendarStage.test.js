@@ -1,14 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   adaptPlanningResultToProductionCalendar,
   buildProductionStageIndex
 } from '../shared/production-calendar/productionCalendar.adapter.js';
-import {
-  getProductionCalendarStage,
-  ProductionCalendarCard
-} from '../shared/production-calendar/ProductionCalendarCard.js';
 import {
   createManualScheduleDraft,
   moveDraftAllocation
@@ -136,33 +132,7 @@ const withoutStage = adaptPlanningResultToProductionCalendar({
 });
 assert.equal(withoutStage.allocations[0].productionStage, null);
 assert.equal(withoutStage.allocations[0].productionStageLabel, '');
-assert.equal(getProductionCalendarStage(withoutStage.allocations[0]), null);
-assert.equal(getProductionCalendarStage({ productionStage: 0 }), null);
-
-class FakeElement {
-  constructor() {
-    this.children = [];
-    this.dataset = {};
-    this.style = { setProperty() {} };
-    this.className = '';
-    this.textContent = '';
-  }
-  append(...children) { this.children.push(...children); }
-  appendChild(child) { this.children.push(child); return child; }
-  setAttribute() {}
-  addEventListener() {}
-}
-const previousDocument = globalThis.document;
-globalThis.document = { createElement: () => new FakeElement() };
-try {
-  const cardWithoutStage = ProductionCalendarCard({ allocation: withoutStage.allocations[0] });
-  assert.equal(cardWithoutStage.children.some(child => child.className === 'production-calendar-card-stage'), false);
-  const cardWithStage = ProductionCalendarCard({ allocation: byMaterial('corte')[0] });
-  const stageElement = cardWithStage.children.find(child => child.className === 'production-calendar-card-stage');
-  assert.equal(stageElement?.textContent, 'ETAPA 2');
-} finally {
-  globalThis.document = previousDocument;
-}
+assert.equal(existsSync(new URL('../shared/production-calendar/ProductionCalendarCard.js', import.meta.url)), false);
 
 const adapterSource = readFileSync(fileURLToPath(new URL('../shared/planning-schedule/planningScheduleAdapter.js', import.meta.url)), 'utf8');
 const stageFunction = adapterSource.slice(

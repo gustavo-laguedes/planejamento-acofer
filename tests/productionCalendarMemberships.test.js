@@ -1,15 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   adaptPlanningResultToProductionCalendar
 } from '../shared/production-calendar/productionCalendar.adapter.js';
-import {
-  getProductionCalendarMemberships,
-  ProductionCalendarCard
-} from '../shared/production-calendar/ProductionCalendarCard.js';
-import {
-  getProductionCalendarRelatedProductionLabel
-} from '../shared/production-calendar/ProductionCalendarDetails.js';
 import {
   createManualScheduleDraft,
   moveDraftAllocation
@@ -328,51 +321,12 @@ assert.equal(movedDraft.allocations[0].allocationId, sharedBobina.allocationId);
 assert.equal(movedDraft.allocations[0].quantity, sharedBobina.quantity);
 assert.deepEqual(movedDraft.allocations[0].productionMemberships, sharedBobina.productionMemberships);
 
-class FakeElement {
-  constructor() {
-    this.children = [];
-    this.dataset = {};
-    this.styleValues = new Map();
-    this.style = { setProperty: (name, value) => this.styleValues.set(name, value) };
-    this.className = '';
-    this.textContent = '';
-  }
-  append(...children) { this.children.push(...children); }
-  appendChild(child) { this.children.push(child); return child; }
-  setAttribute() {}
-  addEventListener() {}
-}
-const previousDocument = globalThis.document;
-globalThis.document = { createElement: () => new FakeElement() };
-try {
-  const sharedCard = ProductionCalendarCard({ allocation: sharedBobina });
-  assert.equal(sharedCard.dataset.shared, 'true');
-  assert.match(sharedCard.styleValues.get('--production-calendar-card-bg'), /^linear-gradient\(90deg,/);
-  const membershipList = sharedCard.children.find(child => child.className === 'production-calendar-card-memberships');
-  assert.equal(membershipList.children.length, 2);
-  assert.deepEqual(
-    membershipList.children.map(row => row.children[1].textContent),
-    ['PRODUÇÃO 1 · ETAPA 1', 'PRODUÇÃO 2 · ETAPA 1']
-  );
-
-  const exclusive = adapted.allocations.find(item => item.materialId === 'eq-45');
-  const exclusiveCard = ProductionCalendarCard({ allocation: exclusive });
-  assert.equal(exclusiveCard.dataset.shared, 'false');
-  assert.doesNotMatch(exclusiveCard.styleValues.get('--production-calendar-card-bg'), /^linear-gradient/);
-  assert.equal(exclusiveCard.children.some(child => child.className === 'production-calendar-card-memberships'), false);
-
-  const threeCard = ProductionCalendarCard({ allocation: threeAdapted.allocations[0] });
-  const threeList = threeCard.children.find(child => child.className === 'production-calendar-card-memberships');
-  assert.equal(threeList.children.length, 3);
-  assert.equal((threeCard.styleValues.get('--production-calendar-card-bg').match(/%/g) || []).length, 6);
-} finally {
-  globalThis.document = previousDocument;
-}
-
-assert.deepEqual(getProductionCalendarMemberships(sharedBobina).map(item => item.productionIndex), [0, 1]);
+assert.equal(existsSync(new URL('../shared/production-calendar/ProductionCalendarCard.js', import.meta.url)), false);
+assert.equal(existsSync(new URL('../shared/production-calendar/ProductionCalendarDetails.js', import.meta.url)), false);
+assert.deepEqual(sharedBobina.productionMemberships.map(item => item.productionIndex), [0, 1]);
 assert.deepEqual(
-  sharedBobina.productionMemberships.map(getProductionCalendarRelatedProductionLabel),
-  ['Produção 1 · Etapa 1 · EQ-45', 'Produção 2 · Etapa 1 · Q-61']
+  sharedBobina.productionMemberships.map(item => [item.productionTitle, item.productionStage, item.productionMaterialName]),
+  [['Produção 1', 1, 'EQ-45'], ['Produção 2', 1, 'Q-61']]
 );
 
 const planningPageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');

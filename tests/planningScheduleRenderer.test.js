@@ -218,8 +218,10 @@ assert.doesNotMatch(pageSource, /createProductionCalendarV2Renderer/);
 assert.doesNotMatch(pageSource, /rollback para o Calendário V2/);
 assert.match(
   pageSource,
-  /'gantt-aps':\s*\(\)\s*=>\s*createGanttApsRenderer\(\{\s*onRequestMove:\s*handleProductionCalendarMoveRequest,\s*onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\),\s*onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\)/
+  /'gantt-aps':\s*\(\)\s*=>\s*createGanttApsRenderer\(\{[\s\S]*onRequestMove:\s*handleProductionCalendarMoveRequest,[\s\S]*onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\),[\s\S]*onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\),[\s\S]*onRequestTransportAllocation:\s*allocation\s*=>\s*openProductionCalendarTransportModal\(allocation\),[\s\S]*onRequestOpenDay:\s*date\s*=>\s*openPlanningStockProjectionModal\(date\),[\s\S]*onRequestToggleManualWorkDate:\s*payload\s*=>\s*handleProductionCalendarManualWorkDate\(payload\),[\s\S]*onRequestEditDailyTeam:\s*payload\s*=>\s*handleProductionCalendarDailyTeam\(payload\),[\s\S]*onRequestExpandHorizon:\s*payload\s*=>\s*expandProductionCalendarHorizon\(payload\),[\s\S]*onRequestDiscardAllChanges:\s*\(\)\s*=>\s*discardAllProductionCalendarChanges\(\),[\s\S]*onRequestOptimizeUtilization:\s*\(\)\s*=>\s*handleProductionCalendarUtilizationOptimization\(\)/
 );
+assert.match(pageSource, /onRequestUndoManualChange:\s*\(\)\s*=>\s*undoLastProductionCalendarChange\(\)/);
+assert.match(pageSource, /onRequestRedoManualChange:\s*\(\)\s*=>\s*redoProductionCalendarChange\(\)/);
 assert.match(pageSource, /renderer:\s*'gantt-aps'/);
 const indexSource = readFileSync(new URL('../shared/planning-schedule-view/index.js', import.meta.url), 'utf8');
 assert.doesNotMatch(indexSource, /createProductionCalendarV2Renderer/);

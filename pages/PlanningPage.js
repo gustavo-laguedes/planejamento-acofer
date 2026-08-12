@@ -3,6 +3,7 @@ import { getCurrentUser } from '../shared/api.js';
 import {
   buildProductionCalendarDayPresentation,
   buildProductionCalendarDayProductivity,
+  addProductionCalendarDays,
   extendProductionCalendarDayRange
 } from '../shared/production-calendar/productionCalendar.utils.js';
 import { PlanningAllocationEditor } from '../shared/planning-editor/PlanningAllocationEditor.js';
@@ -2669,6 +2670,8 @@ export function PlanningPage() {
   }
 
   async function discardAllProductionCalendarChanges() {
+    const confirmed = confirm('Descartar alterações manuais do calendário? Todos os arrastos, divisões, junções, alterações de equipe, liberações de dias e demais edições manuais serão removidos. O calendário voltará ao resultado original da simulação.');
+    if (!confirmed) return;
     if (!currentAutomaticBaseline) {
       toast(new Error(LEGACY_AUTOMATIC_BASELINE_MESSAGE));
       return;
@@ -3799,6 +3802,21 @@ export function PlanningPage() {
     });
   }
 
+  function expandProductionCalendarHorizon({ days } = {}) {
+    const dayCount = Number(days);
+    if (!Number.isInteger(dayCount) || dayCount <= 0 || !currentSimulation) return;
+    const snapshot = buildProductionCalendarSnapshot(currentSimulation);
+    const currentEndDate = isValidDateOnly(productionCalendarVisualState.visibleEndDate)
+      ? productionCalendarVisualState.visibleEndDate
+      : snapshot?.days?.at(-1)?.date;
+    if (!isValidDateOnly(currentEndDate)) return;
+    productionCalendarVisualState = {
+      ...productionCalendarVisualState,
+      visibleEndDate: addProductionCalendarDays(currentEndDate, dayCount)
+    };
+    refreshTimelineOnly();
+  }
+
   function renderProductionCalendar(targetElement, result, options = {}) {
     const reopenExclusiveView = Boolean(productionCalendarExclusiveView);
     if (reopenExclusiveView) closeProductionCalendarExclusiveView({ restoreCalendar: false });
@@ -3812,7 +3830,16 @@ export function PlanningPage() {
           'gantt-aps': () => createGanttApsRenderer({
             onRequestMove: handleProductionCalendarMoveRequest,
             onRequestEdit: allocation => openProductionCalendarAllocationEditor(allocation),
-            onRequestSplit: allocation => openProductionCalendarAllocationEditor(allocation, { startSplit: true })
+            onRequestSplit: allocation => openProductionCalendarAllocationEditor(allocation, { startSplit: true }),
+            onRequestTransportAllocation: allocation => openProductionCalendarTransportModal(allocation),
+            onRequestOpenDay: date => openPlanningStockProjectionModal(date),
+            onRequestToggleManualWorkDate: payload => handleProductionCalendarManualWorkDate(payload),
+            onRequestEditDailyTeam: payload => handleProductionCalendarDailyTeam(payload),
+            onRequestExpandHorizon: payload => expandProductionCalendarHorizon(payload),
+            onRequestDiscardAllChanges: () => discardAllProductionCalendarChanges(),
+            onRequestOptimizeUtilization: () => handleProductionCalendarUtilizationOptimization(),
+            onRequestUndoManualChange: () => undoLastProductionCalendarChange(),
+            onRequestRedoManualChange: () => redoProductionCalendarChange()
           })
         },
         onLifecycleError: ({ error, rendererId, phase }) => {

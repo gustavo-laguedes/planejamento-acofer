@@ -11,13 +11,6 @@ function ensureProductionCalendarCss() {
 
 ensureProductionCalendarCss();
 
-export { ProductionCalendar } from './ProductionCalendar.js';
-export { ProductionCalendarGrid } from './ProductionCalendarGrid.js';
-export { ProductionCalendarToolbar } from './ProductionCalendarToolbar.js';
-export {
-  getProductionCalendarAllocationColor,
-  ProductionCalendarCard
-} from './ProductionCalendarCard.js';
 export {
   getProductionDisplayColor,
   getProductionDisplayFallbackColor,
@@ -25,24 +18,8 @@ export {
   mixProductionDisplayColor,
   PRODUCTION_DISPLAY_PALETTE
 } from '../planning-presentation/productionDisplayColor.js';
-export { ProductionCalendarDetails } from './ProductionCalendarDetails.js';
 export { ProductionCalendarEditor } from './ProductionCalendarEditor.js';
 export { ProductionCalendarSplitEditor, resolveProductionCalendarSplitPreview } from './ProductionCalendarSplitEditor.js';
-export { createProductionCalendarDragController } from './ProductionCalendarDrag.js';
-export {
-  activateProductionCalendarDrag,
-  cancelProductionCalendarDrag,
-  closeProductionCalendarDetails,
-  createProductionCalendarState,
-  finishProductionCalendarDrag,
-  startProductionCalendarDragIntent,
-  updateProductionCalendarDragHover,
-  updateProductionCalendarDragPointer,
-  openProductionCalendarDetails
-} from './ProductionCalendarState.js';
-export {
-  validateProductionCalendarAllocations
-} from './productionCalendar.validation.js';
 export {
   buildProductionCalendarDayPresentation,
   buildProductionCalendarDayProductivity,
