@@ -441,12 +441,14 @@ assert.match(
   /'gantt-aps':\s*\(\)\s*=>\s*createGanttApsRenderer\(\{\s*onRequestMove:\s*handleProductionCalendarMoveRequest,\s*onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\),\s*onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\)/,
   'PlanningPage deve conectar o Gantt APS aos callbacks neutros de movimento, edicao e split'
 );
+assert.match(pageSource, /renderer:\s*'gantt-aps'/);
 assert.doesNotMatch(
   pageSource,
   /const\s+calendar\s*=\s*ProductionCalendar\(\{[\s\S]{0,3000}onRequestMove:\s*handleProductionCalendarMoveRequest/,
   'Calendario V2 continua sem receber callback de movimento manual'
 );
-assert.match(pageSource, /globalThis\.PLANNING_SCHEDULE_RENDERER\s*\|\|\s*'auto'/);
+assert.doesNotMatch(pageSource, /globalThis\.PLANNING_SCHEDULE_RENDERER/);
+assert.doesNotMatch(pageSource, /'production-calendar-v2':\s*\(\)\s*=>\s*createProductionCalendarV2Renderer/);
 assert.match(cssSource, /\.gantt-aps__row--allocation\s*\{[\s\S]*height:\s*40px/);
 assert.match(cssSource, /\.gantt-aps__row--group\s*\{[\s\S]*height:\s*30px/);
 assert.match(cssSource, /\.gantt-aps__bar\s*\{[\s\S]*box-sizing:\s*border-box/);

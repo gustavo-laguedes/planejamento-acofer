@@ -23,8 +23,7 @@ import {
 import {
   buildPlanningScheduleViewModel,
   createGanttApsRenderer,
-  createPlanningScheduleRendererHost,
-  createProductionCalendarV2Renderer
+  createPlanningScheduleRendererHost
 } from '../shared/planning-schedule-view/index.js';
 import {
   escapeHtml,
@@ -3882,9 +3881,6 @@ export function PlanningPage() {
       planningScheduleRendererHost?.destroy();
       planningScheduleRendererHost = createPlanningScheduleRendererHost({
         factories: {
-          'production-calendar-v2': () => createProductionCalendarV2Renderer({
-            renderSnapshot: renderProductionCalendarSnapshot
-          }),
           'gantt-aps': () => createGanttApsRenderer({
             onRequestMove: handleProductionCalendarMoveRequest,
             onRequestEdit: allocation => openProductionCalendarAllocationEditor(allocation),
@@ -3896,7 +3892,7 @@ export function PlanningPage() {
         }
       });
       planningScheduleRendererHost.mount(targetElement, model, {
-        renderer: globalThis.PLANNING_SCHEDULE_RENDERER || 'auto'
+        renderer: 'gantt-aps'
       });
     } else {
       planningScheduleRendererHost.update(model);

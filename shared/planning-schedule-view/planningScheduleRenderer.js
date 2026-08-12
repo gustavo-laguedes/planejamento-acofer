@@ -1,5 +1,4 @@
 export const PLANNING_SCHEDULE_RENDERERS = Object.freeze({
-  PRODUCTION_CALENDAR_V2: 'production-calendar-v2',
   GANTT_APS: 'gantt-aps',
   AUTO: 'auto'
 });
@@ -16,12 +15,8 @@ export function normalizePlanningScheduleRenderer(value) {
 export function resolvePlanningScheduleRenderer(value, { autoPolicy } = {}) {
   const requested = normalizePlanningScheduleRenderer(value);
   if (requested !== PLANNING_SCHEDULE_RENDERERS.AUTO) return requested;
-  const policyChoice = typeof autoPolicy === 'function'
-    ? normalizePlanningScheduleRenderer(autoPolicy())
-    : PLANNING_SCHEDULE_RENDERERS.AUTO;
-  return policyChoice === PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2
-    ? policyChoice
-    : PLANNING_SCHEDULE_RENDERERS.GANTT_APS;
+  if (typeof autoPolicy === 'function') normalizePlanningScheduleRenderer(autoPolicy());
+  return PLANNING_SCHEDULE_RENDERERS.GANTT_APS;
 }
 
 function assertRendererLifecycle(renderer, rendererId) {

@@ -9,9 +9,5 @@ export {
   resolvePlanningScheduleRenderer
 } from './planningScheduleRenderer.js';
 export {
-  createProductionCalendarV2Renderer,
-  planningScheduleViewToProductionCalendarSnapshot
-} from './productionCalendarV2.renderer.js';
-export {
   createGanttApsRenderer
 } from './gantt-aps/index.js';

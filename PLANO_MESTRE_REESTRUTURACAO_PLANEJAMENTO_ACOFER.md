@@ -1071,16 +1071,16 @@ Todas as ações essenciais do PCP definidas para a versão 1 são acessíveis u
 
 ### Missão REF-032 — Ativar Gantt-only sem apagar V2
 
-**Status:** `[ ] PENDENTE`
+**Status:** `[ ] PARCIAL`
 
 #### Alterações esperadas
 
 - [ ] remover seleção `auto` da página de produção;
-- [ ] montar explicitamente `gantt-aps`;
-- [ ] impedir fallback para V2;
-- [ ] manter arquivos V2 temporariamente no repositório, sem runtime;
+- [x] montar explicitamente `gantt-aps`;
+- [x] impedir fallback para V2;
+- [x] manter arquivos V2 temporariamente no repositório, sem runtime operacional do Planejamento;
 - [ ] exibir estado de erro quando o Gantt falhar;
-- [ ] executar regressão completa;
+- [x] executar regressão completa;
 - [ ] homologar com o Gu.
 
 #### Período de segurança
@@ -2542,6 +2542,29 @@ Resultado: testes focados aprovados; suite final 98 testes, 98 aprovados e 0 fal
 Homologacao: browser nao executado; registrada apenas homologacao estrutural/read-only. Esta REF nao conclui REF-013.
 Riscos/pendencias: REF-013 homologacao manual, remocao fisica do renderer/ProductionCalendar/grid V2, CSS V2/compartilhado, flags/config legado, helpers V2 puros, `productiveMinutes`, turnos/capacidade, stock-only, identidade manual restante, autosave/descarte e `generatePlanningCode` permanecem pendentes.
 Proxima missao sugerida: remover a selecao explicita/config legado do V2, mantendo ainda os arquivos fisicos ate a missao de remocao definitiva.
+
+---
+
+### 2026-08-12 - REF-045 - Remover selecao/configuracao operacional do Calendario V2
+
+Status: CONCLUIDA TECNICAMENTE
+Executor/agent: Codex em missao pequena de Gantt-only; metodologia JARVIS/Toto aplicada pelo coordenador.
+Skills usadas: `acofer-investigation`, `acofer-implementation`, `acofer-production-calendar-ui`, `acofer-testing`.
+Branch/commit de referencia: `rebuild-production-calendar` / `dd97ef8`.
+Baseline: worktree inicial limpo; `node --test tests/*.js` inicial com 98 testes, 98 aprovados e 0 falhas.
+Objetivo: remover somente portas operacionais que permitiam selecionar/configurar `production-calendar-v2` como renderer do Planejamento, preservando implementacao fisica V2.
+Arquivos lidos: `AGENTS.md`, este plano, `docs/refactor/REF-043_GANTT_DISABLE_V2_AUTOMATIC_FALLBACK.md`, `docs/refactor/REF-044_GANTT_EDIT_SPLIT_PARITY.md`, `shared/planning-schedule-view/planningScheduleRenderer.js`, `shared/planning-schedule-view/index.js`, `shared/planning-schedule-view/productionCalendarV2.renderer.js`, `pages/PlanningPage.js`, `tests/planningScheduleRenderer.test.js`, `tests/ganttApsRenderer.test.js`, `tests/productionCalendarEditButton.test.js` e ocorrencias via `rg`.
+Arquivos alterados: `shared/planning-schedule-view/planningScheduleRenderer.js`, `shared/planning-schedule-view/index.js`, `pages/PlanningPage.js`, `tests/planningScheduleRenderer.test.js`, `tests/ganttApsRenderer.test.js`, `docs/refactor/REF-045_REMOVE_V2_RENDERER_SELECTION.md`, `PLANO_MESTRE_REESTRUTURACAO_PLANEJAMENTO_ACOFER.md`.
+Resumo do diff: removido `PRODUCTION_CALENDAR_V2` do enum ativo; `production-calendar-v2` e `autoPolicy` para V2 agora resolvem `gantt-aps`; barrel operacional deixou de exportar factory/adaptador V2; `PlanningPage` deixou de registrar factory V2 e de ler `globalThis.PLANNING_SCHEDULE_RENDERER`, montando explicitamente `gantt-aps`.
+Gate registrado: Gantt default, fallback automatico V2 desligado, Gantt com move/edit/split, edit/split conectados ao editor neutro, editor/controller sem dependencia do renderer V2 e nenhum fluxo saudavel da `PlanningPage` exigindo factory V2 operacional.
+Compatibilidade preservada: `fallbackRenderer` permanece no-op; `autoPolicy` permanece na assinatura; `ProductionCalendar`, `ProductionCalendarGrid`, `productionCalendarV2.renderer.js`, CSS V2, wrappers legados e testes fisicos V2 permanecem.
+Preservado por risco/missao propria: `USE_PRODUCTION_CALENDAR_V2`, `CalendarTimeline`, `timelineOperations`, snapshot helpers, callbacks de editor, estoque/projecao, warning/diagnostic helpers e fullscreen/exclusive view.
+Testes/comandos: `node --check shared/planning-schedule-view/planningScheduleRenderer.js`; `node --check pages/PlanningPage.js`; `node --test tests/planningScheduleRenderer.test.js`; `node --test tests/ganttApsRenderer.test.js`; `node --test tests/productionCalendarEditButton.test.js`; `node --test tests/productionCalendarSplitEditor.test.js`; `node --test tests/planningAllocationEditorController.test.js`; `node --test tests/*.js`; `git diff --check`.
+Resultado: testes focados aprovados; suite final 98 testes, 98 aprovados e 0 falhas; `git diff --check` sem erros, apenas avisos conhecidos LF -> CRLF.
+Homologacao: browser nao executado; esta REF nao conclui REF-013.
+Checkboxes atualizados: REF-032/Gantt-only marcada como parcial, com montagem explicita Gantt, bloqueio de fallback V2, V2 fisico preservado e regressao completa registrados.
+Riscos/pendencias: REF-013 homologacao manual; remocao fisica do renderer/ProductionCalendar/grid/CSS/wrappers/testes V2; remocao do fallback morto `USE_PRODUCTION_CALENDAR_V2 -> CalendarTimeline` em missao propria; documentacao historica antiga ainda menciona rollback V2.
+Proxima missao sugerida: remover o fallback morto `USE_PRODUCTION_CALENDAR_V2 -> CalendarTimeline` da `PlanningPage`, preservando `CalendarTimeline` para Analise/Comercial.
 
 ---
 

@@ -10,13 +10,14 @@ import {
   createProductionCalendarV2Renderer
 } from '../shared/planning-schedule-view/productionCalendarV2.renderer.js';
 
-assert.equal(normalizePlanningScheduleRenderer('production-calendar-v2'), 'production-calendar-v2');
+assert.equal(normalizePlanningScheduleRenderer('production-calendar-v2'), 'auto');
 assert.equal(normalizePlanningScheduleRenderer('gantt-aps'), 'gantt-aps');
 assert.equal(normalizePlanningScheduleRenderer('invalid'), 'auto');
+assert.equal(resolvePlanningScheduleRenderer('production-calendar-v2'), 'gantt-aps');
 assert.equal(resolvePlanningScheduleRenderer('auto'), 'gantt-aps');
 assert.equal(resolvePlanningScheduleRenderer(undefined), 'gantt-aps');
 assert.equal(resolvePlanningScheduleRenderer('auto', { autoPolicy: () => 'gantt-aps' }), 'gantt-aps');
-assert.equal(resolvePlanningScheduleRenderer('auto', { autoPolicy: () => 'production-calendar-v2' }), 'production-calendar-v2');
+assert.equal(resolvePlanningScheduleRenderer('auto', { autoPolicy: () => 'production-calendar-v2' }), 'gantt-aps');
 
 function lifecycle(name, events, { failMount = false, failUpdate = false } = {}) {
   return {
@@ -63,7 +64,7 @@ function assertThrowsMessage(callback, expectedMessage) {
   const host = createPlanningScheduleRendererHost({
     factories: {
       [PLANNING_SCHEDULE_RENDERERS.GANTT_APS]: () => lifecycle('gantt', events),
-      [PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2]: () => lifecycle('v2', events)
+      'production-calendar-v2': () => lifecycle('v2', events)
     }
   });
   host.mount({}, { tasks: [] });
@@ -77,7 +78,7 @@ function assertThrowsMessage(callback, expectedMessage) {
   const host = createPlanningScheduleRendererHost({
     factories: {
       [PLANNING_SCHEDULE_RENDERERS.GANTT_APS]: () => lifecycle('gantt', events),
-      [PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2]: () => lifecycle('v2', events)
+      'production-calendar-v2': () => lifecycle('v2', events)
     }
   });
   host.mount({}, { tasks: [] }, { renderer: 'gantt-aps' });
@@ -89,8 +90,8 @@ function assertThrowsMessage(callback, expectedMessage) {
     'gantt:mount',
     'gantt:focus:allocation-after-mount',
     'gantt:destroy',
-    'v2:mount',
-    'v2:focus:allocation-v2'
+    'gantt:mount',
+    'gantt:focus:allocation-v2'
   ]);
   host.destroy();
   assert.equal(host.focusAllocation('allocation-after-destroy'), false);
@@ -106,7 +107,7 @@ function assertThrowsMessage(callback, expectedMessage) {
         getViewportState() { return { renderer: 'gantt' }; },
         destroy() { events.push('gantt:destroy'); }
       }),
-      [PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2]: () => lifecycle('v2', events)
+      'production-calendar-v2': () => lifecycle('v2', events)
     }
   });
   host.mount({}, { tasks: [] }, { renderer: 'gantt-aps' });
@@ -119,7 +120,7 @@ function assertThrowsMessage(callback, expectedMessage) {
   const host = createPlanningScheduleRendererHost({
     factories: {
       [PLANNING_SCHEDULE_RENDERERS.GANTT_APS]: () => lifecycle('gantt', events, { failMount: true }),
-      [PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2]: () => lifecycle('v2', events)
+      'production-calendar-v2': () => lifecycle('v2', events)
     }
   });
   const error = assertThrowsMessage(
@@ -137,7 +138,7 @@ function assertThrowsMessage(callback, expectedMessage) {
   const host = createPlanningScheduleRendererHost({
     factories: {
       [PLANNING_SCHEDULE_RENDERERS.GANTT_APS]: () => lifecycle('gantt', events, { failUpdate: true }),
-      [PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2]: () => lifecycle('v2', events)
+      'production-calendar-v2': () => lifecycle('v2', events)
     }
   });
   host.mount({}, { tasks: [] }, { renderer: 'gantt-aps' });
@@ -155,7 +156,7 @@ function assertThrowsMessage(callback, expectedMessage) {
   const host = createPlanningScheduleRendererHost({
     factories: {
       [PLANNING_SCHEDULE_RENDERERS.GANTT_APS]: () => lifecycle('gantt', events, { failMount: true }),
-      [PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2]: () => lifecycle('v2', events)
+      'production-calendar-v2': () => lifecycle('v2', events)
     },
     onLifecycleError: event => lifecycleErrors.push({
       message: event.error.message,
@@ -176,13 +177,13 @@ function assertThrowsMessage(callback, expectedMessage) {
   const host = createPlanningScheduleRendererHost({
     factories: {
       [PLANNING_SCHEDULE_RENDERERS.GANTT_APS]: () => lifecycle('gantt', events),
-      [PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2]: () => lifecycle('v2', events)
+      'production-calendar-v2': () => lifecycle('v2', events)
     }
   });
   host.mount({}, { tasks: [] }, { renderer: 'production-calendar-v2' });
   host.update({ tasks: [{ id: 'allocation-v2' }] });
-  assert.equal(host.activeRendererId, 'production-calendar-v2');
-  assert.deepEqual(events, ['v2:mount', 'v2:update']);
+  assert.equal(host.activeRendererId, 'gantt-aps');
+  assert.deepEqual(events, ['gantt:mount', 'gantt:update']);
 }
 
 {
@@ -190,9 +191,9 @@ function assertThrowsMessage(callback, expectedMessage) {
   const host = createPlanningScheduleRendererHost({
     factories: {
       [PLANNING_SCHEDULE_RENDERERS.GANTT_APS]: () => lifecycle('gantt', events, { failMount: true }),
-      [PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2]: () => lifecycle('v2', events)
+      'production-calendar-v2': () => lifecycle('v2', events)
     },
-    fallbackRenderer: PLANNING_SCHEDULE_RENDERERS.PRODUCTION_CALENDAR_V2
+    fallbackRenderer: 'production-calendar-v2'
   });
   assertThrowsMessage(
     () => host.mount({}, { tasks: [] }, { renderer: 'gantt-aps' }),
@@ -253,12 +254,17 @@ assert.match(pageSource, /function focusFlowNodeInSchedule\(flowNode\)/);
 assert.match(pageSource, /focusPlanningFlowAllocation\(\{[\s\S]*rendererHost:\s*planningScheduleRendererHost/);
 assert.doesNotMatch(pageSource, /production-calendar-card\[data-allocation-id/, 'foco externo nao deve conhecer DOM do renderer');
 assert.doesNotMatch(pageSource, /gantt-aps__bar/, 'foco externo nao deve conhecer DOM do Gantt APS');
-assert.match(pageSource, /globalThis\.PLANNING_SCHEDULE_RENDERER\s*\|\|\s*'auto'/);
-assert.match(pageSource, /'production-calendar-v2':\s*\(\)\s*=>\s*createProductionCalendarV2Renderer/);
+assert.doesNotMatch(pageSource, /globalThis\.PLANNING_SCHEDULE_RENDERER/);
+assert.doesNotMatch(pageSource, /'production-calendar-v2':\s*\(\)\s*=>\s*createProductionCalendarV2Renderer/);
+assert.doesNotMatch(pageSource, /createProductionCalendarV2Renderer/);
 assert.doesNotMatch(pageSource, /rollback para o Calendário V2/);
 assert.match(
   pageSource,
   /'gantt-aps':\s*\(\)\s*=>\s*createGanttApsRenderer\(\{\s*onRequestMove:\s*handleProductionCalendarMoveRequest,\s*onRequestEdit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation\),\s*onRequestSplit:\s*allocation\s*=>\s*openProductionCalendarAllocationEditor\(allocation,\s*\{\s*startSplit:\s*true\s*\}\)/
 );
+assert.match(pageSource, /renderer:\s*'gantt-aps'/);
+const indexSource = readFileSync(new URL('../shared/planning-schedule-view/index.js', import.meta.url), 'utf8');
+assert.doesNotMatch(indexSource, /createProductionCalendarV2Renderer/);
+assert.match(indexSource, /createGanttApsRenderer/);
 
 console.log('planningScheduleRenderer.test.js ok');
