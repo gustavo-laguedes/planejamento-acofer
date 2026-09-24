@@ -41,9 +41,26 @@ export async function api(path, options = {}) {
     throw error;
   }
 
-  if (response.headers.get('content-type')?.includes('application/pdf')) {
-    return response.blob();
-  }
+  const contentType =
+  response.headers.get(
+    'content-type'
+  ) || '';
+
+if (
+  contentType.includes(
+    'application/pdf'
+  )
+  ||
+  contentType.includes(
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  )
+  ||
+  contentType.includes(
+    'application/vnd.ms-excel'
+  )
+) {
+  return response.blob();
+}
 
   return response.status === 204 ? null : response.json();
 }

@@ -2,6 +2,7 @@ import { api, getCurrentUser } from '../shared/api.js';
 import { DataTable } from '../shared/DataTable.js';
 import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { ROLES, canAccess, normalizeRole } from '../shared/rbac.js';
+import { openProductionExcelModal } from '../shared/ProductionExcelModal.js';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -198,12 +199,26 @@ export function ProductionPage(options = {}) {
   let machines = [];
   let matrix = [];
   let productionFilters = {
-    materialIds: [],
-    machineName: '',
-    startDate: '',
-    endDate: ''
-  };
-  let materialFilterDismissController = null;
+  materialIds: [],
+  machineName: '',
+  startDate: '',
+  endDate: ''
+};
+
+const PRODUCTION_PAGE_SIZE = 100;
+
+let productionPage = 1;
+
+let productionPagination = {
+  page: 1,
+  pageSize: PRODUCTION_PAGE_SIZE,
+  total: 0,
+  totalPages: 1,
+  from: 0,
+  to: 0
+};
+
+let materialFilterDismissController = null;
 
   function toast(error) {
     window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message || error }));
@@ -272,13 +287,68 @@ export function ProductionPage(options = {}) {
     return productionModelsFor(materialId).find(model => String(model.name) === String(modelName)) || null;
   }
 
-  function modelInputsFor(materialId, modelName) {
-    const model = productionModelByName(materialId, modelName);
-    return (model?.inputMaterials || []).map(input => {
-      const material = materials.find(item => String(item.id) === String(input.inputMaterialId || input.id));
-      return material ? { material, lot: input.lot || '' } : null;
-    }).filter(Boolean);
+  function modelInputsFor(
+  materialId,
+  modelName
+) {
+  const model =
+    productionModelByName(
+      materialId,
+      modelName
+    );
+
+  return (
+    model?.inputMaterials || []
+  )
+    .map(input => {
+      const material =
+        materials.find(
+          item =>
+            String(item.id) ===
+            String(
+              input.inputMaterialId ||
+              input.id
+            )
+        );
+
+      return material
+        ? {
+            material,
+
+            lot:
+              input.lot || '',
+
+            qtyPerOutput:
+              Number(
+                input.qtyPerOutput ||
+                input.qty_per_output ||
+                1
+              )
+          }
+        : null;
+    })
+    .filter(Boolean);
+}
+
+function machineForName(
+  machineName
+) {
+  const normalized =
+    String(machineName || '')
+      .trim()
+      .toLowerCase();
+
+  if (!normalized) {
+    return null;
   }
+
+  return machines.find(
+    machine =>
+      String(machine.name || '')
+        .trim()
+        .toLowerCase() === normalized
+  ) || null;
+}
 
   function consumedInputSummary(row) {
     const inputs = Array.isArray(row.consumed_inputs) && row.consumed_inputs.length
@@ -303,14 +373,80 @@ export function ProductionPage(options = {}) {
         </div>
         <div class="panel production-table-card">
           <div class="section-heading">
-            <h2>Produ&ccedil;&otilde;es lan&ccedil;adas</h2>
-            ${canWriteProduction ? '<button class="primary-button realize-production" type="button">Realizar produ&ccedil;&atilde;o</button>' : ''}
-          </div>
+
+  <h2>
+    Produ&ccedil;&otilde;es lan&ccedil;adas
+  </h2>
+
+  ${
+    canWriteProduction
+      ? `
+        <div class="production-heading-actions">
+
+          <button
+            class="
+              secondary-button
+              production-excel-trigger
+            "
+            type="button"
+            title="Importar por Excel"
+            aria-label="Importar por Excel"
+          >
+
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="M6 2h9l5 5v15H6z"/>
+              <path d="M14 2v6h6"/>
+              <path d="M12 11v7"/>
+              <path d="m9 15 3 3 3-3"/>
+            </svg>
+
+          </button>
+
+
+          <button
+            class="
+              primary-button
+              realize-production
+            "
+            type="button"
+          >
+            Realizar produ&ccedil;&atilde;o
+          </button>
+
+        </div>
+      `
+      : ''
+  }
+
+</div>
           <div class="table-target"></div>
+<div class="production-pagination-target"></div>
         </div>
       </div>
     `;
     target.querySelector('.realize-production')?.addEventListener('click', () => openProductionModal().catch(toast));
+    target
+  .querySelector(
+    '.production-excel-trigger'
+  )
+  ?.addEventListener(
+    'click',
+    () => {
+
+      openProductionExcelModal({
+  onApplied:
+    async () => {
+      productionPage = 1;
+      await loadProductionTable();
+    }
+})
+        .catch(toast);
+
+    }
+  );
     await loadProductionTable();
     if (options.openLaunchId) await openProductionById(options.openLaunchId);
   }
@@ -321,25 +457,90 @@ export function ProductionPage(options = {}) {
     await openProductionModal(row);
   }
 
-  function productionLaunchesPath(options = {}) {
-    const includeMaterialIds = options.includeMaterialIds !== false;
-    const params = new URLSearchParams();
-    if (productionFilters.startDate) params.set('startDate', productionFilters.startDate);
-    if (productionFilters.endDate) params.set('endDate', productionFilters.endDate);
-    if (productionFilters.machineName) params.set('machineName', productionFilters.machineName);
-    if (includeMaterialIds && productionFilters.materialIds?.length) params.set('materialIds', productionFilters.materialIds.join(','));
-    const query = params.toString();
-    return query ? `/actuals/launches?${query}` : '/actuals/launches';
+ 
+  function productionLaunchesPath() {
+  const params =
+    new URLSearchParams();
+
+  params.set(
+    'includeMeta',
+    '1'
+  );
+
+  params.set(
+    'page',
+    String(productionPage)
+  );
+
+  params.set(
+    'pageSize',
+    String(
+      PRODUCTION_PAGE_SIZE
+    )
+  );
+
+  if (productionFilters.startDate) {
+    params.set(
+      'startDate',
+      productionFilters.startDate
+    );
   }
 
+  if (productionFilters.endDate) {
+    params.set(
+      'endDate',
+      productionFilters.endDate
+    );
+  }
+
+  if (productionFilters.machineName) {
+    params.set(
+      'machineName',
+      productionFilters.machineName
+    );
+  }
+
+  if (
+    productionFilters
+      .materialIds
+      ?.length
+  ) {
+    params.set(
+      'materialIds',
+      productionFilters
+        .materialIds
+        .join(',')
+    );
+  }
+
+  return (
+    `/actuals/launches?` +
+    params.toString()
+  );
+}
+
   async function loadProductionTable() {
-    let rows = await api(productionLaunchesPath());
-    let filterRows = productionFilters.materialIds?.length
-      ? await api(productionLaunchesPath({ includeMaterialIds: false }))
-      : rows;
+  let result =
+    await api(
+      productionLaunchesPath()
+    );
+
+  let rows =
+    result.rows || [];
+
+  let summary =
+    result.summary || {};
+
+  productionPagination =
+    result.pagination ||
+    productionPagination;
     const tableTarget = target.querySelector('.table-target');
     const filtersTarget = target.querySelector('.production-filters-target');
     const indicatorsTarget = target.querySelector('.production-indicators-target');
+    const paginationTarget =
+  target.querySelector(
+    '.production-pagination-target'
+  );
     tableTarget.innerHTML = '';
     const productionStatus = row => {
       if (isCanceledProduction(row)) return '<span class="production-status-pill canceled">Cancelada</span>';
@@ -351,8 +552,28 @@ export function ProductionPage(options = {}) {
       tableTarget.innerHTML = '';
       const productionTable = DataTable({
         columns: [
-          { label: 'Data', render: row => formatDateOnly(row.production_date), sortValue: row => row.production_date },
-          { label: 'Material produzido', key: 'material_name' },
+          {
+  label: 'Data',
+  render: row =>
+    formatDateOnly(
+      row.production_date
+    ),
+  sortValue: row =>
+    row.production_date
+},
+
+{
+  label: 'Local',
+  render: row =>
+    escapeHtml(
+      row.location_name || '-'
+    )
+},
+
+{
+  label: 'Material produzido',
+  key: 'material_name'
+},
           { label: 'Modelo de produção', render: row => row.production_model_name || '-' },
           { label: 'Materiais consumidos', render: consumedInputSummary },
           { label: 'Máquina', render: row => escapeHtml(displayMachineName(row.machine_name)) || '-' },
@@ -368,39 +589,134 @@ export function ProductionPage(options = {}) {
           } },
           { label: 'Beneficiamento', render: row => producedLots(row).map(lot => lot.benefitNumber || lot.benefit_number).filter(Boolean).join(', ') || row.benefit_number || '-' },
           { label: 'Observação', render: row => row.notes || '-' },
-          { label: 'Status', render: productionStatus },
-          { label: isOperator ? 'Visualizar' : 'Editar', render: row => canWriteProduction ? `<button class="link-button" data-edit-production="${row.id}">${isOperator ? 'Visualizar' : 'Editar'}</button>` : '' }
+{ label: 'Status', render: productionStatus }
         ],
         rows: filteredProductionRows(rows),
         rowClass: row => [
-          isCanceledProduction(row) ? 'production-canceled-row' : '',
-          !isCanceledProduction(row) && row.status !== 'cancel_requested' && productionNeedsBenefit(row) ? 'production-needs-benefit-row' : ''
-        ].filter(Boolean).join(' ')
+  'production-clickable-row',
+  `production-id-${row.id}`,
+  isCanceledProduction(row) ? 'production-canceled-row' : '',
+  !isCanceledProduction(row) &&
+    row.status !== 'cancel_requested' &&
+    productionNeedsBenefit(row)
+      ? 'production-needs-benefit-row'
+      : ''
+].filter(Boolean).join(' ')
       });
       productionTable.classList.add('production-launch-table-wrap');
       tableTarget.appendChild(productionTable);
     };
-    const refreshProductionRows = async (options = {}) => {
-      rows = await api(productionLaunchesPath());
-      if (options.refreshFilterRows || !filterRows.length) {
-        filterRows = productionFilters.materialIds?.length
-          ? await api(productionLaunchesPath({ includeMaterialIds: false }))
-          : rows;
-      }
-      renderProductionTable();
-      renderProductionFilters(filtersTarget, filterRows, options);
-      renderProductionIndicators(indicatorsTarget, filteredProductionRows(rows));
-    };
+    const refreshProductionRows =
+  async (options = {}) => {
+
+    const response =
+      await api(
+        productionLaunchesPath()
+      );
+
+    rows =
+      response.rows || [];
+
+    summary =
+      response.summary || {};
+
+    productionPagination =
+      response.pagination ||
+      productionPagination;
+
+    productionPage =
+      Number(
+        productionPagination.page || 1
+      );
+
     renderProductionTable();
-    renderProductionFilters(filtersTarget, filterRows);
-    renderProductionIndicators(indicatorsTarget, filteredProductionRows(rows));
+
+    renderProductionFilters(
+      filtersTarget,
+      options
+    );
+
+    renderProductionIndicators(
+      indicatorsTarget,
+      summary
+    );
+
+    renderProductionPagination(
+      paginationTarget,
+      productionPagination
+    );
+  };
+    productionPage =
+  Number(
+    productionPagination.page || 1
+  );
+
+renderProductionTable();
+
+renderProductionFilters(
+  filtersTarget
+);
+
+renderProductionIndicators(
+  indicatorsTarget,
+  summary
+);
+
+renderProductionPagination(
+  paginationTarget,
+  productionPagination
+);
     tableTarget.onclick = event => {
-      if (!canWriteProduction) return;
-      const button = event.target.closest('[data-edit-production]');
-      if (!button) return;
-      const row = rows.find(item => String(item.id) === String(button.dataset.editProduction));
-      if (row) openProductionModal(row).catch(toast);
-    };
+  /*
+   * Ignora controles interativos caso futuramente
+   * algum botão/input seja colocado dentro da tabela.
+   */
+  if (
+    event.target.closest(
+      'button, a, input, select, textarea'
+    )
+  ) {
+    return;
+  }
+
+  const tableRow =
+    event.target.closest(
+      'tbody tr.production-clickable-row'
+    );
+
+  if (!tableRow) {
+    return;
+  }
+
+  const idClass =
+    [...tableRow.classList]
+      .find(
+        className =>
+          className.startsWith(
+            'production-id-'
+          )
+      );
+
+  const productionId =
+    idClass
+      ? idClass.slice(
+          'production-id-'.length
+        )
+      : '';
+
+  const production =
+    rows.find(
+      item =>
+        String(item.id) ===
+        String(productionId)
+    );
+
+  if (production) {
+    openProductionModal(
+      production
+    ).catch(toast);
+  }
+};
     filtersTarget.onsubmit = async event => {
       event.preventDefault();
       const form = event.target;
@@ -410,33 +726,101 @@ export function ProductionPage(options = {}) {
         startDate: form.elements.filterStartDate.value,
         endDate: form.elements.filterEndDate.value
       };
-      await refreshProductionRows({ refreshFilterRows: true });
+      productionPage = 1;
+      await refreshProductionRows();
     };
     filtersTarget.onclick = async event => {
-      if (!event.target.closest('.clear-production-filters')) return;
-      productionFilters = {
-        materialIds: [],
-        machineName: '',
-        startDate: '',
-        endDate: ''
-      };
-      const form = filtersTarget.querySelector('.production-filters');
-      if (form) {
-        form.elements.filterMachineName.value = '';
-        form.elements.filterStartDate.value = '';
-        form.elements.filterEndDate.value = '';
-      }
-      await refreshProductionRows({ refreshFilterRows: true });
-    };
-    filtersTarget.addEventListener('change', async event => {
-      if (!event.target.matches('[name="filterMaterialId"]')) return;
-      const searchValue = filtersTarget.querySelector('[name="filterMaterialSearch"]')?.value || '';
-      const value = String(event.target.value);
-      productionFilters.materialIds = event.target.checked
-        ? [...new Set([...productionFilters.materialIds, value])]
-        : productionFilters.materialIds.filter(id => id !== value);
-      await refreshProductionRows({ keepOpen: true, searchValue });
+  if (
+    !event.target.closest(
+      '.clear-production-filters'
+    )
+  ) {
+    return;
+  }
+
+  productionFilters = {
+    materialIds: [],
+    machineName: '',
+    startDate: '',
+    endDate: ''
+  };
+
+  /*
+   * Sempre volta para a página 1
+   * quando os filtros mudam.
+   */
+  productionPage = 1;
+
+  const form =
+    filtersTarget.querySelector(
+      '.production-filters'
+    );
+
+  if (form) {
+    form.elements
+      .filterMachineName
+      .value = '';
+
+    form.elements
+      .filterStartDate
+      .value = '';
+
+    form.elements
+      .filterEndDate
+      .value = '';
+  }
+
+  await refreshProductionRows();
+};
+    filtersTarget.addEventListener(
+  'change',
+  async event => {
+
+    if (
+      !event.target.matches(
+        '[name="filterMaterialId"]'
+      )
+    ) {
+      return;
+    }
+
+    const searchValue =
+      filtersTarget.querySelector(
+        '[name="filterMaterialSearch"]'
+      )?.value || '';
+
+    const value =
+      String(
+        event.target.value
+      );
+
+    productionFilters.materialIds =
+      event.target.checked
+        ? [
+            ...new Set([
+              ...productionFilters.materialIds,
+              value
+            ])
+          ]
+        : productionFilters
+            .materialIds
+            .filter(
+              id =>
+                id !== value
+            );
+
+    /*
+     * Mudou material:
+     * volta para página 1.
+     */
+    productionPage = 1;
+
+    await refreshProductionRows({
+      keepOpen: true,
+      searchValue
     });
+  }
+);
     filtersTarget.addEventListener('input', event => {
       if (!event.target.matches('[name="filterMaterialSearch"]')) return;
       const wrapper = event.target.closest('.production-material-filter');
@@ -458,14 +842,156 @@ export function ProductionPage(options = {}) {
       const removeButton = event.target.closest('[data-remove-material-filter]');
       if (!allButton && !clearButton && !removeButton) return;
       const searchValue = filtersTarget.querySelector('[name="filterMaterialSearch"]')?.value || '';
-      const availableIds = materialIdsForRows(filterRows);
+      const availableIds =
+  materials
+    .filter(
+      material =>
+        material.active !== false
+    )
+    .map(
+      material =>
+        String(material.id)
+    );
       if (allButton) productionFilters.materialIds = availableIds;
       if (clearButton) productionFilters.materialIds = [];
       if (removeButton) {
         productionFilters.materialIds = productionFilters.materialIds.filter(id => id !== String(removeButton.dataset.removeMaterialFilter));
       }
+      productionPage = 1;
       await refreshProductionRows({ keepOpen: Boolean(allButton || clearButton), searchValue: allButton || clearButton ? searchValue : '' });
     });
+
+    paginationTarget.onclick =
+  async event => {
+
+    const button =
+      event.target.closest(
+        '[data-production-page]'
+      );
+
+    /*
+     * Clicou em qualquer lugar que
+     * não seja botão da paginação.
+     */
+    if (!button) {
+      return;
+    }
+
+    const action =
+      button.dataset
+        .productionPage;
+
+    const currentPage =
+      Number(
+        productionPagination.page ||
+        1
+      );
+
+    const totalPages =
+      Math.max(
+        Number(
+          productionPagination
+            .totalPages ||
+          1
+        ),
+        1
+      );
+
+    /*
+     * Começa assumindo que
+     * continuaremos na página atual.
+     */
+    let nextPage =
+      currentPage;
+
+
+    /*
+     * PRIMEIRA
+     */
+    if (
+      action === 'first'
+    ) {
+      nextPage = 1;
+    }
+
+
+    /*
+     * ANTERIOR
+     */
+    if (
+      action === 'previous'
+    ) {
+      nextPage =
+        Math.max(
+          1,
+          currentPage - 1
+        );
+    }
+
+
+    /*
+     * PRÓXIMA
+     */
+    if (
+      action === 'next'
+    ) {
+      nextPage =
+        Math.min(
+          totalPages,
+          currentPage + 1
+        );
+    }
+
+
+    /*
+     * ÚLTIMA
+     */
+    if (
+      action === 'last'
+    ) {
+      nextPage =
+        totalPages;
+    }
+
+
+    /*
+     * Se por algum motivo tentou
+     * ir para a mesma página,
+     * não faz nova consulta.
+     */
+    if (
+      nextPage === currentPage
+    ) {
+      return;
+    }
+
+
+    /*
+     * Atualiza a página que deverá
+     * ser solicitada ao backend.
+     */
+    productionPage =
+      nextPage;
+
+
+    /*
+     * Busca somente os 100 registros
+     * daquela página.
+     */
+    await refreshProductionRows();
+
+
+    /*
+     * Depois de trocar de página,
+     * volta visualmente para o começo
+     * da tabela.
+     */
+    tableTarget.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    });
+  };
+    
   }
 
   function closeMaterialFilter(wrapper) {
@@ -516,19 +1042,39 @@ export function ProductionPage(options = {}) {
     if (emptyState) emptyState.hidden = visibleCount > 0;
   }
 
-  function materialIdsForRows(rows) {
-    const idsInRows = new Set(rows.map(row => String(row.material_id)));
-    return materials
-      .filter(material => idsInRows.has(String(material.id)))
-      .map(material => String(material.id));
-  }
 
-  function renderProductionFilters(filtersTarget, rows, options = {}) {
-    const rowMachines = [...new Set(rows.map(row => row.machine_name).filter(Boolean))]
-      .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  function renderProductionFilters(
+  filtersTarget,
+  options = {}
+) {
+    const rowMachines =
+  [
+    ...new Set(
+      machines
+        .filter(
+          machine =>
+            machine.active !== false
+        )
+        .map(
+          machine =>
+            machine.name
+        )
+        .filter(Boolean)
+    )
+  ]
+    .sort(
+      (a, b) =>
+        a.localeCompare(
+          b,
+          'pt-BR'
+        )
+    );
     const selectedIds = new Set((productionFilters.materialIds || []).map(String));
     const materialFilterItems = materials
-      .filter(material => materialIdsForRows(rows).includes(String(material.id)))
+  .filter(
+    material =>
+      material.active !== false
+  )
       .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'))
       .map(material => `
         <label class="production-material-option" data-material-search="${escapeHtml(normalizeMaterialFilterSearch([material.name, ...(material.codes || [])].join(' ')))}">
@@ -598,36 +1144,229 @@ export function ProductionPage(options = {}) {
     });
   }
 
-  function renderProductionIndicators(indicatorsTarget, rows) {
-    const activeRows = rows.filter(row => !isCanceledProduction(row));
-    const totals = rows.reduce((acc, row) => {
-      if (isCanceledProduction(row)) {
-        acc.canceled += 1;
-        return acc;
-      }
-      const lots = producedLots(row);
-      acc.lots += lots.length;
-      if (row.status !== 'cancel_requested' && productionNeedsBenefit(row)) acc.pendingBenefit += 1;
-      return acc;
-    }, { lots: 0, pendingBenefit: 0, canceled: 0 });
-    indicatorsTarget.innerHTML = `
-      <div class="summary-grid production-summary-grid">
-        <article class="metric-card compact"><span>Total de produ&ccedil;&otilde;es</span><strong>${formatNumber(activeRows.length)}</strong></article>
-        <article class="metric-card compact"><span>Total produzido unidade principal</span><strong>${unitTotals(activeRows, 'quantity', 'primaryUnit')}</strong></article>
-        <article class="metric-card compact"><span>Total produzido unidade secund&aacute;ria (fator)</span><strong>${unitTotals(activeRows, 'secondaryQty', 'secondaryUnit')}</strong></article>
-        <article class="metric-card compact"><span>Peso real produzido unidade secund&aacute;ria</span><strong>${realWeightTotals(activeRows)}</strong></article>
-        <article class="metric-card compact"><span>Quantidade de lotes gerados</span><strong>${formatNumber(totals.lots)}</strong></article>
-        <article class="metric-card compact"><span>Produ&ccedil;&otilde;es pendentes de beneficiamento</span><strong>${formatNumber(totals.pendingBenefit)}</strong></article>
-        <article class="metric-card compact"><span>Produ&ccedil;&otilde;es canceladas</span><strong>${formatNumber(totals.canceled)}</strong></article>
-      </div>
-    `;
+  function formatProductionSummaryTotals(
+  totals = []
+) {
+  const formatted =
+    totals
+      .filter(
+        item =>
+          Number(
+            item.quantity || 0
+          ) > 0
+      )
+      .map(
+        item =>
+          formatQuantityUnit(
+            item.quantity,
+            item.unit
+          )
+      );
+
+  return formatted.length
+    ? formatted.join(' / ')
+    : formatQuantityUnit(
+        0,
+        ''
+      );
+}
+
+
+function renderProductionIndicators(
+  indicatorsTarget,
+  summary = {}
+) {
+  indicatorsTarget.innerHTML = `
+    <div class="summary-grid production-summary-grid">
+
+      <article class="metric-card compact">
+        <span>Total de produ&ccedil;&otilde;es</span>
+        <strong>
+          ${formatNumber(
+            summary.totalProductions
+          )}
+        </strong>
+      </article>
+
+      <article class="metric-card compact">
+        <span>Total produzido unidade principal</span>
+        <strong>
+          ${formatProductionSummaryTotals(
+            summary.totalPrimary
+          )}
+        </strong>
+      </article>
+
+      <article class="metric-card compact">
+        <span>Total produzido unidade secund&aacute;ria (fator)</span>
+        <strong>
+          ${formatProductionSummaryTotals(
+            summary.totalSecondary
+          )}
+        </strong>
+      </article>
+
+      <article class="metric-card compact">
+        <span>Peso real produzido unidade secund&aacute;ria</span>
+        <strong>
+          ${formatProductionSummaryTotals(
+            summary.realWeight
+          )}
+        </strong>
+      </article>
+
+      <article class="metric-card compact">
+        <span>Quantidade de lotes gerados</span>
+        <strong>
+          ${formatNumber(
+            summary.lots
+          )}
+        </strong>
+      </article>
+
+      <article class="metric-card compact">
+        <span>Produ&ccedil;&otilde;es pendentes de beneficiamento</span>
+        <strong>
+          ${formatNumber(
+            summary.pendingBenefit
+          )}
+        </strong>
+      </article>
+
+      <article class="metric-card compact">
+        <span>Produ&ccedil;&otilde;es canceladas</span>
+        <strong>
+          ${formatNumber(
+            summary.canceled
+          )}
+        </strong>
+      </article>
+
+    </div>
+  `;
+}
+
+
+function renderProductionPagination(
+  paginationTarget,
+  pagination = {}
+) {
+  if (!paginationTarget) {
+    return;
   }
+
+  const total =
+    Number(
+      pagination.total || 0
+    );
+
+  const pageNumber =
+    Math.max(
+      Number(
+        pagination.page || 1
+      ),
+      1
+    );
+
+  const totalPages =
+    Math.max(
+      Number(
+        pagination.totalPages || 1
+      ),
+      1
+    );
+
+  const from =
+    Number(
+      pagination.from || 0
+    );
+
+  const to =
+    Number(
+      pagination.to || 0
+    );
+
+  if (!total) {
+    paginationTarget.innerHTML = '';
+    return;
+  }
+
+  paginationTarget.innerHTML = `
+    <div class="production-pagination">
+
+      <span class="production-pagination-info">
+        Exibindo
+        <strong>${formatNumber(from)}</strong>
+        –
+        <strong>${formatNumber(to)}</strong>
+        de
+        <strong>${formatNumber(total)}</strong>
+        registros
+      </span>
+
+      <div class="production-pagination-actions">
+
+        <button
+          class="secondary-button"
+          type="button"
+          data-production-page="first"
+          ${pageNumber <= 1 ? 'disabled' : ''}
+        >
+          Primeira
+        </button>
+
+        <button
+          class="secondary-button"
+          type="button"
+          data-production-page="previous"
+          ${pageNumber <= 1 ? 'disabled' : ''}
+        >
+          Anterior
+        </button>
+
+        <span class="production-pagination-page">
+          P&aacute;gina
+          <strong>${formatNumber(pageNumber)}</strong>
+          de
+          <strong>${formatNumber(totalPages)}</strong>
+        </span>
+
+        <button
+          class="secondary-button"
+          type="button"
+          data-production-page="next"
+          ${pageNumber >= totalPages ? 'disabled' : ''}
+        >
+          Pr&oacute;xima
+        </button>
+
+        <button
+          class="secondary-button"
+          type="button"
+          data-production-page="last"
+          ${pageNumber >= totalPages ? 'disabled' : ''}
+        >
+          &Uacute;ltima
+        </button>
+
+      </div>
+
+    </div>
+  `;
+}
 
   async function openProductionModal(row = null) {
     await loadLookups();
     const isCancelRequested = String(row?.status || '').toLowerCase() === 'cancel_requested';
     const canDecideCancellation = Boolean(row && isCancelRequested && canWriteProduction && !isOperator);
-    const readOnlyMode = Boolean(row && (isOperator || isCancelRequested));
+    const readOnlyMode = Boolean(
+  row &&
+  (
+    !canWriteProduction ||
+    isOperator ||
+    isCancelRequested
+  )
+);
     const backdrop = document.createElement('div');
     const modalStatusClass = isCanceledProduction(row)
       ? ' production-canceled-modal'
@@ -653,9 +1392,42 @@ export function ProductionPage(options = {}) {
               </div>
               <input name="materialId" type="hidden" />
             </label>
-            <label>Modelo de produ&ccedil;&atilde;o<select name="productionModelName" required></select></label>
-            <label>M&aacute;quina<select name="machineName" required><option value="">Selecione um material</option></select></label>
-            <label>Quantidade de pessoas<input name="peopleCount" type="number" min="1" required /></label>
+            <label>
+  Modelo de produ&ccedil;&atilde;o
+  <select
+    name="productionModelName"
+    required
+  ></select>
+</label>
+
+<label>
+  M&aacute;quina
+  <select
+    name="machineName"
+    required
+  >
+    <option value="">
+      Selecione um material
+    </option>
+  </select>
+</label>
+
+<div class="readonly-field production-location-field">
+  <span>Local</span>
+  <strong class="production-location-value">
+    -
+  </strong>
+</div>
+
+<label>
+  Quantidade de pessoas
+  <input
+    name="peopleCount"
+    type="number"
+    min="1"
+    required
+  />
+</label>
             <label class="wide-field">Observa&ccedil;&atilde;o<input name="notes" /></label>
           </div>
           <section class="consumed-inputs-section">
@@ -726,12 +1498,34 @@ export function ProductionPage(options = {}) {
     }
 
     function collectConsumedInputs() {
-      consumedInputs = [...inputsTarget.querySelectorAll('[data-consumed-material-id]')].map(input => ({
-        materialId: Number(input.dataset.consumedMaterialId),
-        lot: input.value.trim()
-      }));
-      return consumedInputs;
-    }
+  consumedInputs = [
+    ...inputsTarget.querySelectorAll(
+      '[data-consumed-material-id]'
+    )
+  ].map(input => ({
+    materialId:
+      Number(
+        input.dataset.consumedMaterialId
+      ),
+
+    lot:
+      input.value.trim(),
+
+    qtyPerOutput:
+      Number(
+        input.dataset.qtyPerOutput ||
+        0
+      ),
+
+    consumedQty:
+      Number(
+        input.dataset.consumedQty ||
+        0
+      )
+  }));
+
+  return consumedInputs;
+}
 
     function updateModelOptions() {
       const models = productionModelsFor(form.elements.materialId.value);
@@ -752,43 +1546,274 @@ export function ProductionPage(options = {}) {
     }
 
     function renderConsumedInputs() {
-      const storedInputs = consumedInputs.map(input => ({ ...input }));
-      const visibleInputs = [...inputsTarget.querySelectorAll('[data-consumed-material-id]')].map(input => ({
-        materialId: Number(input.dataset.consumedMaterialId),
-        lot: input.value.trim()
-      }));
-      const previous = new Map(visibleInputs.map(input => [String(input.materialId), input.lot]));
-      const modelInputs = modelInputsFor(form.elements.materialId.value, form.elements.productionModelName.value);
-      consumedInputs = modelInputs.map(input => ({
-        materialId: Number(input.material.id),
-        materialName: input.material.name,
-        materialCode: firstCode(input.material),
-        lot: previous.get(String(input.material.id)) ?? storedInputs.find(current => consumedInputMatchesMaterial(current, input.material))?.lot ?? ''
-      }));
-      inputsTarget.innerHTML = consumedInputs.length
-        ? consumedInputs.map(input => `
-          <div class="consumed-input-row">
-            <div class="readonly-field"><span>Material consumido</span>${chips([input.materialName])}</div>
-            <label>Lote consumido<input data-consumed-material-id="${input.materialId}" value="${escapeHtml(input.lot)}" required ${readOnlyMode ? 'readonly' : ''} /></label>
-          </div>
-        `).join('')
-        : '<div class="empty-state compact">Selecione material produzido e modelo de produ&ccedil;&atilde;o.</div>';
-    }
+  const storedInputs =
+    consumedInputs.map(
+      input => ({ ...input })
+    );
 
-    function updateMachineLock() {
-      const currentValue = form.elements.machineName.value || row?.machine_name || '';
-      const validMachines = machineNamesForMaterial(selectedProducedMaterial());
-      form.elements.machineName.innerHTML = validMachines.length
-        ? `${validMachines.length > 1 ? '<option value="">Selecione</option>' : ''}${validMachines.map(machine => `<option value="${escapeHtml(machine)}">${escapeHtml(machine)}</option>`).join('')}`
-        : '<option value="">Sem produtividade cadastrada</option>';
-      if (validMachines.includes(currentValue)) {
-        form.elements.machineName.value = currentValue;
-      } else if (validMachines.length === 1) {
-        form.elements.machineName.value = validMachines[0];
-      }
-      form.elements.machineName.disabled = readOnlyMode || validMachines.length <= 1;
-      form.elements.machineName.toggleAttribute('data-locked', validMachines.length <= 1);
-    }
+  const visibleInputs = [
+    ...inputsTarget.querySelectorAll(
+      '[data-consumed-material-id]'
+    )
+  ].map(input => ({
+    materialId:
+      Number(
+        input.dataset.consumedMaterialId
+      ),
+
+    lot:
+      input.value.trim(),
+
+    qtyPerOutput:
+      Number(
+        input.dataset.qtyPerOutput ||
+        0
+      ),
+
+    consumedQty:
+      Number(
+        input.dataset.consumedQty ||
+        0
+      )
+  }));
+
+  const previous =
+    new Map(
+      visibleInputs.map(
+        input => [
+          String(input.materialId),
+          input
+        ]
+      )
+    );
+
+  const modelInputs =
+    modelInputsFor(
+      form.elements.materialId.value,
+      form.elements.productionModelName.value
+    );
+
+  const producedQuantity =
+    Number(
+      lines
+        .reduce(
+          (sum, line) =>
+            sum +
+            Number(
+              line.quantity || 0
+            ),
+          0
+        )
+        .toFixed(6)
+    );
+
+  consumedInputs =
+    modelInputs.map(input => {
+      const previousInput =
+        previous.get(
+          String(input.material.id)
+        );
+
+      const storedInput =
+        storedInputs.find(
+          current =>
+            consumedInputMatchesMaterial(
+              current,
+              input.material
+            )
+        );
+
+      const qtyPerOutput =
+        Number(
+          previousInput?.qtyPerOutput ||
+          storedInput?.qtyPerOutput ||
+          storedInput?.qty_per_output ||
+          input.qtyPerOutput ||
+          1
+        );
+
+      const consumedQty =
+        Number(
+          (
+            producedQuantity *
+            qtyPerOutput
+          ).toFixed(6)
+        );
+
+      return {
+        materialId:
+          Number(input.material.id),
+
+        materialName:
+          input.material.name,
+
+        materialCode:
+          firstCode(input.material),
+
+        lot:
+          previousInput?.lot ??
+          storedInput?.lot ??
+          '',
+
+        qtyPerOutput,
+
+        consumedQty
+      };
+    });
+
+  inputsTarget.innerHTML =
+    consumedInputs.length
+      ? consumedInputs
+          .map(
+            input => `
+              <div class="consumed-input-row">
+
+                <div class="readonly-field">
+                  <span>
+                    Material consumido
+                  </span>
+
+                  ${chips([
+                    input.materialName
+                  ])}
+                </div>
+
+                <div class="readonly-field">
+                  <span>
+                    Qtd. por unidade
+                  </span>
+
+                  ${chips([
+                    formatNumber(
+                      input.qtyPerOutput
+                    )
+                  ])}
+                </div>
+
+                <div class="readonly-field">
+                  <span>
+                    Qtd. consumida
+                  </span>
+
+                  ${chips([
+                    formatNumber(
+                      input.consumedQty
+                    )
+                  ])}
+                </div>
+
+                <label>
+                  Lote consumido
+
+                  <input
+                    data-consumed-material-id="${input.materialId}"
+                    data-qty-per-output="${input.qtyPerOutput}"
+                    data-consumed-qty="${input.consumedQty}"
+                    value="${escapeHtml(input.lot)}"
+                    required
+                    ${
+                      readOnlyMode
+                        ? 'readonly'
+                        : ''
+                    }
+                  />
+                </label>
+
+              </div>
+            `
+          )
+          .join('')
+      : `
+        <div class="empty-state compact">
+          Selecione material produzido e modelo de produção.
+        </div>
+      `;
+}
+
+    function updateProductionLocation() {
+  const machine =
+    machineForName(
+      form.elements.machineName.value ||
+      row?.machine_name ||
+      ''
+    );
+
+  const locationValue =
+    backdrop.querySelector(
+      '.production-location-value'
+    );
+
+  if (locationValue) {
+    locationValue.textContent =
+      machine?.location_name ||
+      row?.location_name ||
+      '-';
+  }
+}
+
+function updateMachineLock() {
+  const currentValue =
+    form.elements.machineName.value ||
+    row?.machine_name ||
+    '';
+
+  const validMachines =
+    machineNamesForMaterial(
+      selectedProducedMaterial()
+    );
+
+  form.elements.machineName.innerHTML =
+    validMachines.length
+      ? `${
+          validMachines.length > 1
+            ? '<option value="">Selecione</option>'
+            : ''
+        }${
+          validMachines
+            .map(
+              machine => `
+                <option
+                  value="${escapeHtml(machine)}"
+                >
+                  ${escapeHtml(
+                    displayMachineName(machine)
+                  )}
+                </option>
+              `
+            )
+            .join('')
+        }`
+      : `
+        <option value="">
+          Sem produtividade cadastrada
+        </option>
+      `;
+
+  if (
+    validMachines.includes(
+      currentValue
+    )
+  ) {
+    form.elements.machineName.value =
+      currentValue;
+  } else if (
+    validMachines.length === 1
+  ) {
+    form.elements.machineName.value =
+      validMachines[0];
+  }
+
+  form.elements.machineName.disabled =
+    readOnlyMode ||
+    validMachines.length <= 1;
+
+  form.elements.machineName.toggleAttribute(
+    'data-locked',
+    validMachines.length <= 1
+  );
+
+  updateProductionLocation();
+}
 
     function collectLines() {
       const material = selectedProducedMaterial();
@@ -858,8 +1883,19 @@ export function ProductionPage(options = {}) {
     form.elements.notes.value = row?.notes || '';
     updateModelOptions();
     updateMachineLock();
-    if (row?.machine_name && !form.elements.machineName.disabled) form.elements.machineName.value = row.machine_name;
-    renderLines();
+    if (
+  row?.machine_name &&
+  !form.elements.machineName.disabled
+) {
+  form.elements.machineName.value =
+    row.machine_name;
+}
+
+updateProductionLocation();
+
+renderLines();
+
+renderConsumedInputs();
     if (readOnlyMode) {
       [...form.elements].forEach(element => {
         if (element.matches('button')) return;
@@ -902,22 +1938,60 @@ export function ProductionPage(options = {}) {
       const material = materials.find(item => String(item.id) === String(button.dataset.producedMaterialId));
       selectProducedMaterial(material);
     });
-    form.elements.productionModelName.addEventListener('change', renderConsumedInputs);
-    inputsTarget.addEventListener('input', collectConsumedInputs);
-    linesTarget.addEventListener('input', () => {
-      lines = collectLines();
-      updateLineUnits();
-    });
+    form.elements.productionModelName.addEventListener(
+  'change',
+  renderConsumedInputs
+);
+
+form.elements.machineName.addEventListener(
+  'change',
+  updateProductionLocation
+);
+
+inputsTarget.addEventListener(
+  'input',
+  collectConsumedInputs
+);
+
+linesTarget.addEventListener(
+  'input',
+  () => {
+    lines = collectLines();
+
+    updateLineUnits();
+
+    renderConsumedInputs();
+  }
+);
     backdrop.querySelector('.add-produced-line')?.addEventListener('click', () => {
       lines = collectLines();
-      lines.push({ quantity: '', secondaryQty: 0, primaryUnit: '', secondaryUnit: '', realWeight: '', realWeightUnit: '', lot: '', benefitNumber: '' });
-      renderLines();
+      lines.push({
+  quantity: '',
+  secondaryQty: 0,
+  primaryUnit: '',
+  secondaryUnit: '',
+  realWeight: '',
+  realWeightUnit: '',
+  lot: '',
+  benefitNumber: ''
+});
+
+renderLines();
+
+renderConsumedInputs();
     });
     linesTarget.addEventListener('click', event => {
       if (!event.target.classList.contains('remove-produced-line')) return;
       const index = Number(event.target.closest('[data-line-index]').dataset.lineIndex);
-      lines = collectLines().filter((_, lineIndex) => lineIndex !== index);
-      renderLines();
+      lines =
+  collectLines().filter(
+    (_, lineIndex) =>
+      lineIndex !== index
+  );
+
+renderLines();
+
+renderConsumedInputs();
     });
     backdrop.querySelector('.clear-production')?.addEventListener('click', resetProduction);
     backdrop.querySelector('.cancel-production')?.addEventListener('click', async () => {

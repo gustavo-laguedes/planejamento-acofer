@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import postgres from 'postgres';
+import { sql } from '../db.js';
 
 const CLEAN_TABLES = [
   'production_plan_days',
@@ -87,12 +87,7 @@ function assertSafe(cleanTables) {
   }
 }
 
-const sql = postgres(process.env.DATABASE_URL, {
-  ssl: 'require',
-  max: 1,
-  idle_timeout: 5,
-  connect_timeout: 10
-});
+
 
 try {
   assertSafe(CLEAN_TABLES);

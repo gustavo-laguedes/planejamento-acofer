@@ -1,5 +1,7 @@
 # REF-001 - Mapa da PlanningPage.js
 
+Fonte funcional superior: `docs/refactor/PLANNING_SIMULATION_CANONICAL_SPEC.md`. Este mapa e inventario tecnico da pagina; regra funcional canonica deve ser conferida no spec.
+
 Arquivo auditado: `pages/PlanningPage.js`
 Linhas no estado atual: 7097
 

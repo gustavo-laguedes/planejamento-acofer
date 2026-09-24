@@ -1,5 +1,7 @@
 # REF-013 - Restaurar foco Fluxo Produtivo -> Gantt APS por allocationId
 
+Fonte funcional superior: `docs/refactor/PLANNING_SIMULATION_CANONICAL_SPEC.md`. Esta REF registra uma correcao tecnica/historica de foco; contratos funcionais de Planejamento/Simulacao devem seguir o spec canonico.
+
 Data: 2026-08-06
 Modo: correcao pequena e delimitada de orquestracao UI + lifecycle neutro.
 
@@ -171,11 +173,36 @@ Pendente para execucao pelo Gu:
 9. confirmar que nenhuma data, maquina ou quantidade mudou;
 10. confirmar que nenhuma reotimizacao foi executada.
 
+### 14.1 Tentativa de homologacao operacional em 2026-08-12
+
+Status: NAO EXECUTADA POR LIMITACAO DE AMBIENTE.
+
+Ambiente realmente executado:
+
+- servidor local Node/Express iniciado em `http://localhost:3000`;
+- Chrome real iniciado com perfil temporario isolado e DevTools Protocol local;
+- aplicacao aberta no browser real e observada em runtime.
+
+Resultado observado:
+
+- a aplicacao carregou a tela `Acesso ao sistema`;
+- o Gantt APS, Fluxo Produtivo e dados de planejamento nao ficaram acessiveis;
+- a sessao autenticada/dados operacionais necessarios para executar os fluxos da REF-013 nao estavam disponiveis neste ambiente;
+- nenhum passo operacional de Flow -> Gantt, move, edit, split, undo/redo, descarte, dia/equipe/estoque/horizonte ou readonly foi executado;
+- REF-013 nao foi marcada como homologada.
+
+Evidencia tecnica da tentativa:
+
+- URL: `http://localhost:3000/`;
+- texto visivel no browser: `Acesso ao sistema`, `Usuario ou E-mail`, `Senha`, `Entrar`;
+- seletores de planejamento/Gantt nao encontrados no DOM carregado;
+- sem respostas HTTP 4xx/5xx inesperadas na abertura inicial.
+
 ## 15. Riscos residuais
 
 - O fallback por material + producao e intencionalmente conservador, mas e menos forte que o matching por operationId. Por isso os novos `data-flow-operation-ids` sao a fonte preferencial.
 - Transportes nao receberam regra nova; quando nao houver operationId no no, o fallback nao deve inventar relacao.
-- Homologacao manual nao foi executada nesta missao.
+- Homologacao manual operacional segue nao executada: em 2026-08-12 houve runtime/browser real, mas o ambiente parou na tela de login sem sessao autenticada/dados operacionais para executar o checklist.
 - A suite ainda tem duas falhas conhecidas fora do escopo desta REF.
 
 ## 16. Arquivos alterados
@@ -189,4 +216,6 @@ Pendente para execucao pelo Gu:
 
 ## 17. Conclusao
 
-Missao concluida. O fluxo produtivo voltou a solicitar foco no Gantt APS por `allocationId` canonico via host neutro, sem acesso direto ao DOM do Gantt pela pagina e preservando a abertura dos detalhes do no.
+Missao tecnica concluida. O fluxo produtivo voltou a solicitar foco no Gantt APS por `allocationId` canonico via host neutro, sem acesso direto ao DOM do Gantt pela pagina e preservando a abertura dos detalhes do no.
+
+Homologacao operacional: NAO EXECUTADA POR LIMITACAO DE AMBIENTE em 2026-08-12, porque a aplicacao abriu no browser real apenas ate a tela de login e nao havia sessao autenticada/dados operacionais para executar o checklist.

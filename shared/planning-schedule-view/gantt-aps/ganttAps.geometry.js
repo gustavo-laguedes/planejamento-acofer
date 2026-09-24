@@ -6,6 +6,30 @@ export const GANTT_APS_DEFAULT_PIXELS_PER_HOUR = 6;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const TIME_PATTERN = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
 const DAY_MS = 86400000;
+const TREFILA_RESOURCE_ID = 'Trefila';
+
+function isTrefilaResource(resource = {}) {
+  return [
+    resource.name,
+    resource.machineName,
+    resource.machine_name,
+    resource.id,
+    resource.machineId,
+    resource.machine_id
+  ].some(value => (
+    comparePlanningMachineOrder({ name: value }, { name: TREFILA_RESOURCE_ID }) === 0
+    && comparePlanningMachineOrder({ name: TREFILA_RESOURCE_ID }, { name: value }) === 0
+  ));
+}
+
+function normalizeGanttApsResource(resource = {}) {
+  if (!isTrefilaResource(resource)) return { ...resource };
+  const id = String(resource.id ?? resource.machineId ?? resource.machine_id ?? TREFILA_RESOURCE_ID).trim()
+    || TREFILA_RESOURCE_ID;
+  const name = String(resource.name ?? resource.machineName ?? resource.machine_name ?? TREFILA_RESOURCE_ID).trim()
+    || TREFILA_RESOURCE_ID;
+  return { ...resource, id, name };
+}
 
 export function civilDayNumber(value) {
   const match = DATE_PATTERN.exec(String(value || ''));
@@ -188,16 +212,28 @@ export function stackGanttApsTasks(tasks = []) {
 
 export function orderGanttApsResources(model = {}) {
   const tasks = Array.isArray(model.tasks) ? model.tasks : [];
+  const taskResourceNames = new Map();
+  tasks.forEach(task => {
+    const id = String(task?.resourceId ?? '');
+    if (!id || taskResourceNames.has(id)) return;
+    const name = task?.machineName ?? task?.resourceName ?? task?.resourceLabel ?? id;
+    taskResourceNames.set(id, String(name || id));
+  });
   const resources = (Array.isArray(model.resources) ? model.resources : [])
-    .map(resource => ({ ...resource }))
-    .sort((left, right) => (
-      comparePlanningMachineOrder(left, right)
-      || Number(left.order ?? Number.MAX_SAFE_INTEGER) - Number(right.order ?? Number.MAX_SAFE_INTEGER)
-      || String(left.name || '').localeCompare(String(right.name || ''), 'pt-BR')
-      || String(left.id).localeCompare(String(right.id))
-    ));
+    .map(resource => {
+      const id = String(resource.id ?? '');
+      return resource.name || !taskResourceNames.has(id)
+        ? { ...resource }
+        : { ...resource, name: taskResourceNames.get(id) };
+    })
+    .map(normalizeGanttApsResource);
   const taskResourceIds = new Set(tasks.map(task => String(task.resourceId ?? '')));
   const knownResourceIds = new Set(resources.map(resource => String(resource.id)));
+  const hasTrefilaResource = resources.some(isTrefilaResource);
+  if (!hasTrefilaResource) {
+    resources.push({ id: TREFILA_RESOURCE_ID, name: TREFILA_RESOURCE_ID, order: -1 });
+    knownResourceIds.add(TREFILA_RESOURCE_ID);
+  }
   if (taskResourceIds.has('') && !knownResourceIds.has('')) {
     resources.push({ id: '', name: 'Máquina não informada', order: resources.length });
   }
@@ -205,8 +241,13 @@ export function orderGanttApsResources(model = {}) {
     .filter(id => id && !knownResourceIds.has(id))
     .forEach((id, index) => resources.push({
       id,
-      name: `Máquina ${id}`,
+      name: taskResourceNames.get(id) || id,
       order: resources.length + index
     }));
-  return resources;
+  return resources.sort((left, right) => (
+    comparePlanningMachineOrder(left, right)
+    || Number(left.order ?? Number.MAX_SAFE_INTEGER) - Number(right.order ?? Number.MAX_SAFE_INTEGER)
+    || String(left.name || '').localeCompare(String(right.name || ''), 'pt-BR')
+    || String(left.id).localeCompare(String(right.id))
+  ));
 }

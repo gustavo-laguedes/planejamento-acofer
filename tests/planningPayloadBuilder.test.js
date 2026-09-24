@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   buildNormalizedPlanningPayload,
   buildPlanningSimulationPayload,
@@ -129,6 +130,33 @@ assert.deepEqual(buildShiftPayload([
     teamAvailable: '1:2'
   }
 ]);
+
+assert.deepEqual(buildShiftPayload([
+  {
+    label: 'Turno 1',
+    hoursPerDay: '8,48',
+    shiftStartTime: '07:00',
+    shiftEndTime: '15:48',
+    teamAvailable: 3
+  }
+], { getDefaultTeamAvailable: value => (value === '' || value == null ? 6 : Number(value)) }), [
+  {
+    label: 'Turno 1',
+    hoursPerDay: '8,48',
+    shiftStartTime: '07:00',
+    pauseLabel: undefined,
+    pauseHours: '0',
+    shiftEndTime: '15:48',
+    teamAvailable: 3
+  }
+]);
+
+const planningPageSource = readFileSync(new URL('../pages/PlanningPage.js', import.meta.url), 'utf8');
+assert.doesNotMatch(
+  planningPageSource,
+  /index\s*===\s*0\s*\?\s*Math\.max\(available,\s*DEFAULT_TEAM_AVAILABLE\)/,
+  'payload da UI deve preservar equipe configurada no Turno 1 quando menor que o default'
+);
 
 const stockItemKept = { productionIndex: 2, materialId: 30 };
 const stockItemRemoved = { productionIndex: 0, materialId: '10' };

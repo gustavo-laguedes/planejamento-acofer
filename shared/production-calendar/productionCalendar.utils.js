@@ -82,16 +82,38 @@ function roundedPercent(value) {
   return Number(Number(value).toFixed(2));
 }
 
+function calendarTimeMinutes(value, fallback = null) {
+  const match = /^(\d{1,2}):(\d{2})/.exec(String(value || ''));
+  if (!match) return fallback;
+  return (Number(match[1]) * 60) + Number(match[2]);
+}
+
+function peakProductivePeople(allocations = []) {
+  const events = allocations.flatMap((allocation, index) => {
+    const peopleCount = Number(allocation?.peopleCount);
+    if (!(peopleCount > 0)) return [];
+    const fullProductiveDay = Number(allocation?.capacityPercent) >= 100;
+    const start = fullProductiveDay ? 0 : calendarTimeMinutes(allocation?.startTime, 0);
+    const end = fullProductiveDay ? 24 * 60 : calendarTimeMinutes(allocation?.endTime, 24 * 60);
+    const safeEnd = end > start ? end : 24 * 60;
+    return [
+      { minute: start, delta: peopleCount, order: 1, index },
+      { minute: safeEnd, delta: -peopleCount, order: 0, index }
+    ];
+  }).sort((left, right) => left.minute - right.minute || left.order - right.order || left.index - right.index);
+  let used = 0;
+  let peak = 0;
+  events.forEach(event => {
+    used += event.delta;
+    peak = Math.max(peak, used);
+  });
+  return peak;
+}
+
 export function buildProductionCalendarDayProductivity({ day = {}, allocations = [] } = {}) {
   const date = String(day?.date || '');
-  const productivePeople = (Array.isArray(allocations) ? allocations : [])
-    .filter(allocation => String(allocation?.date || '') === date)
-    .reduce((sum, allocation) => {
-      const peopleCount = Number(allocation?.peopleCount);
-      const capacityPercent = Number(allocation?.capacityPercent);
-      if (!(peopleCount > 0) || !Number.isFinite(capacityPercent)) return sum;
-      return sum + (peopleCount * (capacityPercent / 100));
-    }, 0);
+  const productivePeople = peakProductivePeople((Array.isArray(allocations) ? allocations : [])
+    .filter(allocation => String(allocation?.date || '') === date));
   const availablePeople = Number(day?.team?.availablePeople);
   const percent = availablePeople > 0
     ? roundedPercent((productivePeople / availablePeople) * 100)

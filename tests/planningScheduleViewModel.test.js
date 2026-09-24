@@ -99,6 +99,50 @@ assert.ok(Object.isFrozen(model.metadata.validationIssues[0]));
 assert.throws(() => { model.tasks[0].quantity = 99; }, TypeError);
 assert.throws(() => { model.metadata.validationIssues[0].message = 'mutado'; }, TypeError);
 
+const derivedCapacity = buildPlanningScheduleViewModel({
+  allocations: [
+    { ...baseAllocation, allocationId: 'daily-220', quantity: 220, maxDailyCapacity: 220, capacityPercent: 181.82 },
+    { ...baseAllocation, allocationId: 'daily-180', quantity: 180, nominalDailyCapacity: 220, capacityPercent: 181.82 },
+    { ...baseAllocation, allocationId: 'daily-130', quantity: 130, maxDailyCapacity: 220, capacityPercent: 181.82 }
+  ],
+  machines: source.machines
+});
+assert.deepEqual(
+  derivedCapacity.tasks.map(task => [task.id, task.quantity, task.nominalDailyCapacity, task.capacityPercent]),
+  [['daily-220', 220, 220, 100], ['daily-180', 180, 220, 81.82], ['daily-130', 130, 220, 59.09]],
+  'Capacidade utilizada do view-model deve ser readonly e derivada da allocation diaria'
+);
+
+const trefilaResource = buildPlanningScheduleViewModel({
+  allocations: [{
+    ...baseAllocation,
+    allocationId: 'allocation:trefila',
+    machineId: 'Trefila',
+    machineName: 'Trefila'
+  }],
+  machines: []
+});
+assert.deepEqual(
+  trefilaResource.resources.map(resource => [resource.id, resource.name]),
+  [['Trefila', 'Trefila']],
+  'Gantt APS deve restaurar grupo de maquina pelo machineName real da allocation quando o catalogo nao chega no snapshot'
+);
+
+const genericResource = buildPlanningScheduleViewModel({
+  allocations: [{
+    ...baseAllocation,
+    allocationId: 'allocation:generic-resource',
+    machineId: 'resource-from-task',
+    machineName: 'Recurso Externo'
+  }],
+  machines: []
+});
+assert.deepEqual(
+  genericResource.resources.map(resource => [resource.id, resource.name]),
+  [['resource-from-task', 'Recurso Externo']],
+  'resource generico fora do catalogo original deve renderizar grupo pelo mesmo contrato visual'
+);
+
 for (const snapshot of [
   { allocations: [baseAllocation] },
   { allocations: [{ ...baseAllocation, source: 'manual-draft-v2' }] },

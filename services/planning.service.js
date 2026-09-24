@@ -50,14 +50,9 @@ function planningDiagnostic(code, values = {}) {
   };
 }
 
-function isDefaultShiftLabel(label = '') {
-  return /^Turno\s*1$/i.test(String(label || '').trim()) || /^T1$/i.test(String(label || '').trim());
-}
-
 function defaultTeamAvailableForShift(shift = {}, index = 0) {
-  const label = shift.label || `Turno ${index + 1}`;
-  const available = Math.max(toNumber(shift.teamAvailable || DEFAULT_TEAM_AVAILABLE), 0);
-  return isDefaultShiftLabel(label) ? Math.max(available, DEFAULT_TEAM_AVAILABLE) : available;
+  const hasConfiguredValue = shift.teamAvailable !== null && shift.teamAvailable !== undefined && shift.teamAvailable !== '';
+  return Math.max(toNumber(hasConfiguredValue ? shift.teamAvailable : DEFAULT_TEAM_AVAILABLE), 0);
 }
 
 function isWeekend(date) {
@@ -214,7 +209,8 @@ function resolveMatrix(material, matrixRows, requestedMachine, requestedPeople, 
     ? options.filter(row => Number(row.people_count || 0) <= peopleLimit)
     : options;
   const candidates = fitOptions.length ? fitOptions : options;
-  const rankedCandidates = () => [...candidates].sort(rankMatrixRows);
+  const scopedCandidates = (requestedMachine || hasRequestedPeople) ? options : candidates;
+  const rankedCandidates = () => [...scopedCandidates].sort(rankMatrixRows);
   const bestAvailable = () => rankedCandidates()[0] || null;
   if (requestedMachine || hasRequestedPeople) {
     return rankedCandidates().find(row =>
@@ -234,7 +230,7 @@ function resolveMatrixCandidates(material, matrixRows, requestedMachine, request
     : options;
   if (!candidates.length) candidates = options;
   if (requestedMachine || hasRequestedPeople) {
-    const requested = candidates.filter(row =>
+    const requested = options.filter(row =>
       (!requestedMachine || row.machine_name === requestedMachine)
       && (!hasRequestedPeople || Number(row.people_count) === Number(requestedPeople))
     );
@@ -313,19 +309,179 @@ function overrideStartCursor(override, fallbackDate, fallbackMinutes) {
   };
 }
 
-function stockForMaterial(material, stockRows, correctionRows = []) {
-  const codes = new Set((material.codes || []).map(code => String(code).trim().toLowerCase()));
-  const locationsTotal = stockRows.reduce((sum, row) => {
-    const productCode = String(row.product_code || '').trim().toLowerCase();
-    const oldProductCode = String(row.old_product_code || '').trim().toLowerCase();
-    return codes.has(productCode) || codes.has(oldProductCode)
-      ? sum + toNumber(row.fiscal_balance_unit) + toNumber(row.error_balance_unit)
-      : sum;
-  }, 0);
-  const correction = correctionRows
-    .filter(row => String(row.material_id) === String(material.id))
-    .reduce((sum, row) => sum + toNumber(row.correction_qty), 0);
-  return locationsTotal + correction;
+function stockForMaterial(
+  material,
+  stockRows,
+  correctionRows = [],
+  planningMode = 'real'
+) {
+  /*
+   * TEÓRICO:
+   * saldo inicial é sempre zero.
+   */
+  if (
+    String(
+      planningMode || 'real'
+    ).toLowerCase() ===
+    'theoretical'
+  ) {
+    return 0;
+  }
+
+  /*
+   * ESTOQUE NOVO:
+   * /stock/current já devolve uma linha
+   * por material + local.
+   */
+  const currentRows =
+    (stockRows || []).filter(
+      row =>
+        String(
+          row.materialId ??
+          row.material_id ??
+          ''
+        )
+        ===
+        String(material.id)
+
+        &&
+        (
+          'currentQty' in row
+          ||
+          'current_qty' in row
+        )
+    );
+
+  if (currentRows.length) {
+    return currentRows.reduce(
+      (sum, row) => {
+
+        const currentQty =
+          toNumber(
+            row.currentQty ??
+            row.current_qty
+          );
+
+        /*
+         * Planejamento REAL não deve consumir
+         * novamente aquilo que outro plano
+         * já reservou.
+         */
+        const reservedQty =
+          toNumber(
+            row.movementTotals
+              ?.productionReserveQty
+            ??
+            row.production_reserve_qty
+          );
+
+        return (
+          sum +
+          currentQty -
+          reservedQty
+        );
+      },
+      0
+    );
+  }
+
+  /*
+   * Fallback para estruturas antigas.
+   */
+  const codes =
+    new Set(
+      (material.codes || [])
+        .map(
+          code =>
+            String(code)
+              .trim()
+              .toLowerCase()
+        )
+    );
+
+  const locationsTotal =
+    (stockRows || [])
+      .reduce(
+        (sum, row) => {
+
+          const productCode =
+            String(
+              row.product_code || ''
+            )
+              .trim()
+              .toLowerCase();
+
+          const oldProductCode =
+            String(
+              row.old_product_code || ''
+            )
+              .trim()
+              .toLowerCase();
+
+          return (
+            codes.has(productCode)
+            ||
+            codes.has(oldProductCode)
+          )
+            ? sum
+              +
+              toNumber(
+                row.fiscal_balance_unit
+              )
+              +
+              toNumber(
+                row.error_balance_unit
+              )
+            : sum;
+        },
+        0
+      );
+
+  const correction =
+    (correctionRows || [])
+      .filter(
+        row =>
+          String(row.material_id)
+          ===
+          String(material.id)
+      )
+      .reduce(
+        (sum, row) =>
+          sum +
+          toNumber(
+            row.correction_qty
+          ),
+        0
+      );
+
+  return (
+    locationsTotal +
+    correction
+  );
+}
+
+function productionPriorityCoverage(production, context) {
+  const requestedQty = toNumber(production?.plannedQty);
+  if (!(requestedQty > 0)) return Number.POSITIVE_INFINITY;
+  const finalStock = stockForMaterial(
+  production.material,
+  context.stockRows || [],
+  context.correctionRows || [],
+  context.planningMode
+);
+  return Math.max(0, toNumber(finalStock)) / requestedQty;
+}
+
+function operationPriorityCoverage(operation) {
+  const coverage = Number(operation?.priorityCoverage);
+  return Number.isFinite(coverage) ? coverage : 0;
+}
+
+function compareAutomaticSchedulingPriority(left, right) {
+  return operationPriorityCoverage(left) - operationPriorityCoverage(right)
+    || toNumber(left.productionIndex) - toNumber(right.productionIndex)
+    || toNumber(left.productionOrder) - toNumber(right.productionOrder)
+    || String(left.materialName || '').localeCompare(String(right.materialName || ''));
 }
 
 function makeStockLedger(context) {
@@ -334,7 +490,12 @@ function makeStockLedger(context) {
     available(material) {
       const key = String(material.id);
       if (!balances.has(key)) {
-        balances.set(key, stockForMaterial(material, context.stockRows, context.correctionRows));
+        balances.set(key, stockForMaterial(
+  material,
+  context.stockRows,
+  context.correctionRows,
+  context.planningMode
+));
       }
       return toNumber(balances.get(key));
     },
@@ -1338,7 +1499,14 @@ function makeDailyBatchStockLedger(context = {}, operations = []) {
     const key = String(materialId || '');
     if (!key || balances.has(key)) return;
     const material = materialsById.get(key);
-    balances.set(key, material ? stockForMaterial(material, context.stockRows || [], context.correctionRows || []) : 0);
+    balances.set(key, material
+  ? stockForMaterial(
+      material,
+      context.stockRows || [],
+      context.correctionRows || [],
+      context.planningMode
+    )
+  : 0);
   }
 
   knownMaterialIds.forEach(ensure);
@@ -1381,13 +1549,26 @@ function dailyBatchRequirements(operation, dailyQuantity, context = {}) {
   if (!context.materialsById || !context.inputsByMaterialId) return [];
   const material = context.materialsById.get(String(operation.materialId));
   if (!material) return [];
-  const scopedMaterial = {
-    ...material,
-    operationId: operation.splitParentOperationId || operation.calendarParentOperationId || operation.operationId || `${operation.productionIndex || 0}:${operation.materialId}`,
-    productionIndex: operation.productionIndex
-  };
   const grouped = new Map();
-  for (const input of selectedInputs(scopedMaterial, context.inputsByMaterialId, context.operationOverrides || {}, operation.productionIndex)) {
+  const breakdown = Array.isArray(operation.productionBreakdown) && operation.productionBreakdown.length
+    ? operation.productionBreakdown
+    : [operation];
+  const breakdownTotal = breakdown.reduce((sum, item) => sum + toNumber(item.quantity || item.produceQty || item.requiredQty), 0);
+  for (const part of breakdown) {
+    const partQuantity = breakdownTotal > 0
+      ? dailyQuantity * (toNumber(part.quantity || part.produceQty || part.requiredQty) / breakdownTotal)
+      : dailyQuantity;
+    const productionIndex = Number(part.productionIndex ?? operation.productionIndex ?? 0);
+    const scopedMaterial = {
+      ...material,
+      operationId: part.operationId || `${productionIndex}:${operation.materialId}`,
+      productionIndex
+    };
+    const operationOverrides = { ...(context.operationOverrides || {}) };
+    if (part.productionModelName && !operationOverrides[`${productionIndex}:${operation.materialId}`]) {
+      operationOverrides[`${productionIndex}:${operation.materialId}`] = { productionModelName: part.productionModelName };
+    }
+    for (const input of selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex)) {
       const component = context.materialsById.get(String(input.input_material_id));
       const ratio = toNumber(input.qty_per_output || 1);
       const materialId = String(input.input_material_id);
@@ -1400,8 +1581,9 @@ function dailyBatchRequirements(operation, dailyQuantity, context = {}) {
         requiredQty: 0
       };
       current.ratio = Number((toNumber(current.ratio) + ratio).toFixed(6));
-      current.requiredQty = Number((toNumber(current.requiredQty) + (ratio * toNumber(dailyQuantity))).toFixed(6));
+      current.requiredQty = Number((toNumber(current.requiredQty) + (ratio * toNumber(partQuantity))).toFixed(6));
       grouped.set(materialId, current);
+    }
   }
   return [...grouped.values()].filter(requirement => requirement.requiredQty > 0);
 }
@@ -1451,7 +1633,108 @@ function buildDailyBatchDiagnostic(operation, date, dailyQuantity, remainingQuan
   });
 }
 
-function buildDailyBatchCards(operation, calendar, { stockLedger = null, context = {}, diagnostics = [] } = {}) {
+function buildDailyBatchResourceDiagnostic(operation, block, remainingQuantity, capacity) {
+  const resource = block?.resource === 'machine' ? 'maquina' : 'equipe';
+  const resourceLabel = block?.resource === 'machine'
+    ? `maquina ${operation.machineName || ''}`.trim()
+    : `equipe de ${operation.peopleCount ?? 0} pessoa(s)`;
+  return planningDiagnostic('RESOURCE_CAPACITY_BLOCKED_DAILY_BATCH', {
+    message: `Nao foi encontrada data livre para produzir a parcela diaria de ${operation.materialName || operation.materialId} respeitando ${resourceLabel}.`,
+    productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
+    productionIndex: Number(operation.productionIndex || 0),
+    operationId: operation.operationId || null,
+    materialId: String(operation.materialId || ''),
+    materialName: operation.materialName || '',
+    materialCode: operation.materialCode || '',
+    machineName: operation.machineName || null,
+    peopleCount: operation.peopleCount == null ? null : Number(operation.peopleCount),
+    dailyCapacity: Number(toNumber(capacity?.capacityPerDay).toFixed(6)),
+    remainingQuantity: Number(toNumber(remainingQuantity).toFixed(6)),
+    dailyPlannedQuantity: Number(Math.min(toNumber(remainingQuantity), toNumber(capacity?.capacityPerDay)).toFixed(6)),
+    date: block?.date || null,
+    resource,
+    usedPeople: block?.used == null ? null : Number(block.used),
+    availablePeople: block?.available == null ? null : Number(block.available),
+    reason: 'RESOURCE_CAPACITY_BLOCKED_DAILY_BATCH'
+  });
+}
+
+function dailyBatchResourceSegments(operation, slot, calendar) {
+  return segmentsForOperation({
+    startDate: slot.start.date,
+    startTime: minutesToTime(slot.start.minutes),
+    endDate: slot.end.date,
+    endTime: minutesToTime(slot.end.minutes)
+  }, calendar).map(segment => ({
+    operation,
+    date: segment.date,
+    start: parseTime(segment.startTime, minutesToTime(calendar.shiftStart)),
+    end: parseTime(segment.endTime, minutesToTime(calendar.shiftEnd))
+  }));
+}
+
+function dailyBatchResourceConflict(operation, slot, calendar, resourceSchedule = [], dailyTeamOverrides = {}) {
+  if (operation.operationType === 'transport') return null;
+  const machineName = String(operation.machineName || '').trim().toLowerCase();
+  const people = Number(operation.peopleCount || 0);
+  for (const segment of dailyBatchResourceSegments(operation, slot, calendar)) {
+    const overlapping = resourceSchedule.filter(item =>
+      item.date === segment.date
+      && item.start < segment.end
+      && segment.start < item.end
+    );
+    const machineBlock = overlapping
+      .filter(item => String(item.operation.machineName || '').trim().toLowerCase() === machineName)
+      .sort((left, right) => left.end - right.end)
+      .at(-1);
+    if (machineBlock) {
+      return {
+        date: segment.date,
+        minutes: Math.max(machineBlock.end, segment.start + 1),
+        resource: 'machine'
+      };
+    }
+    if (people <= 0) continue;
+    const shift = calendar.shifts.find(item =>
+      segment.start < item.shiftEnd
+      && segment.end > item.shiftStart
+    ) || calendar.shifts[0];
+    const available = teamAvailableForShift(shift, segment.date, dailyTeamOverrides);
+    if (!(available > 0) || people > available) {
+      return {
+        date: segment.date,
+        minutes: segment.end,
+        resource: 'team',
+        used: people,
+        available
+      };
+    }
+    const points = [
+      { minute: segment.start, delta: people },
+      { minute: segment.end, delta: -people },
+      ...overlapping.flatMap(item => ([
+        { minute: Math.max(item.start, segment.start), delta: Number(item.operation.peopleCount || 0) },
+        { minute: Math.min(item.end, segment.end), delta: -Number(item.operation.peopleCount || 0) }
+      ]))
+    ].sort((left, right) => left.minute - right.minute || left.delta - right.delta);
+    let used = 0;
+    for (const point of points) {
+      used += point.delta;
+      if (used > available) {
+        return {
+          date: segment.date,
+          minutes: Math.max(overlapping.reduce((latest, item) => Math.max(latest, item.end), segment.start), point.minute + 1),
+          resource: 'team',
+          used,
+          available
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function buildDailyBatchCards(operation, calendar, { stockLedger = null, context = {}, diagnostics = [], resourceSchedule = [] } = {}) {
   if (!stockLedger || operation.operationType === 'transport' || operation._existingScheduleBlocker) {
     return operationDailyCalendarCards(operation, calendar);
   }
@@ -1465,44 +1748,59 @@ function buildDailyBatchCards(operation, calendar, { stockLedger = null, context
 
   const cards = [];
   let remainingQty = toNumber(operation.produceQty);
-  let cursorDate = operation.startDate || operation.date || '';
+  let cursor = {
+    date: operation.startDate || operation.date || '',
+    minutes: parseTime(operation.startTime || minutesToTime(calendar.shiftStart), minutesToTime(calendar.shiftStart))
+  };
   const originalQty = Math.max(toNumber(operation.produceQty), 1);
-  const startTime = operation.startTime || minutesToTime(calendar.shiftStart);
+  const dailyTeamOverrides = normalizeDailyTeamOverrides(context.dailyTeamOverrides || {});
   let blockedGuard = 0;
+  let lastStockBlock = null;
+  let lastResourceBlock = null;
 
   while (remainingQty > DAILY_BATCH_STOCK_EPSILON && blockedGuard < MAX_WORKDAY_SEARCH_DAYS) {
-    if (!cursorDate) break;
+    if (!cursor.date) break;
     const scheduleCalendar = calendar;
-    const dayStart = cards.length ? { date: cursorDate, minutes: scheduleCalendar.shiftStart } : {
-      date: cursorDate,
-      minutes: parseTime(startTime, minutesToTime(scheduleCalendar.shiftStart))
-    };
-    const workStart = nextWorkStart(dayStart, scheduleCalendar);
-    const remainingDayCapacity = Math.min(
-      toNumber(capacity.capacityPerDay),
-      capacityForRemainingDay(workStart, capacity, scheduleCalendar)
-    );
-    if (!(remainingDayCapacity > DAILY_BATCH_STOCK_EPSILON)) {
-      cursorDate = addDays(workStart.date, 1);
+    const workStart = nextWorkStart(cursor, scheduleCalendar);
+    const nominalDailyQuantity = Number(Math.min(remainingQty, toNumber(capacity.capacityPerDay)).toFixed(6));
+    const remainingDayCapacity = capacityForRemainingDay(workStart, capacity, scheduleCalendar);
+    const hasPriorAutomaticResourceOnDate = resourceSchedule.some(item => item.date === workStart.date);
+    const dailyPlannedQuantity = Number((
+      remainingDayCapacity + DAILY_BATCH_STOCK_EPSILON < nominalDailyQuantity && !hasPriorAutomaticResourceOnDate
+        ? Math.min(remainingQty, remainingDayCapacity)
+        : nominalDailyQuantity
+    ).toFixed(6));
+    if (
+      !(dailyPlannedQuantity > DAILY_BATCH_STOCK_EPSILON)
+      || remainingDayCapacity + DAILY_BATCH_STOCK_EPSILON < dailyPlannedQuantity
+    ) {
+      cursor = { date: addDays(workStart.date, 1), minutes: scheduleCalendar.shiftStart };
       blockedGuard += 1;
       continue;
     }
-    const dailyPlannedQuantity = Number(Math.min(remainingQty, remainingDayCapacity).toFixed(6));
     const block = dailyBatchStockBlock(operation, workStart.date, dailyPlannedQuantity, stockLedger, context);
     if (block) {
+      lastStockBlock = { ...block, date: workStart.date, dailyPlannedQuantity };
       diagnostics.push(buildDailyBatchDiagnostic(operation, workStart.date, dailyPlannedQuantity, remainingQty, capacity, block));
-      cursorDate = addDays(workStart.date, 1);
+      cursor = { date: addDays(workStart.date, 1), minutes: scheduleCalendar.shiftStart };
       blockedGuard += 1;
       continue;
     }
 
     const durationMinutes = Math.max(Math.ceil((dailyPlannedQuantity * capacity.secondsPerUnit) / 60), 1);
     const slot = scheduleForward(workStart, durationMinutes, scheduleCalendar);
+    const resourceBlock = dailyBatchResourceConflict(operation, slot, scheduleCalendar, resourceSchedule, dailyTeamOverrides);
+    if (resourceBlock) {
+      lastResourceBlock = resourceBlock;
+      cursor = nextWorkStart({ date: resourceBlock.date, minutes: resourceBlock.minutes }, scheduleCalendar);
+      blockedGuard += 1;
+      continue;
+    }
     const dailyRatio = dailyPlannedQuantity / originalQty;
     const index = cards.length;
     consumeDailyBatchRequirements(operation, workStart.date, dailyPlannedQuantity, stockLedger, context);
     stockLedger.receiveNextDay(operation.materialId, dailyPlannedQuantity, workStart.date);
-    cards.push({
+    const card = {
       ...operation,
       operationId: `${operation.operationId || operation.materialId}:day-${index + 1}`,
       productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
@@ -1528,28 +1826,39 @@ function buildDailyBatchCards(operation, calendar, { stockLedger = null, context
             quantity: Number((toNumber(item.quantity) * dailyRatio).toFixed(6))
           }))
         : operation.productionBreakdown
-    });
+    };
+    cards.push(card);
+    resourceSchedule.push(...dailyBatchResourceSegments(operation, slot, scheduleCalendar));
     remainingQty = Number(Math.max(remainingQty - dailyPlannedQuantity, 0).toFixed(6));
-    cursorDate = addDays(workStart.date, 1);
+    cursor = { date: addDays(workStart.date, 1), minutes: scheduleCalendar.shiftStart };
     blockedGuard += 1;
   }
 
   if (remainingQty > DAILY_BATCH_STOCK_EPSILON) {
-    diagnostics.push(planningDiagnostic('INSUFFICIENT_STOCK_FOR_FULL_DAILY_BATCH', {
-      message: `Nao foi encontrada data com estoque suficiente para a parcela diaria integral de ${operation.materialName || operation.materialId}.`,
-      productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
-      productionIndex: Number(operation.productionIndex || 0),
-      operationId: operation.operationId || null,
-      materialId: String(operation.materialId || ''),
-      materialName: operation.materialName || '',
-      machineName: operation.machineName || null,
-      peopleCount: operation.peopleCount == null ? null : Number(operation.peopleCount),
-      dailyCapacity: Number(toNumber(capacity.capacityPerDay).toFixed(6)),
-      remainingQuantity: Number(remainingQty.toFixed(6)),
-      dailyPlannedQuantity: Number(Math.min(remainingQty, capacity.capacityPerDay).toFixed(6)),
-      date: cursorDate || null,
-      reason: 'INSUFFICIENT_STOCK_FOR_FULL_DAILY_BATCH'
-    }));
+    if (lastResourceBlock && !lastStockBlock) {
+      diagnostics.push(buildDailyBatchResourceDiagnostic(operation, lastResourceBlock, remainingQty, capacity));
+    } else {
+      diagnostics.push(planningDiagnostic('INSUFFICIENT_STOCK_FOR_FULL_DAILY_BATCH', {
+        message: `Nao foi encontrada data com estoque suficiente para a parcela diaria integral de ${operation.materialName || operation.materialId}.`,
+        productionId: operation.productionKey || `production-${operation.productionIndex || 0}`,
+        productionIndex: Number(operation.productionIndex || 0),
+        operationId: operation.operationId || null,
+        materialId: String(operation.materialId || ''),
+        materialName: operation.materialName || '',
+        machineName: operation.machineName || null,
+        peopleCount: operation.peopleCount == null ? null : Number(operation.peopleCount),
+        dailyCapacity: Number(toNumber(capacity.capacityPerDay).toFixed(6)),
+        remainingQuantity: Number(remainingQty.toFixed(6)),
+        dailyPlannedQuantity: Number(Math.min(remainingQty, capacity.capacityPerDay).toFixed(6)),
+        componentMaterialId: lastStockBlock?.requirement?.materialId || null,
+        componentMaterialName: lastStockBlock?.requirement?.materialName || '',
+        componentMaterialCode: lastStockBlock?.requirement?.materialCode || '',
+        requiredQuantity: Number(toNumber(lastStockBlock?.requirement?.requiredQty).toFixed(6)),
+        availableQuantity: Number(toNumber(lastStockBlock?.available).toFixed(6)),
+        date: cursor.date || null,
+        reason: 'INSUFFICIENT_STOCK_FOR_FULL_DAILY_BATCH'
+      }));
+    }
   }
 
   return cards.map((card, index) => ({ ...card, calendarDayCount: cards.length, calendarDayIndex: index + 1 }));
@@ -1559,8 +1868,9 @@ function calendarOperationsForSchedule(operations, calendar, context = null) {
   if (!context) return (Array.isArray(operations) ? operations : []).flatMap(operation => operationDailyCalendarCards(operation, calendar));
   const diagnostics = [];
   const stockLedger = makeDailyBatchStockLedger(context, operations);
+  const resourceSchedule = [];
   const source = (Array.isArray(operations) ? operations : []).sort((left, right) => compareOperationsByStart(left, right));
-  const calendarOperations = source.flatMap(operation => buildDailyBatchCards(operation, calendar, { stockLedger, context, diagnostics }));
+  const calendarOperations = source.flatMap(operation => buildDailyBatchCards(operation, calendar, { stockLedger, context, diagnostics, resourceSchedule }));
   return { calendarOperations, diagnostics };
 }
 
@@ -1965,10 +2275,7 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
     .every(operationId => scheduledByMaterialId.has(String(operationId)) || !byOperationId.has(String(operationId)));
   const successorsDone = operation => ((operation.successorOperationIds?.length ? operation.successorOperationIds : operation.successorMaterialIds) || [])
     .every(operationId => scheduledByMaterialId.has(String(operationId)) || !byOperationId.has(String(operationId)));
-  const topological = [...enriched].sort((left, right) =>
-    toNumber(left.productionOrder) - toNumber(right.productionOrder)
-    || String(left.materialName).localeCompare(String(right.materialName))
-  );
+  const topological = [...enriched].sort(compareAutomaticSchedulingPriority);
 
   function scheduleForwardGraph(startCursor) {
     const pending = [...topological];
@@ -2358,7 +2665,12 @@ function buildSinglePlan(payload, context) {
   return {
     code: payload.planningCode || codeForPlan(),
     summary: {
-      materialId: material.id,
+  planningMode:
+    context.planningMode ||
+    payload.planningMode ||
+    'real',
+
+  materialId: material.id,
       materialName: material.name,
       materialCode: materialCode(material),
       plannedQty: toNumber(payload.plannedQty),
@@ -2508,6 +2820,7 @@ export function buildPlan(payload, context) {
   const stockChoices = stockChoiceMap(payload);
   const builtProductions = productions.map(production => {
     const productionTitle = production.productionTitle || `Produção ${production.productionIndex + 1}`;
+    const priorityCoverage = productionPriorityCoverage(production, context);
     const built = buildAggregatedOperations({
       material: production.material,
       quantity: production.plannedQty,
@@ -2548,7 +2861,8 @@ export function buildPlan(payload, context) {
         splitPartNumber: production.splitParentOperationId && String(operation.materialId) === String(production.material.id)
           ? production.splitPartNumber
           : operation.splitPartNumber,
-        productionOrder: operation.productionOrder + (production.productionIndex * 1000)
+        priorityCoverage,
+        productionOrder: operation.productionOrder
       }))
     };
   });
@@ -2604,7 +2918,12 @@ export function buildPlan(payload, context) {
   return {
     code: payload.planningCode || codeForPlan(new Date(), productions.length),
     summary: {
-      materialId: firstMaterial.id,
+  planningMode:
+    context.planningMode ||
+    payload.planningMode ||
+    'real',
+
+  materialId: firstMaterial.id,
       materialName: productions.length === 1 ? firstMaterial.name : `${productions.length} produções`,
       materialCode: productions.length === 1 ? materialCode(firstMaterial) : '',
       plannedQty,

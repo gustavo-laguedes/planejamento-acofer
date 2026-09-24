@@ -29,10 +29,10 @@ const inputsByMaterialId = new Map([
 ]);
 
 const baseMatrixRows = [
-  { id: 'raw-ec125-3', material_code: 'COMP-A', machine_name: 'EC-125', people_count: 3, output_qty: 700, output_unit: 'un', time_seconds: 28800, active: true },
-  { id: 'eq-mt200-3', material_code: 'EQ45', machine_name: 'MT-200', people_count: 3, output_qty: 700, output_unit: 'un', time_seconds: 28800, active: true },
-  { id: 'eq-mt200-2', material_code: 'EQ45', machine_name: 'MT-200', people_count: 2, output_qty: 500, output_unit: 'un', time_seconds: 28800, active: true },
-  { id: 'eq-mt150-3', material_code: 'EQ45', machine_name: 'MT-150', people_count: 3, output_qty: 300, output_unit: 'un', time_seconds: 28800, active: true }
+  { id: 'raw-ec125-3', material_id: 2, material_code: 'COMP-A', machine_name: 'EC-125', people_count: 3, output_qty: 700, output_unit: 'un', time_seconds: 28800, active: true },
+  { id: 'eq-mt200-3', material_id: 4, material_code: 'EQ45', machine_name: 'MT-200', people_count: 3, output_qty: 700, output_unit: 'un', time_seconds: 28800, active: true },
+  { id: 'eq-mt200-2', material_id: 4, material_code: 'EQ45', machine_name: 'MT-200', people_count: 2, output_qty: 500, output_unit: 'un', time_seconds: 28800, active: true },
+  { id: 'eq-mt150-3', material_id: 4, material_code: 'EQ45', machine_name: 'MT-150', people_count: 3, output_qty: 300, output_unit: 'un', time_seconds: 28800, active: true }
 ];
 
 function context(stockRows = [], matrixRows = baseMatrixRows, inputMap = inputsByMaterialId, overrides = {}) {
@@ -60,12 +60,13 @@ function simulate({
   inputMap = inputsByMaterialId,
   stockOnlyMaterials = [{ productionIndex: 0, materialId: 2 }],
   stockOnlyMaterialChoices = [],
-  existingOperations = []
+  existingOperations = [],
+  shiftsInput = shifts
 } = {}) {
   return buildPlan({
     productions: [{ materialId: 4, plannedQty, machineName, peopleCount }],
     planningStartDate: '2026-07-20',
-    shifts,
+    shifts: shiftsInput,
     stockOnlyMaterials,
     stockOnlyMaterialChoices
   }, context([
@@ -195,6 +196,21 @@ function firstEq(result) {
   const result = simulate({ stockA: 300, machineName: 'MT-150', peopleCount: 3 });
   assert.equal(firstEq(result).quantity, 300, 'troca de maquina recalcula a parcela diaria pela Matriz');
   assert.equal(firstEq(result).maxDailyCapacity, 300);
+}
+
+{
+  assert.throws(
+    () => simulate({
+      plannedQty: 700,
+      stockA: 700,
+      stockB: 1400,
+      peopleCount: 3,
+      existingOperations: [],
+      shiftsInput: [{ ...shifts[0], teamAvailable: 2 }]
+    }),
+    /capacidade de pessoas/,
+    'Turno 1 configurado abaixo de 6 deve limitar equipe disponivel do scheduler'
+  );
 }
 
 {

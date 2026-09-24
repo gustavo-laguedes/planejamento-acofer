@@ -18,8 +18,19 @@ export function buildProductionPayload({
       machineName: production.machineName,
       peopleCount: Number(production.peopleCount),
       desiredDate: production.desiredDate || null,
-      productionModelName: production.productionModelName,
-      transports: []
+      productionModelName:
+  production.productionModelName,
+
+transports:
+  Array.isArray(
+    production.transports
+  )
+    ? production.transports.map(
+        item => ({
+          ...item
+        })
+      )
+    : []
     };
   });
 }

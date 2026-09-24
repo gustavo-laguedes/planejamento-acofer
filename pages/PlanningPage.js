@@ -1,4 +1,4 @@
-﻿import { api } from '../shared/api.js';
+import { api } from '../shared/api.js';
 import { getCurrentUser } from '../shared/api.js';
 import {
   buildProductionCalendarDayPresentation,
@@ -114,13 +114,21 @@ import {
 } from '../shared/planning-domain/planningScheduleSnapshot.js';
 import { DataTable } from '../shared/DataTable.js';
 import { holidayForDate } from '../shared/holidays.js';
+import {
+  businessDaysInclusive
+} from '../services/workingDays.service.js';
 import { createOperationOverlay, setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
 import { SummaryCards } from '../shared/SummaryCard.js';
 import { PlanningStatusPill } from '../shared/StatusPill.js';
 import {
   buildManualScheduleAllocationParts,
-  createManualScheduleDraft,
+  buildManualScheduleUnallocationPlan,
+  calculateProductivityDailyCapacity,
+  createManualScheduleAllocation,
+    createManualScheduleDraft,
+  createManualScheduleTransport,
+  normalizeManualSchedulePlannedReceipt,
   moveDraftAllocation
 } from '../services/manualScheduleDraft.service.js';
 import {
@@ -138,7 +146,9 @@ import {
   selectPlanningEditorProductivityRows
 } from '../services/planningReoptimization.service.js';
 import {
+  resolveMaterialProductivityLines,
   productivityMachineKeys,
+  resolveProductivityConfiguration,
   resolveProductivityMaterial
 } from '../services/productivityMatrixResolution.service.js';
 import {
@@ -151,6 +161,10 @@ import {
   restoreAutomaticSimulationBaseline
 } from '../services/automaticSimulationBaseline.service.js';
 
+import {
+  evaluatePlanningStockLimits
+} from '../services/planningStockLimitGuard.service.js';
+
 ensurePlanningAllocationEditorCss();
 
 export {
@@ -162,6 +176,21 @@ const DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
 const STOCK_MINIMUM_DAYS_KEY = 'acofer.stock.minimumDays';
 const PCP_IDEAL_DAYS_KEY = 'acofer.analysis.pcpIdealDays';
 const DEFAULT_TEAM_AVAILABLE = 6;
+const MANUAL_PLANNING_MODE = 'manual-foundation/v1';
+const PLANNING_DEFAULT_LOCATION_ID = '__default__';
+const MANUAL_PLANNING_REQUIRED_MACHINES = Object.freeze([
+  {
+    machineId: 'Trefila',
+    machineName: 'Trefila',
+    order: -2
+  },
+  {
+    machineId: 'Transporte',
+    machineName: 'Transporte',
+    order: -1,
+    logicalResource: true
+  }
+]);
 
 export function shouldUsePlanningStockBalance(choice, stockQuantity) {
   return Number(stockQuantity || 0) > 0 && choice?.useStock !== false;
@@ -321,11 +350,29 @@ function readStockMinimumDays() {
 }
 
 function readPcpIdealDays(minimumDays) {
-  const fallback = Math.round(Number(minimumDays || 0) * 1.5);
-  const value = String(localStorage.getItem(PCP_IDEAL_DAYS_KEY) || '').trim();
-  if (!/^\d+$/.test(value)) return fallback;
-  const days = Number(value);
-  return Number.isInteger(days) && days > 0 ? days : fallback;
+  const fallback = 45;
+
+  const value =
+    String(
+      localStorage.getItem(
+        PCP_IDEAL_DAYS_KEY
+      ) || ''
+    ).trim();
+
+  if (
+    !/^\d+$/.test(value)
+  ) {
+    return fallback;
+  }
+
+  const days =
+    Number(value);
+
+  return Number.isInteger(days)
+    &&
+    days > 20
+      ? days
+      : fallback;
 }
 
 function planningStockProjectionThresholdOptions() {
@@ -772,8 +819,3692 @@ function normalizeShiftTimes(shifts = []) {
 }
 
 function defaultTeamAvailableForShift(value, index = 0) {
-  const available = Number(value ?? DEFAULT_TEAM_AVAILABLE) || DEFAULT_TEAM_AVAILABLE;
-  return index === 0 ? Math.max(available, DEFAULT_TEAM_AVAILABLE) : Math.max(available, 0);
+  const hasConfiguredValue = value !== null && value !== undefined && value !== '';
+  const available = Number(hasConfiguredValue ? value : DEFAULT_TEAM_AVAILABLE);
+  if (!Number.isFinite(available)) return DEFAULT_TEAM_AVAILABLE;
+  return Math.max(available, 0);
+}
+
+function numericQuantity(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function wholePlanningQuantity(value) {
+  const quantity = numericQuantity(value);
+  if (!(quantity > 0)) return 0;
+
+  const tolerance = Number.EPSILON * Math.max(1, Math.abs(quantity)) * 8;
+  return Math.ceil(quantity - tolerance);
+}
+
+export function buildManualPlanningInitialDays(startDate, totalDays = 7) {
+  const date = String(startDate || '').slice(0, 10);
+  if (!isValidDateOnly(date)) return [];
+  return Array.from({ length: Math.max(1, Number(totalDays) || 7) }, (_, index) => {
+    const current = addProductionCalendarDays(date, index);
+    const holiday = holidayForDate(current);
+    return {
+      date: current,
+      planned_date: current,
+      label: formatDateOnly(current),
+      weekday: new Intl.DateTimeFormat('pt-BR', { weekday: 'short', timeZone: 'UTC' })
+        .format(new Date(`${current}T00:00:00Z`)),
+      isWorkingDay: !isWeekendDate(parseDateOnly(current)) && !holiday,
+      holiday: holiday || null
+    };
+  });
+}
+
+export function buildManualPlanningSchedulingResult(result = {}) {
+  const summary = result?.summary || {};
+  const startDate = summary.planningStartDate || summary.selectedDate || result?.planningStartDate || result?.selectedDate;
+  const manualPlanningLocalStockSnapshot = result?.manualPlanningLocalStockSnapshot || buildPlanningLocalInitialStockSnapshot(result);
+  return {
+    ...result,
+    manualPlanningMode: MANUAL_PLANNING_MODE,
+    manualPlanningLocalStockSnapshot,
+    calendarOperations: [],
+    days: buildManualPlanningInitialDays(startDate, 7)
+  };
+}
+
+export function buildPlanningProductivityMachineOptions(matrixRows = []) {
+  const rows = Array.isArray(matrixRows) ? matrixRows : [];
+  return rows
+    .filter(row => row?.active !== false)
+    .map((row, index) => {
+      const machineId = row?.machine_id ?? row?.machineId ?? row?.machine_name ?? row?.machineName;
+      const machineName = row?.machine_name ?? row?.machineName ?? row?.machine_id ?? row?.machineId;
+      if (!machineId && !machineName) return null;
+      return {
+        machineId: String(machineId ?? machineName),
+        machineName: String(machineName ?? machineId),
+        order: Number.isFinite(Number(row?.machine_priority ?? row?.machinePriority))
+          ? Number(row?.machine_priority ?? row?.machinePriority)
+          : index
+      };
+    })
+    .filter(Boolean);
+}
+
+function productionTitleForManualCard(production = {}, fallbackIndex = 0) {
+  const title = production.materialName || production.productionMaterialName || production.title || production.productionTitle || '';
+  const material = production.materialName || production.productionMaterialName || '';
+  const quantity = numericQuantity(production.plannedQty);
+  const unit = production.plannedUnit || production.unit || '';
+  const titleKey = normalizeText(title).toLocaleLowerCase('pt-BR');
+  const materialKey = normalizeText(material).toLocaleLowerCase('pt-BR');
+  const parts = [
+    `Produção #${fallbackIndex + 1}`,
+    title,
+    materialKey && titleKey && materialKey !== titleKey ? material : '',
+    quantity > 0 ? `${formatPtBrDecimal(quantity)} ${unit}`.trim() : ''
+  ].filter(Boolean);
+  return parts.join(' • ');
+}
+
+function planningMaterialVisualRank(material = {}) {
+  const name = normalizeText(material.materialName).toLocaleLowerCase('pt-BR');
+  if (name.includes('bobina')) return 0;
+  if (name.includes('longitudinal')) return 1;
+  if (name.includes('transversal')) return 2;
+  return 3;
+}
+
+function comparePlanningMaterialCards(left, right) {
+  return (
+    planningMaterialVisualRank(left) - planningMaterialVisualRank(right)
+    || Number(left.sequence ?? left.productionOrder ?? Number.MAX_SAFE_INTEGER)
+      - Number(right.sequence ?? right.productionOrder ?? Number.MAX_SAFE_INTEGER)
+    || String(left.materialName).localeCompare(String(right.materialName), 'pt-BR', { numeric: true })
+    || String(left.operationId).localeCompare(String(right.operationId), 'pt-BR', { numeric: true })
+  );
+}
+
+function orderPlanningMaterialsByProductionSequence(materials = []) {
+  const pending = new Map(materials.map(material => [String(material.operationId), material]));
+  const emitted = new Set();
+  const ordered = [];
+  const emitReady = material => {
+    emitted.add(String(material.operationId));
+    ordered.push(material);
+    pending.delete(String(material.operationId));
+  };
+
+  while (pending.size) {
+    const ready = [...pending.values()]
+      .filter(material => (material.dependencyOperationIds || [])
+        .every(operationId => emitted.has(String(operationId)) || !pending.has(String(operationId))))
+      .sort(comparePlanningMaterialCards);
+    if (!ready.length) {
+      [...pending.values()].sort(comparePlanningMaterialCards).forEach(emitReady);
+      break;
+    }
+    ready.forEach(emitReady);
+  }
+
+  return ordered;
+}
+
+function planningMaterialOperationKey(value = {}) {
+  return String(value.operationId || value.parentOperationId || value.calendarParentOperationId || value.materialId || '');
+}
+
+function planningMaterialDependencyKey(value = {}) {
+  return String(value.parentOperationId || value.consumerParentOperationId || value.targetParentOperationId || value.operationId || value.id || '')
+    .replace(/:day-\d+$/i, '');
+}
+
+function planningMaterialId(value = {}) {
+  return String(
+    value?.materialId
+    ?? value?.material_id
+    ?? value?.id
+    ?? ''
+  ).trim();
+}
+
+function planningExplicitLocationId(value = {}) {
+  const nestedLocation =
+    value?.location
+    && typeof value.location === 'object'
+      ? value.location
+      : {};
+
+  return String(
+    value?.locationId
+    ?? value?.location_id
+    ?? value?.localId
+    ?? value?.local_id
+    ?? value?.sourceLocation
+    ?? value?.sourceLocationId
+    ?? value?.originLocationId
+    ?? value?.targetLocation
+    ?? value?.targetLocationId
+    ?? value?.destinationLocationId
+    ?? (
+      typeof value?.location === 'object'
+        ? undefined
+        : value?.location
+    )
+    ?? nestedLocation?.locationId
+    ?? nestedLocation?.location_id
+    ?? nestedLocation?.id
+    ?? ''
+  ).trim();
+}
+
+
+function planningMachineLocationId(machine = {}) {
+  const nestedLocation =
+    machine?.location
+    && typeof machine.location === 'object'
+      ? machine.location
+      : {};
+
+  return String(
+    machine?.locationId
+    ?? machine?.location_id
+    ?? machine?.localId
+    ?? machine?.local_id
+    ?? machine?.branchId
+    ?? machine?.branch_id
+    ?? machine?.plantId
+    ?? machine?.plant_id
+    ?? machine?.siteId
+    ?? machine?.site_id
+    ?? (
+      typeof machine?.location === 'object'
+        ? undefined
+        : machine?.location
+    )
+    ?? nestedLocation?.locationId
+    ?? nestedLocation?.location_id
+    ?? nestedLocation?.id
+    ?? ''
+  ).trim();
+}
+
+
+function planningMachineIdentityKeys(value = {}) {
+  return [
+    value?.machineId,
+    value?.machine_id,
+    value?.machineName,
+    value?.machine_name,
+    value?.id,
+    value?.name
+  ]
+    .map(item =>
+      normalizeText(item)
+        .replace(/[\s-]+/g, '')
+    )
+    .filter(Boolean);
+}
+
+
+function planningMachineForAllocation(
+  allocation = {},
+  machines = []
+) {
+  const allocationKeys =
+    new Set(
+      planningMachineIdentityKeys(
+        allocation
+      )
+    );
+
+  if (!allocationKeys.size) {
+    return null;
+  }
+
+  return (
+    Array.isArray(machines)
+      ? machines
+      : []
+  ).find(machine => (
+    planningMachineIdentityKeys(machine)
+      .some(key =>
+        allocationKeys.has(key)
+      )
+  )) || null;
+}
+
+
+function planningAllocationLocationId(
+  allocation = {},
+  machines = []
+) {
+  const explicit =
+    planningExplicitLocationId(
+      allocation
+    );
+
+  if (explicit) {
+    return explicit;
+  }
+
+  return (
+    planningMachineLocationId(
+      planningMachineForAllocation(
+        allocation,
+        machines
+      )
+    )
+    || PLANNING_DEFAULT_LOCATION_ID
+  );
+}
+
+
+function planningLocalStockKey(
+  materialId,
+  locationId = PLANNING_DEFAULT_LOCATION_ID
+) {
+  return `${
+    String(materialId || '')
+  }\u0000${
+    String(
+      locationId
+      || PLANNING_DEFAULT_LOCATION_ID
+    )
+  }`;
+}
+
+
+function planningLocalStockEntry(
+  map,
+  materialId,
+  locationId = PLANNING_DEFAULT_LOCATION_ID,
+  seed = {}
+) {
+  const key =
+    planningLocalStockKey(
+      materialId,
+      locationId
+    );
+
+  const current =
+    map.get(key)
+    || {
+      materialId:
+        String(materialId || ''),
+
+      locationId:
+        String(
+          locationId
+          || PLANNING_DEFAULT_LOCATION_ID
+        ),
+
+      materialCode:
+        String(
+          seed?.materialCode
+          || seed?.material_code
+          || seed?.code
+          || ''
+        ),
+
+      materialName:
+        String(
+          seed?.materialName
+          || seed?.material_name
+          || seed?.name
+          || materialId
+          || ''
+        ),
+
+      unit:
+        String(
+          seed?.unit
+          || seed?.primaryUnit
+          || seed?.primary_unit
+          || ''
+        ),
+
+      quantity:
+        0
+    };
+
+  map.set(
+    key,
+    current
+  );
+
+  return current;
+}
+
+function planningLocalStockQuantity(
+  map,
+  materialId,
+  locationId = PLANNING_DEFAULT_LOCATION_ID
+) {
+  return numericQuantity(
+    map
+      ?.get?.(
+        planningLocalStockKey(
+          materialId,
+          locationId
+        )
+      )
+      ?.quantity
+  );
+}
+
+
+function planningMaterialAvailableQuantity({
+  availability,
+  materialId,
+  targetLocationIds = []
+} = {}) {
+  const normalizedMaterialId =
+    String(materialId || '').trim();
+
+  if (!normalizedMaterialId) {
+    return 0;
+  }
+
+  const normalizedTargetLocations =
+    [
+      ...new Set(
+        (
+          Array.isArray(targetLocationIds)
+            ? targetLocationIds
+            : []
+        )
+          .map(value =>
+            String(value || '').trim()
+          )
+          .filter(Boolean)
+      )
+    ];
+
+  /*
+   * Sem local resolvido, preserva o fallback
+   * agregado legado.
+   *
+   * Quando sabemos o local produtivo, a regra
+   * passa a ser obrigatoriamente:
+   *
+   * material + local
+   */
+  if (!normalizedTargetLocations.length) {
+    return numericQuantity(
+      availability
+        ?.availableByMaterial
+        ?.get(normalizedMaterialId)
+        ?.quantity
+    );
+  }
+
+  const shared =
+    planningLocalStockQuantity(
+      availability
+        ?.availableByMaterialLocation,
+
+      normalizedMaterialId,
+
+      PLANNING_DEFAULT_LOCATION_ID
+    );
+
+  /*
+   * Não soma locais diferentes.
+   *
+   * Se uma operação puder ser executada em
+   * mais de um local, usa o melhor saldo de
+   * um único local.
+   */
+  return Math.max(
+    ...normalizedTargetLocations
+      .map(locationId => (
+        planningLocalStockQuantity(
+          availability
+            ?.availableByMaterialLocation,
+
+          normalizedMaterialId,
+
+          locationId
+        )
+
+        + (
+          locationId
+            === PLANNING_DEFAULT_LOCATION_ID
+            ? 0
+            : shared
+        )
+      )),
+
+    0
+  );
+}
+
+function addPlanningLocalStockQuantity(map, item = {}) {
+  const materialId = planningMaterialId(item);
+  const quantity = Math.max(numericQuantity(item.stockUsedQty ?? item.quantity ?? item.openingStock), 0);
+  if (!materialId || !(quantity > 0)) return;
+  const current = map.get(materialId) || {
+    materialId,
+    materialCode: String(item.materialCode || item.material_code || item.code || ''),
+    materialName: String(item.materialName || item.material_name || item.name || materialId),
+    unit: String(item.unit || item.primaryUnit || item.primary_unit || ''),
+    quantity: 0
+  };
+  current.quantity = Number((current.quantity + quantity).toFixed(6));
+  map.set(materialId, current);
+}
+
+function collectPlanningTreeStockNodes(tree, callback) {
+  const visit = node => {
+    if (!node || typeof node !== 'object') return;
+    callback(node);
+    (Array.isArray(node.children) ? node.children : []).forEach(visit);
+  };
+  if (Array.isArray(tree)) tree.forEach(visit);
+  else visit(tree);
+}
+
+export function buildPlanningLocalInitialStockSnapshot(
+  result = {}
+) {
+  const byProductionMaterialLocation =
+    new Map();
+
+  const byMaterialLocation =
+    new Map();
+
+  const tree =
+    result?.tree
+    || result?.scheduleTree
+    || result?.schedule_tree;
+
+  /*
+   * Continua valendo a regra antiga:
+   *
+   * dentro da mesma produção/material usamos
+   * o maior stockUsedQty para evitar duplicação
+   * da árvore recursiva.
+   *
+   * Agora o LOCAL também faz parte da chave.
+   */
+  collectPlanningTreeStockNodes(
+    tree,
+    node => {
+      const materialId =
+        planningMaterialId(node);
+
+      const quantity =
+        Math.max(
+          numericQuantity(
+            node?.stockUsedQty
+          ),
+          0
+        );
+
+      if (
+        !materialId
+        || !(quantity > 0)
+      ) {
+        return;
+      }
+
+      const productionIndex =
+        String(
+          node?.productionIndex
+          ?? ''
+        );
+
+      const explicitLocationId =
+        planningExplicitLocationId(
+          node
+        );
+
+      const locationKey =
+        explicitLocationId
+        || PLANNING_DEFAULT_LOCATION_ID;
+
+      const key =
+        `${productionIndex}|${materialId}|${locationKey}`;
+
+      const current =
+        byProductionMaterialLocation.get(
+          key
+        );
+
+      if (
+        !current
+        || quantity > current.quantity
+      ) {
+        byProductionMaterialLocation.set(
+          key,
+          {
+            materialId,
+
+            ...(explicitLocationId
+              ? {
+                  locationId:
+                    explicitLocationId
+                }
+              : {}),
+
+            materialCode:
+              String(
+                node?.materialCode
+                || node?.material_code
+                || ''
+              ),
+
+            materialName:
+              String(
+                node?.materialName
+                || node?.material_name
+                || materialId
+              ),
+
+            unit:
+              String(
+                node?.unit
+                || ''
+              ),
+
+            quantity
+          }
+        );
+      }
+    }
+  );
+
+  /*
+   * Soma as produções diferentes,
+   * preservando o local.
+   */
+  byProductionMaterialLocation
+    .forEach(item => {
+      const locationId =
+        planningExplicitLocationId(
+          item
+        )
+        || PLANNING_DEFAULT_LOCATION_ID;
+
+      const current =
+        planningLocalStockEntry(
+          byMaterialLocation,
+          item.materialId,
+          locationId,
+          item
+        );
+
+      current.quantity =
+        Number(
+          (
+            numericQuantity(
+              current.quantity
+            )
+            + numericQuantity(
+              item.quantity
+            )
+          ).toFixed(6)
+        );
+    });
+
+  /*
+   * Fallback para snapshots/testes
+   * sem árvore detalhada.
+   */
+  if (!byMaterialLocation.size) {
+    (
+      Array.isArray(result?.operations)
+        ? result.operations
+        : []
+    ).forEach(operation => {
+      const materialId =
+        planningMaterialId(
+          operation
+        );
+
+      const quantity =
+        Math.max(
+          numericQuantity(
+            operation?.stockUsedQty
+            ?? operation?.quantity
+            ?? operation?.openingStock
+          ),
+          0
+        );
+
+      if (
+        !materialId
+        || !(quantity > 0)
+      ) {
+        return;
+      }
+
+      const explicitLocationId =
+        planningExplicitLocationId(
+          operation
+        );
+
+      const locationId =
+        explicitLocationId
+        || PLANNING_DEFAULT_LOCATION_ID;
+
+      const current =
+        planningLocalStockEntry(
+          byMaterialLocation,
+          materialId,
+          locationId,
+          operation
+        );
+
+      current.quantity =
+        Number(
+          (
+            numericQuantity(
+              current.quantity
+            )
+            + quantity
+          ).toFixed(6)
+        );
+    });
+  }
+
+  /*
+   * Mantemos também a visão agregada antiga,
+   * para não quebrar consumidores legados.
+   */
+  const byMaterial =
+    new Map();
+
+  byMaterialLocation
+    .forEach(item => {
+      const current =
+        byMaterial.get(
+          item.materialId
+        )
+        || {
+          materialId:
+            item.materialId,
+
+          materialCode:
+            item.materialCode,
+
+          materialName:
+            item.materialName,
+
+          unit:
+            item.unit,
+
+          quantity:
+            0
+        };
+
+      current.quantity =
+        Number(
+          (
+            numericQuantity(
+              current.quantity
+            )
+            + numericQuantity(
+              item.quantity
+            )
+          ).toFixed(6)
+        );
+
+      byMaterial.set(
+        item.materialId,
+        current
+      );
+    });
+
+  /*
+   * Se o snapshot original ainda não sabe
+   * o local, NÃO gravamos locationId.
+   *
+   * Isso mantém o comportamento legado
+   * do estoque físico congelado enquanto
+   * o módulo Estoque ainda não foi revisto.
+   */
+  const stock =
+    [...byMaterialLocation.values()]
+      .map(item => ({
+        materialId:
+          item.materialId,
+
+        ...(
+          item.locationId
+          && item.locationId
+            !== PLANNING_DEFAULT_LOCATION_ID
+            ? {
+                locationId:
+                  item.locationId
+              }
+            : {}
+        ),
+
+        materialCode:
+          item.materialCode,
+
+        materialName:
+          item.materialName,
+
+        unit:
+          item.unit,
+
+        quantity:
+          item.quantity
+      }));
+
+  return {
+    source:
+      'simulation.stockUsedQty',
+
+    stock,
+
+    byMaterial:
+      Object.fromEntries(
+        [...byMaterial.entries()]
+          .map(
+            ([key, item]) => [
+              key,
+              { ...item }
+            ]
+          )
+      ),
+
+    byMaterialLocation:
+      Object.fromEntries(
+        [...byMaterialLocation.entries()]
+          .map(
+            ([key, item]) => [
+              key,
+              { ...item }
+            ]
+          )
+      )
+  };
+}
+
+function planningMaterialRequirementsByConsumer(
+  operations = [],
+  tree = null
+) {
+  const byConsumer = new Map();
+
+  /*
+   * Primeiro usamos as dependências explícitas
+   * das operações, quando elas existirem.
+   */
+  (Array.isArray(operations) ? operations : [])
+    .forEach(operation => {
+
+      const sourceRequirements = (
+        Array.isArray(
+          operation.dependencyRequirements
+        )
+          ? operation.dependencyRequirements
+          : []
+      )
+        .map(requirement => ({
+          ...requirement,
+
+          materialId:
+            planningMaterialId(
+              requirement
+            ),
+
+          requiredQuantity:
+            numericQuantity(
+              requirement?.requiredQuantity
+              ?? requirement?.requiredQty
+              ?? requirement?.quantity
+            ),
+
+          unit:
+            String(
+              requirement?.unit
+              || operation.unit
+              || ''
+            )
+        }))
+        .filter(requirement => (
+          requirement.materialId
+          &&
+          requirement.requiredQuantity > 0
+        ));
+
+
+      const breakdown =
+        Array.isArray(
+          operation.productionBreakdown
+        )
+        &&
+        operation.productionBreakdown.length
+
+          ? operation.productionBreakdown
+
+          : [operation];
+
+
+      const breakdownTotal =
+        breakdown.reduce(
+          (sum, part) =>
+            sum
+            +
+            planningMaterialOperationQuantity(
+              operation,
+              part
+            ),
+          0
+        );
+
+
+      breakdown.forEach(part => {
+
+        const consumerId =
+          String(
+            part?.operationId
+            ||
+            planningMaterialDependencyKey(
+              operation
+            )
+          );
+
+
+        if (
+          !consumerId
+          ||
+          !sourceRequirements.length
+        ) {
+          return;
+        }
+
+
+        const partQuantity =
+          planningMaterialOperationQuantity(
+            operation,
+            part
+          );
+
+
+        const ratio =
+          breakdownTotal > 0
+            ? partQuantity / breakdownTotal
+            : 1;
+
+
+        const rows =
+          sourceRequirements
+            .map(
+              (requirement, index) => {
+
+                const productionIndex =
+                  part?.productionIndex
+                  ??
+                  operation?.productionIndex
+                  ??
+                  0;
+
+
+                const producerOperationId =
+                  `${productionIndex}:${requirement.materialId}`;
+
+
+                return {
+                  dependencyId:
+                    String(
+                      requirement?.dependencyId
+                      ||
+                      requirement?.id
+                      ||
+                      `dependency:${consumerId}:${index + 1}`
+                    ),
+
+                  producerParentOperationId:
+                    producerOperationId,
+
+                  operationId:
+                    producerOperationId,
+
+                  consumerParentOperationId:
+                    consumerId,
+
+                  materialId:
+                    requirement.materialId,
+
+                  requiredQuantity:
+                    Number(
+                      (
+                        requirement.requiredQuantity
+                        *
+                        ratio
+                      ).toFixed(6)
+                    ),
+
+                  unit:
+                    requirement.unit
+                };
+              }
+            )
+            .filter(
+              requirement =>
+                requirement.requiredQuantity > 0
+            );
+
+
+        if (rows.length) {
+          byConsumer.set(
+            consumerId,
+            rows
+          );
+        }
+      });
+    });
+
+
+  /*
+   * FALLBACK:
+   *
+   * Quando o predecessor foi totalmente
+   * atendido por estoque, algumas operações
+   * não vêm com dependencyRequirements.
+   *
+   * A árvore continua sabendo que:
+   *
+   * Longitudinal
+   *     ↓ precisa
+   * CA60 Bobina
+   *
+   * Então recuperamos essa relação daqui.
+   *
+   * Só usamos a árvore quando a operação
+   * ainda não possui dependência explícita.
+   */
+  const visitTree =
+    node => {
+
+      if (
+        !node
+        ||
+        typeof node !== 'object'
+      ) {
+        return;
+      }
+
+
+      const productionIndex =
+        Number(
+          node?.productionIndex
+          ?? 0
+        );
+
+
+      const consumerMaterialId =
+        planningMaterialId(
+          node
+        );
+
+
+      const consumerId =
+        String(
+          node?.operationId
+
+          ||
+
+          (
+            consumerMaterialId
+              ? `${productionIndex}:${consumerMaterialId}`
+              : ''
+          )
+        );
+
+
+      const children =
+        Array.isArray(
+          node.children
+        )
+          ? node.children
+          : [];
+
+
+      if (
+        consumerId
+        &&
+        children.length
+        &&
+        !byConsumer.has(
+          consumerId
+        )
+      ) {
+
+        const rows =
+          children
+            .map(
+              (child, index) => {
+
+                const materialId =
+                  planningMaterialId(
+                    child
+                  );
+
+
+                const requiredQuantity =
+                  numericQuantity(
+                    child?.requiredQuantity
+                    ??
+                    child?.requiredQty
+                    ??
+                    child?.quantity
+                    ??
+                    child?.produceQty
+                    ??
+                    child?.stockUsedQty
+                  );
+
+
+                if (
+                  !materialId
+                  ||
+                  !(requiredQuantity > 0)
+                ) {
+                  return null;
+                }
+
+
+                const childProductionIndex =
+                  Number(
+                    child?.productionIndex
+                    ??
+                    productionIndex
+                  );
+
+
+                const producerOperationId =
+                  String(
+                    child?.operationId
+                    ||
+                    `${childProductionIndex}:${materialId}`
+                  );
+
+
+                return {
+                  dependencyId:
+                    `tree-dependency:${consumerId}:${index + 1}`,
+
+                  producerParentOperationId:
+                    producerOperationId,
+
+                  operationId:
+                    producerOperationId,
+
+                  consumerParentOperationId:
+                    consumerId,
+
+                  materialId,
+
+                  requiredQuantity:
+                    Number(
+                      requiredQuantity
+                        .toFixed(6)
+                    ),
+
+                  unit:
+                    String(
+                      child?.unit
+                      ||
+                      node?.unit
+                      ||
+                      ''
+                    )
+                };
+              }
+            )
+            .filter(Boolean);
+
+
+        if (rows.length) {
+          byConsumer.set(
+            consumerId,
+            rows
+          );
+        }
+      }
+
+
+      children.forEach(
+        visitTree
+      );
+    };
+
+
+  if (Array.isArray(tree)) {
+
+    tree.forEach(
+      visitTree
+    );
+
+  } else {
+
+    visitTree(
+      tree
+    );
+  }
+
+
+  return byConsumer;
+}
+
+function planningMaterialOperationQuantities(operations = []) {
+  const byConsumer = new Map();
+
+  (Array.isArray(operations) ? operations : []).forEach(operation => {
+    const breakdown =
+      Array.isArray(operation.productionBreakdown)
+      && operation.productionBreakdown.length
+        ? operation.productionBreakdown
+        : [operation];
+
+    breakdown.forEach(part => {
+      const key = String(
+        part?.operationId || planningMaterialDependencyKey(operation)
+      );
+
+      const quantity =
+        planningMaterialOperationQuantity(operation, part);
+
+      if (key && quantity > 0) {
+        byConsumer.set(key, quantity);
+      }
+    });
+  });
+
+  return byConsumer;
+}
+
+function buildPlanningLocalStockAvailability({
+  result = {},
+  allocations = [],
+  transports = [],
+  plannedReceipts = [],
+  machines = [],
+  asOfDate = null
+} = {}) {
+  const operations =
+    Array.isArray(result?.operations)
+      ? result.operations
+      : [];
+
+  const initialSnapshot =
+    result
+      ?.manualPlanningLocalStockSnapshot
+    || buildPlanningLocalInitialStockSnapshot(
+      result
+    );
+
+  /*
+   * CHAVE NOVA:
+   *
+   * materialId + local
+   */
+  const availableByMaterialLocation =
+    new Map();
+
+  (
+    Array.isArray(
+      initialSnapshot.stock
+    )
+      ? initialSnapshot.stock
+      : []
+  ).forEach(item => {
+    const materialId =
+      planningMaterialId(item);
+
+    const quantity =
+      Math.max(
+        numericQuantity(
+          item?.quantity
+        ),
+        0
+      );
+
+    if (
+      !materialId
+      || !(quantity > 0)
+    ) {
+      return;
+    }
+
+    /*
+     * Estoque físico antigo sem local
+     * permanece em __default__.
+     */
+    const locationId =
+      planningExplicitLocationId(
+        item
+      )
+      || PLANNING_DEFAULT_LOCATION_ID;
+
+    const current =
+      planningLocalStockEntry(
+        availableByMaterialLocation,
+        materialId,
+        locationId,
+        item
+      );
+
+    current.quantity =
+      Number(
+        (
+          numericQuantity(
+            current.quantity
+          )
+          + quantity
+        ).toFixed(6)
+      );
+  });
+
+  const requirementsByConsumer =
+  planningMaterialRequirementsByConsumer(
+    operations,
+
+    result?.tree
+    || result?.scheduleTree
+    || result?.schedule_tree
+  );
+
+  const operationQuantityByConsumer =
+    planningMaterialOperationQuantities(
+      operations
+    );
+
+  const normalizedAsOfDate =
+    isValidDateOnly(asOfDate)
+      ? String(
+          asOfDate
+        ).slice(0, 10)
+      : null;
+
+  const sourceAllocations =
+    Array.isArray(allocations)
+      ? allocations
+      : [];
+
+    const sourceTransports =
+    Array.isArray(transports)
+      ? transports
+      : [];
+
+  const sourcePlannedReceipts =
+    Array.isArray(plannedReceipts)
+      ? plannedReceipts
+      : [];
+
+  /*
+   * Vamos processar tudo cronologicamente:
+   *
+   * 10 = produção disponível
+   * 20 = saída do transporte
+   * 21 = chegada/liberação
+   * 30 = consumo/reserva
+   *
+   * Assim:
+   *
+   * Bobina produzida 10/09
+   * → disponível 11/09
+   *
+   * Transporte começa 11/09
+   * → pode pegar essa Bobina
+   *
+   * Longitudinal começa 11/09
+   * → já enxerga a Bobina transportada.
+   */
+    const events = [];
+
+  /*
+   * Produção feita no próprio dia pode ser
+   * usada por um transporte programado para
+   * esse mesmo dia.
+   *
+   * Essa quantidade NÃO vira saldo normal
+   * para as outras produções no mesmo dia.
+   *
+   * É uma exceção exclusiva do transporte,
+   * considerando que ele pode ocorrer após
+   * o expediente.
+   */
+  const sameDayProductionByTransportKey =
+    new Map();
+
+  const sameDayProductionUsedByTransport =
+    new Map();
+
+    sourceAllocations
+    .forEach(allocation => {
+      const allocationDate =
+        String(
+          allocation?.date
+          || ''
+        ).slice(0, 10);
+
+      const hasAllocationDate =
+        isValidDateOnly(
+          allocationDate
+        );
+
+      /*
+       * Uma allocation sem data ainda deve
+       * reservar seus materiais.
+       *
+       * Isso é importante tanto para drafts
+       * legados quanto para o modelo puro
+       * dos cards.
+       *
+       * Porém ela NÃO pode gerar produção
+       * disponível em D+1 sem possuir uma
+       * data válida.
+       */
+      const materialId =
+        planningMaterialId(
+          allocation
+        );
+
+      const quantity =
+        numericQuantity(
+          allocation?.quantity
+        );
+
+           if (
+        hasAllocationDate
+        && materialId
+        && quantity > 0
+      ) {
+        const productionLocationId =
+          planningAllocationLocationId(
+            allocation,
+            machines
+          );
+
+        /*
+         * Pool especial que só o transporte
+         * pode usar no próprio dia.
+         */
+        const transportProductionKey =
+          `${allocationDate}\u0000${materialId}\u0000${productionLocationId}`;
+
+        sameDayProductionByTransportKey.set(
+          transportProductionKey,
+          Number(
+            (
+              numericQuantity(
+                sameDayProductionByTransportKey.get(
+                  transportProductionKey
+                )
+              )
+              + quantity
+            ).toFixed(6)
+          )
+        );
+
+        /*
+         * Para o estoque normal continua D+1.
+         */
+        events.push({
+          type:
+            'PRODUCTION_AVAILABLE',
+
+          date:
+            addProductionCalendarDays(
+              allocationDate,
+              1
+            ),
+
+          /*
+           * Guardamos o dia em que realmente
+           * foi produzido para não contar de
+           * novo em D+1 caso tenha sido
+           * transportado no próprio dia.
+           */
+          productionDate:
+            allocationDate,
+
+          priority:
+            10,
+
+          materialId,
+
+          locationId:
+            productionLocationId,
+
+          quantity,
+
+          seed:
+            allocation
+        });
+      }
+
+      /*
+       * Reserva/consumo dos predecessores
+       * desta allocation.
+       */
+      const components =
+        Array.isArray(
+          allocation?.components
+        )
+        && allocation.components.length
+          ? allocation.components
+          : [{
+              parentOperationId:
+                planningMaterialDependencyKey(
+                  allocation
+                ),
+
+              quantity:
+                allocation?.quantity
+            }];
+
+      components.forEach(
+        component => {
+          const parentId =
+            planningMaterialDependencyKey(
+              component
+            )
+            || planningMaterialDependencyKey(
+              allocation
+            );
+
+          const parentTotal =
+            numericQuantity(
+              operationQuantityByConsumer
+                .get(
+                  parentId
+                )
+            );
+
+          const componentQty =
+            numericQuantity(
+              component?.quantity
+            );
+
+          if (
+            !parentId
+            || !(parentTotal > 0)
+            || !(componentQty > 0)
+          ) {
+            return;
+          }
+
+          (
+            requirementsByConsumer
+              .get(parentId)
+            || []
+          ).forEach(
+            requirement => {
+              const reservedQuantity =
+                requirement.requiredQuantity
+                * (
+                  componentQty
+                  / parentTotal
+                );
+
+              if (
+                !(reservedQuantity > 0)
+              ) {
+                return;
+              }
+
+              events.push({
+                type:
+                  'CONSUMPTION',
+
+                                date:
+                  hasAllocationDate
+                    ? allocationDate
+                    : (
+                        normalizedAsOfDate
+                        || '0000-01-01'
+                      ),
+
+                priority:
+                  30,
+
+                materialId:
+                  requirement.materialId,
+
+                /*
+                 * Consome no local da máquina
+                 * que está produzindo.
+                 */
+                locationId:
+                  planningAllocationLocationId(
+                    allocation,
+                    machines
+                  ),
+
+                quantity:
+                  reservedQuantity,
+
+                seed:
+                  requirement
+              });
+            }
+          );
+        }
+      );
+    });
+
+  /*
+   * TRANSPORTES
+   */
+  sourceTransports
+    .forEach(
+      (transport, index) => {
+        const startDate =
+          String(
+            transport?.startDate
+            ?? transport?.date
+            ?? ''
+          ).slice(0, 10);
+
+        const endDate =
+          String(
+            transport?.endDate
+            ?? startDate
+          ).slice(0, 10);
+
+                /*
+         * O material transportado só entra
+         * no saldo do DESTINO a partir da
+         * DATA FINAL do transporte.
+         */
+        const arrivalDate =
+          endDate;
+
+        const materialId =
+          planningMaterialId(
+            transport
+          );
+
+        const quantity =
+          numericQuantity(
+            transport?.quantity
+          );
+
+        const sourceLocation =
+          String(
+            transport?.sourceLocation
+            ?? transport?.sourceLocationId
+            ?? transport?.originLocationId
+            ?? ''
+          ).trim();
+
+        const targetLocation =
+          String(
+            transport?.targetLocation
+            ?? transport?.targetLocationId
+            ?? transport
+              ?.destinationLocationId
+            ?? ''
+          ).trim();
+
+        const transportKey =
+          String(
+            transport?.transportId
+            ?? transport?.id
+            ?? `transport-${index + 1}`
+          );
+
+        if (
+          !isValidDateOnly(startDate)
+          || !isValidDateOnly(
+            arrivalDate
+          )
+          || !materialId
+          || !(quantity > 0)
+          || !sourceLocation
+          || !targetLocation
+        ) {
+          return;
+        }
+
+        /*
+         * A mercadoria sempre sai da origem
+         * na data inicial.
+         */
+        events.push({
+          type:
+            'TRANSPORT_DISPATCH',
+
+          date:
+            startDate,
+
+          priority:
+            20,
+
+          transportKey,
+
+          materialId,
+
+          sourceLocation,
+
+          targetLocation,
+
+          quantity,
+
+          seed:
+            transport
+        });
+
+        /*
+         * availabilityMode=start:
+         * chegada lógica no mesmo dia.
+         *
+         * availabilityMode=end:
+         * chegada no final.
+         */
+        events.push({
+          type:
+            'TRANSPORT_ARRIVAL',
+
+          date:
+            arrivalDate,
+
+          priority:
+            21,
+
+          transportKey,
+
+          materialId,
+
+          sourceLocation,
+
+          targetLocation,
+
+          quantity,
+
+          seed:
+            transport
+        });
+      }
+    );
+
+   /*
+   * ENTRADAS PREVISTAS
+   *
+   * A compra chega em arrivalDate,
+   * mas só entra como saldo utilizável
+   * no dia seguinte.
+   */
+  sourcePlannedReceipts
+    .forEach(
+      (receipt, index) => {
+        const normalized =
+          normalizeManualSchedulePlannedReceipt(
+            receipt,
+            index
+          );
+
+        if (
+          !normalized.materialId
+          || !normalized.locationId
+          || !(normalized.quantity > 0)
+          || !isValidDateOnly(
+            normalized.availableDate
+          )
+        ) {
+          return;
+        }
+
+                events.push({
+          type:
+            'PLANNED_RECEIPT',
+
+          date:
+            normalized.availableDate,
+
+          priority:
+            5,
+
+          materialId:
+            normalized.materialId,
+
+          locationId:
+            normalized.locationId,
+
+          quantity:
+            normalized.quantity,
+
+          seed:
+            normalized
+        });
+      }
+    );
+
+
+  const dispatchedByTransport =
+    new Map();
+
+
+  events
+    .filter(event => (
+      !normalizedAsOfDate
+      || event.date
+        <= normalizedAsOfDate
+    ))
+
+            .sort(
+      (left, right) => (
+        left.date.localeCompare(
+          right.date
+        )
+
+        || left.priority
+          - right.priority
+
+        || String(
+          left.materialId
+        ).localeCompare(
+          String(
+            right.materialId
+          )
+        )
+      )
+    )
+
+    .forEach(event => {
+            /*
+       * PRODUÇÃO D → disponível D+1 para
+       * produção normal.
+       *
+       * Porém, se uma parte dessa produção
+       * já saiu num transporte no próprio
+       * dia D, ela NÃO pode reaparecer aqui.
+       */
+      if (
+        event.type
+        === 'PRODUCTION_AVAILABLE'
+      ) {
+        const current =
+          planningLocalStockEntry(
+            availableByMaterialLocation,
+            event.materialId,
+            event.locationId,
+            event.seed
+          );
+
+        const transportProductionKey =
+          `${String(
+            event.productionDate || ''
+          )}\u0000${event.materialId}\u0000${event.locationId}`;
+
+        const alreadyTransportedSameDay =
+          Math.max(
+            numericQuantity(
+              sameDayProductionUsedByTransport.get(
+                transportProductionKey
+              )
+            ),
+            0
+          );
+
+        const transportedFromThisEvent =
+          Math.min(
+            event.quantity,
+            alreadyTransportedSameDay
+          );
+
+        const quantityToRelease =
+          Math.max(
+            event.quantity
+            - transportedFromThisEvent,
+            0
+          );
+
+        /*
+         * Vamos consumindo o valor transportado
+         * conforme cada allocation produtiva
+         * chega no D+1.
+         */
+        if (
+          transportedFromThisEvent > 0
+        ) {
+          sameDayProductionUsedByTransport.set(
+            transportProductionKey,
+            Number(
+              (
+                alreadyTransportedSameDay
+                - transportedFromThisEvent
+              ).toFixed(6)
+            )
+          );
+        }
+
+        current.quantity =
+          Number(
+            (
+              numericQuantity(
+                current.quantity
+              )
+              + quantityToRelease
+            ).toFixed(6)
+          );
+
+        return;
+      }
+
+
+      /*
+       * Entrada prevista de compra continua
+       * entrando normalmente na data disponível.
+       */
+      if (
+        event.type
+        === 'PLANNED_RECEIPT'
+      ) {
+        const current =
+          planningLocalStockEntry(
+            availableByMaterialLocation,
+            event.materialId,
+            event.locationId,
+            event.seed
+          );
+
+        current.quantity =
+          Number(
+            (
+              numericQuantity(
+                current.quantity
+              )
+              + event.quantity
+            ).toFixed(6)
+          );
+
+        return;
+      }
+
+      /*
+       * TRANSPORTE:
+       * retira da origem.
+       *
+       * Se por algum motivo o draft estiver
+       * inconsistente, nunca inventamos saldo.
+       */
+            if (
+        event.type
+        === 'TRANSPORT_DISPATCH'
+      ) {
+        const source =
+          planningLocalStockEntry(
+            availableByMaterialLocation,
+            event.materialId,
+            event.sourceLocation,
+            event.seed
+          );
+
+        /*
+         * Primeiro usamos aquilo que já
+         * existia fisicamente na origem.
+         */
+        const physicalAvailable =
+          Math.max(
+            numericQuantity(
+              source.quantity
+            ),
+            0
+          );
+
+        const physicalMovable =
+          Math.min(
+            physicalAvailable,
+            event.quantity
+          );
+
+
+        /*
+         * Depois podemos complementar com
+         * aquilo que foi produzido no próprio
+         * dia na mesma origem.
+         */
+        const transportProductionKey =
+          `${event.date}\u0000${event.materialId}\u0000${event.sourceLocation}`;
+
+        const producedSameDay =
+          Math.max(
+            numericQuantity(
+              sameDayProductionByTransportKey.get(
+                transportProductionKey
+              )
+            ),
+            0
+          );
+
+        const alreadyUsedSameDay =
+          Math.max(
+            numericQuantity(
+              sameDayProductionUsedByTransport.get(
+                transportProductionKey
+              )
+            ),
+            0
+          );
+
+        const producedSameDayAvailable =
+          Math.max(
+            producedSameDay
+            - alreadyUsedSameDay,
+            0
+          );
+
+        const sameDayMovable =
+          Math.min(
+            Math.max(
+              event.quantity
+              - physicalMovable,
+              0
+            ),
+            producedSameDayAvailable
+          );
+
+        const movable =
+          Number(
+            (
+              physicalMovable
+              + sameDayMovable
+            ).toFixed(6)
+          );
+
+
+        if (
+          sameDayMovable > 0
+        ) {
+          sameDayProductionUsedByTransport.set(
+            transportProductionKey,
+            Number(
+              (
+                alreadyUsedSameDay
+                + sameDayMovable
+              ).toFixed(6)
+            )
+          );
+        }
+
+
+        dispatchedByTransport.set(
+          event.transportKey,
+          movable
+        );
+
+
+        if (!(movable > 0)) {
+          return;
+        }
+
+
+        /*
+         * Aqui descontamos somente o estoque
+         * que já existia fisicamente.
+         *
+         * A parte produzida no próprio dia será
+         * abatida do PRODUCTION_AVAILABLE de D+1
+         * pela regra que colocamos acima.
+         */
+        source.quantity =
+          Number(
+            Math.max(
+              physicalAvailable
+              - physicalMovable,
+              0
+            ).toFixed(6)
+          );
+
+        return;
+      }
+
+      /*
+       * TRANSPORTE:
+       * disponibiliza no destino.
+       */
+      if (
+        event.type
+        === 'TRANSPORT_ARRIVAL'
+      ) {
+        const movable =
+          numericQuantity(
+            dispatchedByTransport
+              .get(
+                event.transportKey
+              )
+          );
+
+        if (!(movable > 0)) {
+          return;
+        }
+
+        const target =
+          planningLocalStockEntry(
+            availableByMaterialLocation,
+            event.materialId,
+            event.targetLocation,
+            event.seed
+          );
+
+        target.quantity =
+          Number(
+            (
+              numericQuantity(
+                target.quantity
+              )
+              + movable
+            ).toFixed(6)
+          );
+
+        return;
+      }
+
+      /*
+       * SUCCESSORES CONSOMEM
+       * NO LOCAL DA PRÓPRIA MÁQUINA.
+       */
+      if (
+        event.type
+        === 'CONSUMPTION'
+      ) {
+        const current =
+          planningLocalStockEntry(
+            availableByMaterialLocation,
+            event.materialId,
+            event.locationId,
+            event.seed
+          );
+
+        current.quantity =
+          Number(
+            Math.max(
+              numericQuantity(
+                current.quantity
+              )
+              - event.quantity,
+              0
+            ).toFixed(6)
+          );
+      }
+    });
+
+    /*
+   * Para PROGRAMAR TRANSPORTE numa data,
+   * consideramos:
+   *
+   * estoque realmente existente
+   * +
+   * produção do próprio dia ainda não usada
+   * por outro transporte.
+   *
+   * Essa visão é EXCLUSIVA do transporte.
+   */
+  const transportAvailableByMaterialLocation =
+    new Map();
+
+
+  availableByMaterialLocation
+    .forEach(item => {
+      const cloned =
+        planningLocalStockEntry(
+          transportAvailableByMaterialLocation,
+          item.materialId,
+          item.locationId,
+          item
+        );
+
+      cloned.quantity =
+        numericQuantity(
+          item.quantity
+        );
+    });
+
+
+  /*
+   * Quando existe asOfDate, acrescentamos a
+   * produção daquela própria data ao saldo
+   * transportável.
+   */
+  if (
+    normalizedAsOfDate
+  ) {
+    sameDayProductionByTransportKey
+      .forEach(
+        (
+          producedQuantity,
+          key
+        ) => {
+          const [
+            productionDate,
+            materialId,
+            locationId
+          ] =
+            key.split(
+              '\u0000'
+            );
+
+          if (
+            productionDate
+            !== normalizedAsOfDate
+          ) {
+            return;
+          }
+
+          const alreadyUsed =
+            Math.max(
+              numericQuantity(
+                sameDayProductionUsedByTransport.get(
+                  key
+                )
+              ),
+              0
+            );
+
+          const stillTransportable =
+            Math.max(
+              numericQuantity(
+                producedQuantity
+              )
+              - alreadyUsed,
+              0
+            );
+
+          if (
+            !(stillTransportable > 0)
+          ) {
+            return;
+          }
+
+          const current =
+            planningLocalStockEntry(
+              transportAvailableByMaterialLocation,
+              materialId,
+              locationId
+            );
+
+          current.quantity =
+            Number(
+              (
+                numericQuantity(
+                  current.quantity
+                )
+                + stillTransportable
+              ).toFixed(6)
+            );
+        }
+      );
+  }
+
+
+  /*
+   * Mantemos a visão agregada antiga
+   * apenas por compatibilidade interna.
+   *
+   * O Permitido novo usa a visão
+   * material + local.
+   */
+  const availableByMaterial =
+    new Map();
+
+  availableByMaterialLocation
+    .forEach(item => {
+      const current =
+        availableByMaterial.get(
+          item.materialId
+        )
+        || {
+          materialId:
+            item.materialId,
+
+          materialCode:
+            item.materialCode,
+
+          materialName:
+            item.materialName,
+
+          unit:
+            item.unit,
+
+          quantity:
+            0
+        };
+
+      current.quantity =
+        Number(
+          (
+            numericQuantity(
+              current.quantity
+            )
+            + numericQuantity(
+              item.quantity
+            )
+          ).toFixed(6)
+        );
+
+      availableByMaterial.set(
+        item.materialId,
+        current
+      );
+    });
+
+  return {
+    initialSnapshot,
+
+    availableByMaterial,
+
+        availableByMaterialLocation,
+
+    transportAvailableByMaterialLocation,
+
+    requirementsByConsumer,
+
+    operationQuantityByConsumer
+  };
+}
+
+function buildManualPlanningValidationOperations(
+  result = {},
+  allocations = [],
+  machines = []
+) {
+  const operations =
+    Array.isArray(result?.operations)
+      ? result.operations
+      : [];
+
+  const sourceAllocations =
+    Array.isArray(allocations)
+      ? allocations
+      : [];
+
+    const requirementsByConsumer =
+  planningMaterialRequirementsByConsumer(
+    operations,
+
+    result?.tree
+    || result?.scheduleTree
+    || result?.schedule_tree
+  );
+
+  /*
+   * Local real das allocations já existentes.
+   *
+   * Ex.:
+   *
+   * 0:BOB  → MATRIZ
+   * 0:LONG → FEITAL
+   */
+  const locationsByOperation =
+    new Map();
+
+  const addOperationLocation = (
+    operationId,
+    allocation
+  ) => {
+    const key =
+      String(
+        operationId
+        ?? ''
+      ).replace(
+        /:day-\d+$/i,
+        ''
+      );
+
+    if (!key) {
+      return;
+    }
+
+    const locationId =
+      planningAllocationLocationId(
+        allocation,
+        machines
+      );
+
+    if (
+      !locationId
+      || locationId
+        === PLANNING_DEFAULT_LOCATION_ID
+    ) {
+      return;
+    }
+
+    if (
+      !locationsByOperation.has(
+        key
+      )
+    ) {
+      locationsByOperation.set(
+        key,
+        new Set()
+      );
+    }
+
+    locationsByOperation
+      .get(key)
+      .add(
+        locationId
+      );
+  };
+
+  sourceAllocations
+    .forEach(allocation => {
+      const components =
+        Array.isArray(
+          allocation?.components
+        )
+        && allocation.components.length
+          ? allocation.components
+          : null;
+
+      if (components) {
+        components.forEach(
+          component => {
+            addOperationLocation(
+              component?.parentOperationId
+              || allocation?.operationId
+              || allocation?.parentOperationId,
+
+              allocation
+            );
+          }
+        );
+
+        return;
+      }
+
+      addOperationLocation(
+        allocation?.operationId
+        || allocation?.parentOperationId
+        || allocation
+          ?.calendarParentOperationId,
+
+        allocation
+      );
+    });
+
+  const singleOperationLocation =
+    operationId => {
+      const values =
+        [
+          ...(
+            locationsByOperation.get(
+              String(
+                operationId
+                || ''
+              ).replace(
+                /:day-\d+$/i,
+                ''
+              )
+            )
+            || []
+          )
+        ];
+
+      return values.length === 1
+        ? values[0]
+        : '';
+    };
+
+  /*
+   * Quantidade realmente programada de cada card/operação.
+   *
+   * A dependência original representa o consumo da operação
+   * inteira. No planejamento manual precisamos validar somente
+   * a fração que já virou allocation.
+   */
+  const allocatedQuantityByOperation =
+    new Map();
+
+  const addAllocatedQuantity = (
+    operationId,
+    quantity
+  ) => {
+    const key = String(operationId ?? '')
+      .replace(/:day-\d+$/i, '');
+
+    const value = numericQuantity(quantity);
+
+    if (!key || !(value > 0)) return;
+
+    allocatedQuantityByOperation.set(
+      key,
+      Number(
+        (
+          numericQuantity(
+            allocatedQuantityByOperation.get(key)
+          )
+          + value
+        ).toFixed(6)
+      )
+    );
+  };
+
+  sourceAllocations.forEach(allocation => {
+    const components =
+      Array.isArray(allocation?.components)
+      && allocation.components.length
+        ? allocation.components
+        : null;
+
+    if (components) {
+      components.forEach(component => {
+        addAllocatedQuantity(
+          component?.parentOperationId
+          || allocation?.operationId
+          || allocation?.parentOperationId,
+          component?.quantity
+        );
+      });
+
+      return;
+    }
+
+    addAllocatedQuantity(
+      allocation?.operationId
+      || allocation?.parentOperationId
+      || allocation?.calendarParentOperationId,
+      allocation?.quantity
+    );
+  });
+
+  return operations.flatMap(operation => {
+    if (
+      operation?.operationType
+      === 'transport'
+    ) {
+      return [{ ...operation }];
+    }
+
+    const breakdown =
+      Array.isArray(
+        operation.productionBreakdown
+      )
+      && operation.productionBreakdown.length
+        ? operation.productionBreakdown
+        : [operation];
+
+    return breakdown.map(part => {
+      const operationId =
+        String(
+          part?.operationId
+          || planningMaterialDependencyKey(
+            operation
+          )
+        );
+
+      const requirements =
+        requirementsByConsumer.get(
+          operationId
+        )
+        || [];
+
+      const quantity =
+        planningMaterialOperationQuantity(
+          operation,
+          part
+        );
+
+      /*
+       * Ex.:
+       * operação total = 40.000
+       * já programado = 8.490
+       *
+       * ratio = 8.490 / 40.000
+       */
+            const allocatedQuantity =
+        Math.max(
+          numericQuantity(
+            allocatedQuantityByOperation.get(
+              operationId
+            )
+          ),
+          0
+        );
+
+      /*
+       * Uma operação pode receber demanda
+       * compartilhada de outra produção.
+       *
+       * Portanto este ratio pode passar de 1.
+       *
+       * Assim qualquer produção EXTRA continua
+       * exigindo proporcionalmente seus insumos.
+       */
+      const allocatedRatio =
+        quantity > 0
+          ? Math.max(
+              allocatedQuantity / quantity,
+              0
+            )
+          : 0;
+
+      const validateDependencies =
+        allocatedQuantity > 0
+        && requirements.length > 0;
+
+      return {
+        ...operation,
+        ...part,
+
+        operationId,
+
+        parentOperationId:
+          operationId,
+
+        calendarParentOperationId:
+          operationId,
+
+        productionId:
+          String(
+            part?.productionKey
+            || part?.productionId
+            || operation?.productionKey
+            || operation?.productionId
+            || ''
+          ),
+
+        productionIndex:
+          Number(
+            part?.productionIndex
+            ?? operation?.productionIndex
+            ?? 0
+          ),
+
+        materialId:
+          String(
+            part?.materialId
+            ?? operation?.materialId
+            ?? ''
+          ),
+
+        materialName:
+          String(
+            part?.materialName
+            ?? operation?.materialName
+            ?? ''
+          ),
+
+        materialCode:
+          String(
+            part?.materialCode
+            ?? operation?.materialCode
+            ?? ''
+          ),
+
+        produceQty:
+          quantity,
+
+        quantity,
+
+        unit:
+          String(
+            part?.unit
+            || operation?.unit
+            || ''
+          ),
+
+        dependencyOperationIds:
+          validateDependencies
+            ? requirements.map(
+                requirement =>
+                  requirement
+                    .producerParentOperationId
+              )
+            : [],
+
+        dependencyRequirements:
+          validateDependencies
+            ? requirements
+                .map(requirement => {
+                  /*
+                   * ESTE É O PONTO PRINCIPAL:
+                   *
+                   * requirement.requiredQuantity
+                   * é o consumo da operação inteira.
+                   *
+                   * Para o draft manual mandamos somente
+                   * o consumo referente ao que já foi
+                   * efetivamente programado.
+                   */
+                  const requiredQuantity =
+                    Number(
+                      (
+                        numericQuantity(
+                          requirement.requiredQuantity
+                        )
+                        * allocatedRatio
+                      ).toFixed(6)
+                    );
+
+                  return {
+                    operationId:
+                      requirement
+                        .producerParentOperationId,
+
+                    producerParentOperationId:
+                      requirement
+                        .producerParentOperationId,
+
+                    materialId:
+                      requirement.materialId,
+
+                    requiredQty:
+                      requiredQuantity,
+
+                                      requiredQuantity,
+
+                    unit:
+                      requirement.unit,
+
+                    /*
+                     * Bobina:
+                     * produtor = Matriz
+                     *
+                     * Long/Trans:
+                     * consumidor = Feital
+                     */
+                    sourceLocation:
+                      singleOperationLocation(
+                        requirement
+                          .producerParentOperationId
+                      ),
+
+                    targetLocation:
+                      singleOperationLocation(
+                        operationId
+                      )
+                  };
+                })
+                .filter(requirement =>
+                  requirement.requiredQuantity > 0
+                )
+            : []
+      };
+    });
+  });
+}
+
+function planningMaterialOperationQuantity(operation = {}, part = {}) {
+  return wholePlanningQuantity(part.quantity ?? part.produceQty ?? operation.produceQty ?? operation.quantity);
+}
+
+function planningMaterialPermittedQuantity({
+  operation = {},
+  part = {},
+  remainingQty = 0,
+  availability,
+  targetLocationIds = []
+} = {}) {
+  const remaining =
+    wholePlanningQuantity(
+      remainingQty
+    );
+
+  if (!(remaining > 0)) {
+    return 0;
+  }
+
+  const operationId =
+    String(
+      part.operationId
+      || operation.operationId
+      || ''
+    );
+
+  const requirements =
+    availability
+      ?.requirementsByConsumer
+      ?.get(operationId)
+    || [];
+
+  const dependencyOperationIds =
+    Array.isArray(
+      operation.dependencyOperationIds
+    )
+      ? operation
+          .dependencyOperationIds
+          .filter(Boolean)
+      : [];
+
+  if (!requirements.length) {
+    return dependencyOperationIds.length
+      ? 0
+      : remaining;
+  }
+
+  const baseQuantity =
+    planningMaterialOperationQuantity(
+      operation,
+      part
+    );
+
+  if (!(baseQuantity > 0)) {
+    return 0;
+  }
+
+  const limits =
+    requirements
+      .map(requirement => {
+        /*
+         * IMPORTANTE:
+         *
+         * Todas as produções que consomem
+         * o mesmo material no mesmo local
+         * consultam exatamente este mesmo saldo.
+         */
+        const available =
+          planningMaterialAvailableQuantity({
+            availability,
+
+            materialId:
+              requirement.materialId,
+
+            targetLocationIds
+          });
+
+        const usagePerUnit =
+          requirement.requiredQuantity
+          / baseQuantity;
+
+        return usagePerUnit > 0
+          ? available / usagePerUnit
+          : remaining;
+      })
+      .filter(
+        Number.isFinite
+      );
+
+  if (!limits.length) {
+    return 0;
+  }
+
+  return Math.min(
+    remaining,
+
+    Math.floor(
+      Math.max(
+        Math.min(
+          ...limits
+        ),
+        0
+      )
+    )
+  );
+}
+
+function planningSharedDemandMaterialKey(
+  material = {}
+) {
+  const materialId =
+    String(
+      material?.materialId
+      || ''
+    ).trim();
+
+  const locationIds =
+    [
+      ...new Set(
+        (
+          Array.isArray(
+            material?.consumerLocationIds
+          )
+            ? material.consumerLocationIds
+            : []
+        )
+          .map(value =>
+            String(value || '').trim()
+          )
+          .filter(Boolean)
+      )
+    ].sort();
+
+  return `${materialId}\u0000${locationIds.join(',')}`;
+}
+
+
+function applyPlanningSharedDemandCoverage(
+  productions = [],
+  {
+    ignoreStock = false
+  } = {}
+) {
+  const groups =
+    Array.isArray(productions)
+      ? productions
+      : [];
+
+  const openProductionIds =
+    new Set();
+
+  const sharedDebtByKey =
+    new Map();
+
+
+  /*
+   * Primeiro normaliza os valores ORIGINAIS.
+   */
+  groups.forEach(group => {
+
+    group.materials.forEach(material => {
+
+      material.baseRequiredQty =
+        numericQuantity(
+          material.baseRequiredQty
+          ?? material.requiredQty
+        );
+
+      material.rawScheduledQty =
+        numericQuantity(
+          material.rawScheduledQty
+          ?? material.scheduledQty
+        );
+
+      material.rawRemainingQty =
+        Math.max(
+          material.baseRequiredQty
+          -
+          material.rawScheduledQty,
+          0
+        );
+
+      material.sharedStockCoveredQty = 0;
+
+      material.sharedDemandQty = 0;
+
+      material.attendedBySharedStock = false;
+    });
+
+
+    /*
+     * Descobre o produto FINAL da produção.
+     *
+     * Um card terminal é aquele que nenhum
+     * outro card da mesma produção utiliza
+     * como predecessor.
+     */
+    const dependencyIds =
+      new Set(
+        group.materials
+          .flatMap(material => (
+            Array.isArray(
+              material?.dependencyOperationIds
+            )
+              ? material.dependencyOperationIds
+              : []
+          ))
+          .map(String)
+      );
+
+
+    const terminalMaterials =
+      group.materials.filter(material => (
+        !dependencyIds.has(
+          String(material.operationId)
+        )
+      ));
+
+
+    const productionCompleted =
+      terminalMaterials.length > 0
+      &&
+      terminalMaterials.every(material => (
+        numericQuantity(
+          material.rawRemainingQty
+        ) <= 0
+      ));
+
+
+    if (!productionCompleted) {
+
+      openProductionIds.add(
+        String(group.productionId)
+      );
+    }
+
+
+    const byOperationId =
+      new Map(
+        group.materials.map(material => [
+          String(material.operationId),
+          material
+        ])
+      );
+
+
+    /*
+     * Se a MALHA FINAL terminou, mas algum
+     * predecessor direto dela não foi produzido,
+     * então aquela quantidade veio do saldo
+     * compartilhado.
+     *
+     * Ex.:
+     *
+     * Q-61 = 300 / 300
+     * Trans Q-61 = 0 / 6.000
+     *
+     * Logo:
+     * 6.000 Trans foram atendidos pelo saldo.
+     */
+    terminalMaterials
+      .filter(material => (
+        numericQuantity(
+          material.rawRemainingQty
+        ) <= 0
+      ))
+      .forEach(finalMaterial => {
+
+        (
+          Array.isArray(
+            finalMaterial
+              ?.dependencyOperationIds
+          )
+            ? finalMaterial
+                .dependencyOperationIds
+            : []
+        ).forEach(
+          dependencyOperationId => {
+
+            const dependencyMaterial =
+              byOperationId.get(
+                String(
+                  dependencyOperationId
+                )
+              );
+
+
+            if (
+              !dependencyMaterial
+              ||
+              dependencyMaterial
+                .attendedBySharedStock
+            ) {
+              return;
+            }
+
+
+            const coveredBySharedStock =
+              Math.max(
+                numericQuantity(
+                  dependencyMaterial
+                    .rawRemainingQty
+                ),
+                0
+              );
+
+
+            if (!(coveredBySharedStock > 0)) {
+              return;
+            }
+
+
+            dependencyMaterial
+              .attendedBySharedStock = true;
+
+            dependencyMaterial
+              .sharedStockCoveredQty =
+                Number(
+                  coveredBySharedStock
+                    .toFixed(6)
+                );
+
+
+            const key =
+              planningSharedDemandMaterialKey(
+                dependencyMaterial
+              );
+
+
+            const currentDebt =
+              numericQuantity(
+                sharedDebtByKey.get(key)
+              );
+
+
+            sharedDebtByKey.set(
+              key,
+              Number(
+                (
+                  currentDebt
+                  +
+                  coveredBySharedStock
+                ).toFixed(6)
+              )
+            );
+          }
+        );
+      });
+  });
+
+
+  /*
+   * Agora joga a quantidade consumida do saldo
+   * compartilhado para uma produção que AINDA
+   * esteja aberta e use:
+   *
+   * MESMO MATERIAL + MESMO LOCAL.
+   *
+   * Se houver várias produções abertas,
+   * usamos primeiro a de menor productionIndex.
+   */
+  sharedDebtByKey.forEach(
+    (sharedDemandQty, key) => {
+
+      const candidates =
+        groups
+          .filter(group => (
+            openProductionIds.has(
+              String(group.productionId)
+            )
+          ))
+          .flatMap(group =>
+            group.materials.map(
+              material => ({
+                group,
+                material
+              })
+            )
+          )
+          .filter(({ material }) => (
+            !material.attendedBySharedStock
+            &&
+            planningSharedDemandMaterialKey(
+              material
+            ) === key
+          ))
+          .sort((left, right) => (
+            Number(
+              left.group.productionIndex
+              ?? Number.MAX_SAFE_INTEGER
+            )
+            -
+            Number(
+              right.group.productionIndex
+              ?? Number.MAX_SAFE_INTEGER
+            )
+
+            ||
+
+            Number(
+              left.material.sequence
+              ?? Number.MAX_SAFE_INTEGER
+            )
+            -
+            Number(
+              right.material.sequence
+              ?? Number.MAX_SAFE_INTEGER
+            )
+          ));
+
+
+      const target =
+        candidates[0]?.material;
+
+
+      if (!target) {
+        return;
+      }
+
+
+      target.sharedDemandQty =
+        Number(
+          (
+            numericQuantity(
+              target.sharedDemandQty
+            )
+            +
+            sharedDemandQty
+          ).toFixed(6)
+        );
+    }
+  );
+
+
+  /*
+   * Finalmente recalculamos os cards.
+   */
+  groups.forEach(group => {
+
+    group.materials.forEach(material => {
+
+      const baseRequiredQty =
+        numericQuantity(
+          material.baseRequiredQty
+        );
+
+      const scheduledQty =
+        numericQuantity(
+          material.rawScheduledQty
+        );
+
+
+      /*
+       * Produção já encerrada utilizando
+       * material do saldo compartilhado.
+       */
+      if (
+        material.attendedBySharedStock
+      ) {
+
+        material.requiredQty =
+          baseRequiredQty;
+
+        material.scheduledQty =
+          scheduledQty;
+
+        material.remainingQty = 0;
+
+        material.permittedQty = 0;
+
+        material.blocked = false;
+
+        material.partial = false;
+
+        material.ready = false;
+
+        material.completed = true;
+
+        material.status =
+          'completed-shared-stock';
+
+        return;
+      }
+
+
+      /*
+       * Produção ainda aberta que recebeu
+       * a necessidade de reposição.
+       */
+      const effectiveRequiredQty =
+        Number(
+          (
+            baseRequiredQty
+            +
+            numericQuantity(
+              material.sharedDemandQty
+            )
+          ).toFixed(6)
+        );
+
+
+      const remainingQty =
+        Math.max(
+          effectiveRequiredQty
+          -
+          scheduledQty,
+          0
+        );
+
+
+      const permittedQty =
+        ignoreStock
+
+          ? remainingQty
+
+          : Math.min(
+              remainingQty,
+
+              Math.max(
+                numericQuantity(
+                  material
+                    .stockPermittedCapacity
+                ),
+                0
+              )
+            );
+
+
+      const status =
+        remainingQty <= 0
+          ? 'completed'
+
+          : permittedQty <= 0
+            ? 'blocked'
+
+            : permittedQty < remainingQty
+              ? 'partial'
+
+              : 'ready';
+
+
+      material.requiredQty =
+        effectiveRequiredQty;
+
+      material.scheduledQty =
+        scheduledQty;
+
+      material.remainingQty =
+        remainingQty;
+
+      material.permittedQty =
+        permittedQty;
+
+      material.blocked =
+        status === 'blocked';
+
+      material.partial =
+        status === 'partial';
+
+      material.ready =
+        status === 'ready';
+
+      material.completed =
+        status === 'completed';
+
+      material.status =
+        status;
+    });
+  });
+
+
+  return groups;
+}
+
+export function buildPlanningMaterialsToScheduleModel(
+  result = {},
+  {
+    allocations = [],
+    transports = [],
+    plannedReceipts = [],
+    machines = [],
+    asOfDate = null,
+    resolveConsumerLocationIds = null,
+    ignoreStock = false
+  } = {}
+) {
+  const scheduledByOperation = new Map();
+  (Array.isArray(allocations) ? allocations : []).forEach(allocation => {
+    const key = planningMaterialOperationKey(allocation);
+    if (!key) return;
+    scheduledByOperation.set(key, Number((Number(scheduledByOperation.get(key) || 0) + numericQuantity(allocation.quantity)).toFixed(6)));
+  });
+  const operations = (Array.isArray(result?.operations) ? result.operations : [])
+    .filter(operation => operation?.operationType !== 'transport')
+    .filter(operation => numericQuantity(operation?.produceQty) > 0 || numericQuantity(operation?.quantity) > 0);
+  const summaryProductions = Array.isArray(result?.summary?.productions) ? result.summary.productions : [];
+  const productions = new Map(summaryProductions.map((production, index) => [
+    String(production.productionKey || `production-${production.productionIndex ?? index}`),
+    {
+      productionId: String(production.productionKey || `production-${production.productionIndex ?? index}`),
+      productionIndex: Number(production.productionIndex ?? index),
+      title: productionTitleForManualCard(production, index),
+      color: production.color || null,
+      materials: []
+    }
+  ]));
+  const ensureProduction = (source = {}, fallbackIndex = 0) => {
+    const productionIndex = Number(source.productionIndex ?? fallbackIndex);
+    const productionId = String(source.productionKey || source.productionId || `production-${productionIndex}`);
+    if (!productions.has(productionId)) {
+      productions.set(productionId, {
+        productionId,
+        productionIndex,
+        title: productionTitleForManualCard(source, productionIndex),
+        color: source.productionColor || source.color || null,
+        materials: []
+      });
+    }
+    return productions.get(productionId);
+  };
+   const localStockAvailability =
+    buildPlanningLocalStockAvailability({
+    result,
+    allocations,
+    transports,
+    plannedReceipts,
+    machines,
+    asOfDate
+  });
+  operations.forEach(operation => {
+    const breakdown = Array.isArray(operation.productionBreakdown) && operation.productionBreakdown.length
+      ? operation.productionBreakdown
+      : [operation];
+    breakdown.forEach(part => {
+      const requiredQty = planningMaterialOperationQuantity(operation, part);
+      if (!(requiredQty > 0)) return;
+      const operationId = String(part.operationId || operation.operationId || `${part.productionIndex ?? operation.productionIndex}:${operation.materialId}`);
+           const rawScheduledQty =
+        wholePlanningQuantity(
+          scheduledByOperation.get(
+            operationId
+          )
+          || 0
+        );
+
+      const scheduledQty =
+        rawScheduledQty;
+
+      const remainingQty =
+        Math.max(
+          0,
+          requiredQty - scheduledQty
+        );
+      const dependencyOperationIds = Array.isArray(operation.dependencyOperationIds)
+        ? operation.dependencyOperationIds.filter(Boolean).map(String)
+        : [];
+            const consumerLocationIds =
+        typeof resolveConsumerLocationIds
+          === 'function'
+
+          ? resolveConsumerLocationIds({
+              operationId,
+
+              materialId:
+                String(
+                  part.materialId
+                  || operation.materialId
+                  || ''
+                ),
+
+              materialCode:
+                String(
+                  part.materialCode
+                  || operation.materialCode
+                  || part.material_code
+                  || operation.material_code
+                  || ''
+                ),
+
+              materialName:
+                part.materialName
+                || operation.materialName
+                || '',
+
+              unit:
+                part.unit
+                || operation.unit
+                || '',
+
+              productionId:
+                String(
+                  part.productionKey
+                  || part.productionId
+                  || operation.productionKey
+                  || operation.productionId
+                  || ''
+                ),
+
+              productionIndex:
+                Number(
+                  part.productionIndex
+                  ?? operation.productionIndex
+                  ?? 0
+                )
+            })
+
+          : [];
+
+            const productiveRequirements =
+        localStockAvailability
+          .requirementsByConsumer
+          .get(operationId)
+        || [];
+
+            const resolvedDependencyOperationIds =
+        [
+          ...new Set([
+            ...dependencyOperationIds,
+
+            ...productiveRequirements
+              .map(requirement =>
+                String(
+                  requirement
+                    ?.producerParentOperationId
+                  ||
+                  requirement
+                    ?.operationId
+                  ||
+                  ''
+                )
+              )
+              .filter(Boolean)
+          ])
+        ];
+
+
+      /*
+       * Calcula primeiro quanto o estoque
+       * permitiria produzir sem limitar pelo
+       * restante ORIGINAL do card.
+       *
+       * Depois a demanda compartilhada pode
+       * crescer sem perder esse limite físico.
+       */
+      const stockPermittedCapacity =
+        ignoreStock
+
+          ? Number.MAX_SAFE_INTEGER
+
+          : planningMaterialPermittedQuantity({
+              operation: {
+                ...operation,
+                operationId
+              },
+
+              part: {
+                ...part,
+                operationId
+              },
+
+              remainingQty:
+                Number.MAX_SAFE_INTEGER,
+
+              availability:
+                localStockAvailability,
+
+              targetLocationIds:
+                consumerLocationIds
+            });
+
+
+      const permittedQty =
+        ignoreStock
+
+          ? remainingQty
+
+          : Math.min(
+              remainingQty,
+              stockPermittedCapacity
+            );
+
+
+      /*
+       * Guarda também o saldo que originou
+       * o Permitido.
+       *
+       * Isso serve para mostrarmos na tela:
+       *
+       * CA60 3,4 Bobina / FEITAL
+       * disponível: 500 kg
+       *
+       * IMPORTANTE:
+       * não existe saldo por Produção #1 ou #2.
+       */
+      const inputBalanceByKey =
+        new Map();
+
+
+      if (!ignoreStock) {
+
+        productiveRequirements
+          .forEach(requirement => {
+
+            const materialId =
+              String(
+                requirement?.materialId
+                || ''
+              ).trim();
+
+
+            if (!materialId) {
+              return;
+            }
+
+
+            const locationIds =
+              [
+                ...new Set(
+                  (
+                    Array.isArray(
+                      consumerLocationIds
+                    )
+                      ? consumerLocationIds
+                      : []
+                  )
+                    .map(value =>
+                      String(value || '').trim()
+                    )
+                    .filter(Boolean)
+                )
+              ].sort();
+
+
+            const key =
+              `${materialId}\u0000${locationIds.join(',')}`;
+
+
+            const current =
+              inputBalanceByKey.get(key)
+              || {
+                materialId,
+
+                locationIds,
+
+                unit:
+                  String(
+                    requirement?.unit
+                    || ''
+                  ),
+
+                requiredQty:
+                  0,
+
+                availableQty:
+                  planningMaterialAvailableQuantity({
+                    availability:
+                      localStockAvailability,
+
+                    materialId,
+
+                    targetLocationIds:
+                      locationIds
+                  })
+              };
+
+
+            current.requiredQty =
+              Number(
+                (
+                  numericQuantity(
+                    current.requiredQty
+                  )
+                  +
+                  numericQuantity(
+                    requirement?.requiredQuantity
+                  )
+                ).toFixed(6)
+              );
+
+
+            inputBalanceByKey.set(
+              key,
+              current
+            );
+          });
+      }
+
+
+      const inputBalances =
+        [...inputBalanceByKey.values()];
+
+
+      const hasProductiveDependencies =
+        productiveRequirements.length > 0;
+
+      const status = remainingQty <= 0
+        ? 'completed'
+        : permittedQty <= 0
+          ? 'blocked'
+          : permittedQty < remainingQty
+            ? 'partial'
+            : 'ready';
+      ensureProduction(part, operation.productionIndex).materials.push({
+        operationId,
+        materialId: String(part.materialId || operation.materialId || ''),
+        materialCode: String(part.materialCode || operation.materialCode || part.material_code || operation.material_code || ''),
+        materialName: part.materialName || operation.materialName || '',
+                baseRequiredQty:
+          requiredQty,
+
+        rawScheduledQty,
+
+        requiredQty,
+        scheduledQty,
+        remainingQty,
+        permittedQty,
+
+        stockPermittedCapacity,
+
+        showPermitted:
+          hasProductiveDependencies,
+
+        inputBalances,
+
+        consumerLocationIds:
+          Array.isArray(
+            consumerLocationIds
+          )
+            ? [...consumerLocationIds]
+            : [],
+
+        unit:
+          part.unit
+          || operation.unit
+          || '',
+        blocked: status === 'blocked',
+        partial: status === 'partial',
+        ready: status === 'ready',
+        completed: remainingQty <= 0,
+                status,
+
+        dependencyOperationIds:
+          resolvedDependencyOperationIds,
+
+        sequence: part.sequence ?? part.productionOrder ?? operation.sequence ?? operation.productionOrder ?? null
+      });
+    });
+  });
+    const adjustedProductions =
+    applyPlanningSharedDemandCoverage(
+      [...productions.values()]
+        .filter(
+          production =>
+            production.materials.length
+        ),
+
+      {
+        ignoreStock
+      }
+    );
+
+
+  return adjustedProductions
+    .map(production => ({
+      ...production,
+
+      materials:
+        orderPlanningMaterialsByProductionSequence(
+          production.materials
+        )
+    }))
+    .sort((left, right) =>
+      left.productionIndex
+      - right.productionIndex
+
+      ||
+
+      left.title.localeCompare(
+        right.title,
+        'pt-BR'
+      )
+    );
 }
 
 function emptyProduction(index = 0) {
@@ -875,12 +4606,16 @@ function emptyTransport() {
 function defaultDraft() {
   const start = today();
   return {
-    planningStartDate: start,
+  planningMode: 'real',
+
+  planningStartDate:
+    start,
     shifts: [defaultShift(0)],
     productions: [emptyProduction(0)],
     stockOnlyMaterials: [],
-    stockOnlyMaterialChoices: [],
+        stockOnlyMaterialChoices: [],
     skipProductionMaterials: [],
+    plannedReceipts: [],
     operationOverrides: {},
     operationSplits: [],
     dailyTeamOverrides: {},
@@ -902,7 +4637,23 @@ function normalizeDraft(rawDraft) {
     productions: Array.isArray(draft.productions) && draft.productions.length ? draft.productions : [emptyProduction(0)],
     stockOnlyMaterials: Array.isArray(draft.stockOnlyMaterials) ? draft.stockOnlyMaterials : [],
     stockOnlyMaterialChoices: Array.isArray(draft.stockOnlyMaterialChoices) ? draft.stockOnlyMaterialChoices : [],
-    skipProductionMaterials: Array.isArray(draft.skipProductionMaterials) ? draft.skipProductionMaterials : [],
+        skipProductionMaterials:
+      Array.isArray(
+        draft.skipProductionMaterials
+      )
+        ? draft.skipProductionMaterials
+        : [],
+
+    plannedReceipts:
+      Array.isArray(
+        draft.plannedReceipts
+      )
+        ? draft.plannedReceipts
+            .map(
+              normalizeManualSchedulePlannedReceipt
+            )
+        : [],
+
     operationOverrides: draft.operationOverrides && typeof draft.operationOverrides === 'object' ? draft.operationOverrides : {},
     operationSplits: Array.isArray(draft.operationSplits) ? draft.operationSplits : [],
     dailyTeamOverrides: draft.dailyTeamOverrides && typeof draft.dailyTeamOverrides === 'object' ? draft.dailyTeamOverrides : {},
@@ -913,6 +4664,7 @@ function normalizeDraft(rawDraft) {
     manualScheduleDraft: draft.manualScheduleDraft && typeof draft.manualScheduleDraft === 'object' ? draft.manualScheduleDraft : null,
     automaticBaseline: normalizeAutomaticSimulationBaseline(draft.automaticBaseline)
   };
+   normalized.planningMode = 'real';
   normalized.productions = normalized.productions.map(production => ({ ...production, transports: [] }));
   normalized.shifts = normalizeShiftTimes(normalized.shifts.map((shift, index) => ({
     ...defaultShift(index, shift.shiftStartTime),
@@ -1048,34 +4800,72 @@ export function buildManualScheduleValidationContext({
   minimumStartRatio = 1,
   dependencyCompletionBufferMinutes = 60,
   holidays = [],
-  timezone
+timezone,
+ignoreStock = false
 } = {}) {
   const operations = Array.isArray(simulation?.operations) ? simulation.operations : [];
   const normalizedStock = stock === undefined ? stockFromSchedule(simulation) : stock;
   const normalizedStockMinimums = stockMinimums === undefined ? stockMinimumsFromMaterials(materials) : stockMinimums;
-  return {
-    operations,
-    materials,
-    machines,
-    productivityMatrix,
-    stock: normalizedStock,
-    stockMinimums: normalizedStockMinimums,
-    stockLocations: normalizeManualScheduleStockLocations({
-      stock: normalizedStock,
-      stockMinimums: normalizedStockMinimums,
+ const result = {
+  operations,
+  materials,
+  machines,
+  productivityMatrix,
+
+  skipStockValidation:
+    ignoreStock === true,
+
+  dependencies:
+    dependencies === undefined
+      ? []
+      : dependencies,
+
+  transports:
+    transports === undefined
+      ? transportsFromOperations(
+          operations
+        )
+      : transports,
+
+  shifts,
+  dailyTeamOverrides,
+  manualWorkDates,
+  setupMinutes,
+  minimumStartRatio,
+  dependencyCompletionBufferMinutes,
+  holidays,
+
+  timezone:
+    timezone
+    ||
+    Intl.DateTimeFormat()
+      .resolvedOptions()
+      .timeZone
+};
+
+
+if (!ignoreStock) {
+
+  result.stock =
+    normalizedStock;
+
+  result.stockMinimums =
+    normalizedStockMinimums;
+
+  result.stockLocations =
+    normalizeManualScheduleStockLocations({
+      stock:
+        normalizedStock,
+
+      stockMinimums:
+        normalizedStockMinimums,
+
       stockLocations
-    }),
-    dependencies: dependencies === undefined ? [] : dependencies,
-    transports: transports === undefined ? transportsFromOperations(operations) : transports,
-    shifts,
-    dailyTeamOverrides,
-    manualWorkDates,
-    setupMinutes,
-    minimumStartRatio,
-    dependencyCompletionBufferMinutes,
-    holidays,
-    timezone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone
-  };
+    });
+}
+
+
+return result;
 }
 
 export function buildProductionCalendarValidationSnapshot(validation, allocations = [], days = []) {
@@ -1176,13 +4966,20 @@ export function PlanningPage() {
   const page = document.createElement('section');
   page.className = 'stack planning-page';
   page.innerHTML = `
-      <div class="page-header">
-        <div>
-          <h1>Planejamento / Simula&ccedil;&atilde;o</h1>
-        </div>
-      </div>
-      <div class="planning-target"></div>
-    `;
+  <div class="page-header">
+
+    <div class="planning-page-title-row">
+
+           <h1>
+        Planejamento
+      </h1>
+
+    </div>
+
+  </div>
+
+  <div class="planning-target"></div>
+`;
 
   const pageTitle = page.querySelector('.page-header h1');
   const target = page.querySelector('.planning-target');
@@ -1337,9 +5134,21 @@ export function PlanningPage() {
     });
   }
 
-  function updatePageTitle() {
+    function updatePageTitle() {
     const tab = planningTabs.find(item => item.id === activeTab) || planningTabs[0];
-    pageTitle.textContent = `Planejamento / ${tab.label}`;
+
+    pageTitle.textContent =
+      `Planejamento / ${tab.label}`;
+
+    const pills =
+      page.querySelector(
+        '[data-planning-mode-pills]'
+      );
+
+    if (pills) {
+      pills.hidden =
+        activeTab !== 'simulation';
+    }
   }
 
   function saveDraftNow() {
@@ -1412,19 +5221,50 @@ export function PlanningPage() {
   }
 
   function payload() {
-    return buildPlanningSimulationPayload({
+  return {
+    ...buildPlanningSimulationPayload({
       draft,
       materials,
       findMaterialById,
-      shifts: buildShiftPayload(normalizeShiftTimes(draft.shifts), {
-        getDefaultTeamAvailable: defaultTeamAvailableForShift
-      }),
-      setupHours: parsePtBrDecimal(draft.setupHours, 0),
-      productions: productionPayload(),
-      stockOnlyMaterials: stockOnlyMaterialsForPayload(),
-      manualWorkDates: manualScheduleDraft?.manualWorkDates || draft.manualWorkDates || lastPayload?.manualWorkDates || []
-    });
-  }
+
+      shifts:
+        buildShiftPayload(
+          normalizeShiftTimes(
+            draft.shifts
+          ),
+          {
+            getDefaultTeamAvailable:
+              defaultTeamAvailableForShift
+          }
+        ),
+
+      setupHours:
+        parsePtBrDecimal(
+          draft.setupHours,
+          0
+        ),
+
+      productions:
+        productionPayload(),
+
+      stockOnlyMaterials:
+        stockOnlyMaterialsForPayload(),
+
+      manualWorkDates:
+        manualScheduleDraft
+          ?.manualWorkDates
+        ||
+        draft.manualWorkDates
+        ||
+        lastPayload
+          ?.manualWorkDates
+        ||
+        []
+    }),
+
+        planningMode: 'real'
+  };
+}
 
   function productionColorByIndex(index = 0) {
     const production = draft.productions[Number(index) || 0];
@@ -1493,9 +5333,34 @@ export function PlanningPage() {
   function cloneDraftPlanningState() {
     return {
       operationOverrides: JSON.parse(JSON.stringify(draft.operationOverrides || {})),
-      operationSplits: JSON.parse(JSON.stringify(draft.operationSplits || [])),
-      dailyTeamOverrides: JSON.parse(JSON.stringify(draft.dailyTeamOverrides || {})),
-      manualWorkDates: JSON.parse(JSON.stringify(draft.manualWorkDates || [])),
+            operationSplits:
+        JSON.parse(
+          JSON.stringify(
+            draft.operationSplits || []
+          )
+        ),
+
+      dailyTeamOverrides:
+        JSON.parse(
+          JSON.stringify(
+            draft.dailyTeamOverrides || {}
+          )
+        ),
+
+      manualWorkDates:
+        JSON.parse(
+          JSON.stringify(
+            draft.manualWorkDates || []
+          )
+        ),
+
+      plannedReceipts:
+        JSON.parse(
+          JSON.stringify(
+            draft.plannedReceipts || []
+          )
+        ),
+
       manualScheduleDraft: manualScheduleDraft ? JSON.parse(JSON.stringify(manualScheduleDraft)) : null,
       lastPayload: lastPayload ? JSON.parse(JSON.stringify(lastPayload)) : null,
       currentSimulation: currentSimulation ? JSON.parse(JSON.stringify(currentSimulation)) : null,
@@ -1506,8 +5371,16 @@ export function PlanningPage() {
   function restoreDraftPlanningState(snapshot) {
     draft.operationOverrides = snapshot.operationOverrides;
     draft.operationSplits = snapshot.operationSplits;
-    draft.dailyTeamOverrides = snapshot.dailyTeamOverrides;
-    draft.manualWorkDates = snapshot.manualWorkDates;
+        draft.dailyTeamOverrides =
+      snapshot.dailyTeamOverrides;
+
+    draft.manualWorkDates =
+      snapshot.manualWorkDates;
+
+    draft.plannedReceipts =
+      snapshot.plannedReceipts
+      || [];
+
     manualScheduleDraft = snapshot.manualScheduleDraft || null;
     lastPayload = snapshot.lastPayload;
     currentSimulation = snapshot.currentSimulation;
@@ -1898,29 +5771,474 @@ export function PlanningPage() {
     );
   }
 
-  async function loadStockOverviewRows() {
-    if (stockOverviewCache) return stockOverviewCache;
-    const overview = await api('/stock/materials-overview');
-    stockOverviewCache = Array.isArray(overview?.rows) ? overview.rows : [];
+  function planningCurrentStockPeriod(
+  context = {}
+) {
+
+  const starts = [];
+  const ends = [];
+
+
+  for (
+    const row
+    of context.rows || []
+  ) {
+
+    for (
+      const detail
+      of row.details || []
+    ) {
+
+      if (
+        detail.type !== 'sales'
+      ) {
+        continue;
+      }
+
+
+      const start =
+        String(
+          detail.periodStart
+          || ''
+        ).slice(0, 10);
+
+
+      const end =
+        String(
+          detail.periodEnd
+          || ''
+        ).slice(0, 10);
+
+
+      if (
+        isValidDateOnly(start)
+      ) {
+        starts.push(start);
+      }
+
+
+      if (
+        isValidDateOnly(end)
+      ) {
+        ends.push(end);
+      }
+    }
+  }
+
+
+  const lastStart =
+    String(
+      context
+        .lastImport
+        ?.period_start
+      || ''
+    ).slice(0, 10);
+
+
+  const lastEnd =
+    String(
+      context
+        .lastImport
+        ?.period_end
+      || ''
+    ).slice(0, 10);
+
+
+  if (
+    isValidDateOnly(
+      lastStart
+    )
+  ) {
+    starts.push(lastStart);
+  }
+
+
+  if (
+    isValidDateOnly(
+      lastEnd
+    )
+  ) {
+    ends.push(lastEnd);
+  }
+
+
+  if (
+    !starts.length
+    ||
+    !ends.length
+  ) {
+    return null;
+  }
+
+
+  return {
+    start:
+      starts.sort()[0],
+
+    end:
+      ends
+        .sort()
+        .at(-1)
+  };
+}
+
+
+function planningStockRowsFromCurrent(
+  context = {}
+) {
+
+  const rows =
+    Array.isArray(
+      context.rows
+    )
+      ? context.rows
+      : [];
+
+
+  const period =
+    planningCurrentStockPeriod(
+      context
+    );
+
+
+  const businessDays =
+    period
+
+      ? businessDaysInclusive(
+          period.start,
+          period.end
+        )
+
+      : 0;
+
+
+  const grouped =
+    new Map();
+
+
+  for (
+    const row
+    of rows
+  ) {
+
+    const materialId =
+      String(
+        row.materialId || ''
+      );
+
+
+    if (!materialId) {
+      continue;
+    }
+
+
+    if (
+      !grouped.has(
+        materialId
+      )
+    ) {
+
+      grouped.set(
+        materialId,
+        {
+          material: {
+            id:
+              row.materialId,
+
+            name:
+              row.materialName
+              || '-',
+
+            permitsSales:
+              row.permitsSales
+              !== false,
+
+            primary_unit:
+              row.unit || ''
+          },
+
+          codes:
+            Array.isArray(
+              row.materialCodes
+            )
+              ? row.materialCodes
+              : [],
+
+                   totalLocationsQty:
+            0,
+
+          salesPeriodQty:
+            0,
+
+          /*
+           * Mantém também o saldo físico
+           * separado por local.
+           *
+           * A visão agregada continua existindo
+           * para os consumidores antigos.
+           */
+          stockByLocation:
+            []
+        }
+      );
+    }
+
+
+        const item =
+      grouped.get(
+        materialId
+      );
+
+
+    item.stockByLocation.push({
+      locationId:
+        String(
+          row.locationId
+          ?? row.location_id
+          ?? ''
+        ),
+
+      locationCode:
+        String(
+          row.locationCode
+          ?? row.location_code
+          ?? ''
+        ),
+
+      locationName:
+        String(
+          row.locationName
+          ?? row.location_name
+          ?? ''
+        ),
+
+      currentQty:
+        Number(
+          row.currentQty
+          ?? row.current_qty
+          ?? 0
+        ),
+
+      unit:
+        String(
+          row.unit
+          || ''
+        )
+    });
+
+
+    item.totalLocationsQty +=
+      Number(
+        row.currentQty || 0
+      );
+
+
+    item.salesPeriodQty +=
+      Number(
+        row.movementTotals
+          ?.salesQty
+        || 0
+      );
+
+
+    if (
+      row.permitsSales
+      === false
+    ) {
+      item.material
+        .permitsSales =
+          false;
+    }
+  }
+
+
+  return [
+    ...grouped.values()
+  ].map(
+    row => {
+
+      const permitsSales =
+        row.material
+          .permitsSales
+        !== false;
+
+
+      const salesPerDayQty =
+        permitsSales
+        &&
+        businessDays > 0
+        &&
+        row.salesPeriodQty > 0
+
+          ? row.salesPeriodQty
+            /
+            businessDays
+
+          : null;
+
+
+      return {
+        ...row,
+
+        salesPerDayQty,
+
+        salesBlocked:
+          !permitsSales,
+
+        salesNotEstimated:
+          permitsSales
+          &&
+          !(salesPerDayQty > 0)
+      };
+    }
+  );
+}
+
+
+async function loadStockOverviewRows() {
+
+  if (stockOverviewCache) {
     return stockOverviewCache;
   }
+
+
+  const current =
+    await api(
+      '/stock/current'
+    );
+
+
+  stockOverviewCache =
+    planningStockRowsFromCurrent(
+      current
+    );
+
+
+  return stockOverviewCache;
+}
 
   function stockOverviewByMaterialId(rows = []) {
     return new Map(rows.map(row => [String(row.material?.id ?? row.materialId ?? row.id ?? ''), row]));
   }
 
-  function manualScheduleStockFromOverviewRows(rows = []) {
+    function manualScheduleStockFromOverviewRows(rows = []) {
     return (Array.isArray(rows) ? rows : [])
-      .map(row => {
-        const materialId = String(row.material?.id ?? row.materialId ?? row.material_id ?? row.id ?? '');
-        const quantity = Number(row.totalLocationsQty ?? row.total_locations_qty ?? row.quantity ?? 0);
-        return {
+      .flatMap(row => {
+        const materialId =
+          String(
+            row.material?.id
+            ?? row.materialId
+            ?? row.material_id
+            ?? row.id
+            ?? ''
+          );
+
+        const defaultUnit =
+          String(
+            row.material?.primary_unit
+            ?? row.material?.primaryUnit
+            ?? row.unit
+            ?? ''
+          );
+
+        const locationRows =
+          Array.isArray(row.stockByLocation)
+            ? row.stockByLocation
+            : [];
+
+        if (locationRows.length) {
+          return locationRows
+            .map(location => {
+              const quantity =
+                Number(
+                  location.currentQty
+                  ?? location.current_qty
+                  ?? location.quantity
+                  ?? 0
+                );
+
+              return {
+                materialId,
+
+                locationId:
+                  String(
+                    location.locationId
+                    ?? location.location_id
+                    ?? ''
+                  ),
+
+                locationCode:
+                  String(
+                    location.locationCode
+                    ?? location.location_code
+                    ?? ''
+                  ),
+
+                locationName:
+                  String(
+                    location.locationName
+                    ?? location.location_name
+                    ?? ''
+                  ),
+
+                quantity:
+  Number.isFinite(quantity)
+    ? Math.max(quantity, 0)
+    : 0,
+
+                unit:
+                  String(
+                    location.unit
+                    || defaultUnit
+                  )
+              };
+            })
+            .filter(item => (
+              item.materialId
+              && item.locationId
+            ));
+        }
+
+        /*
+         * Fallback para snapshots antigos
+         * ainda agregados por material.
+         */
+        const quantity =
+          Number(
+            row.totalLocationsQty
+            ?? row.total_locations_qty
+            ?? row.quantity
+            ?? 0
+          );
+
+        return [{
           materialId,
-          quantity: Number.isFinite(quantity) ? quantity : 0,
-          unit: String(row.material?.primary_unit ?? row.material?.primaryUnit ?? row.unit ?? '')
-        };
+
+          quantity:
+  Number.isFinite(quantity)
+    ? Math.max(quantity, 0)
+    : 0,
+
+          unit:
+            defaultUnit
+        }];
       })
       .filter(item => item.materialId);
+  }
+
+
+  function manualPlanningLocalStockSnapshotFromOverviewRows(
+    rows = []
+  ) {
+    return {
+      source:
+        'stock.current',
+
+      stock:
+        manualScheduleStockFromOverviewRows(
+          rows
+        )
+    };
   }
 
   function collectProductionShortageDecisions(result) {
@@ -1945,8 +6263,21 @@ export function PlanningPage() {
             materialCode: parent.materialCode || '',
             finalMaterialName: productionRoot.materialName || '',
             finalMaterialCode: productionRoot.materialCode || '',
-            requiredQty: Number(parent.requiredQty || parent.produceQty || 0),
-            unit: parent.unit || '',
+                        requiredQty:
+              Number(
+                parent.requiredQty
+                || parent.produceQty
+                || 0
+              ),
+
+            unit:
+              parent.unit
+              || '',
+
+            machineName:
+              parent.machineName
+              || '',
+
             productionModelName: parent.productionModelName || '',
             productionModelOptions: parent.productionModelOptions || [],
             shortages: []
@@ -1965,7 +6296,46 @@ export function PlanningPage() {
       (node.children || []).forEach(child => visit(child, node, productionRoot));
     }
     productionFlowTrees(result).forEach(root => visit(root, null, root));
-    return [...groups.values()].filter(group => group.shortages.length);
+                const plannedReceiptKeys =
+      new Set(
+        (
+          Array.isArray(
+            draft.plannedReceipts
+          )
+            ? draft.plannedReceipts
+            : []
+        )
+          .flatMap(receipt => [
+            String(
+              receipt
+                ?.sourceShortageKey
+              || ''
+            ),
+
+            ...(
+              Array.isArray(
+                receipt
+                  ?.sourceShortageKeys
+              )
+                ? receipt
+                    .sourceShortageKeys
+                    .map(String)
+                : []
+            )
+          ])
+          .filter(Boolean)
+      );
+
+    return [...groups.values()]
+      .filter(
+        group =>
+          group.shortages.length
+      )
+      .filter(group => (
+        !plannedReceiptKeys.has(
+          String(group.key)
+        )
+      ));
   }
 
   function stockQuantityForMaterial(stockRowsByMaterial = new Map(), materialId) {
@@ -1991,91 +6361,1338 @@ export function PlanningPage() {
         }));
   }
 
-  function readShortageSelections(root, groups = []) {
-    return new Map(groups.map(group => {
-      const selector = window.CSS?.escape ? window.CSS.escape(group.key) : group.key;
-      const card = root?.querySelector?.(`[data-shortage-key="${selector}"]`);
-      return [String(group.key), {
-        action: card?.querySelector('.planning-shortage-actions input:checked')?.value || 'keep',
-        productionModelName: card?.querySelector('.planning-shortage-model select')?.value || group.productionModelName || ''
-      }];
+    function planningShortageReceiptLocation(
+    group = {}
+  ) {
+    const machine =
+      planningMachineForAllocation(
+        {
+          machineName:
+            group?.machineName
+        },
+        registeredMachines
+      );
+
+    const machineLocationId =
+      planningMachineLocationId(
+        machine || {}
+      );
+
+    if (machineLocationId) {
+      return {
+        locationId:
+          machineLocationId,
+
+        locationName:
+          planningLocationLabel(
+            machineLocationId
+          )
+      };
+    }
+
+    const matriz =
+      (locations || [])
+        .find(location => (
+          normalizeText(
+            location?.name
+            ?? location?.locationName
+            ?? location?.location_name
+            ?? ''
+          ).includes(
+            'matriz'
+          )
+        ));
+
+    const fallback =
+      matriz
+      || (locations || [])[0]
+      || {};
+
+    const locationId =
+      String(
+        fallback?.id
+        ?? fallback?.locationId
+        ?? fallback?.location_id
+        ?? ''
+      ).trim();
+
+    return {
+      locationId,
+
+      locationName:
+        String(
+          fallback?.name
+          ?? fallback?.locationName
+          ?? fallback?.location_name
+          ?? locationId
+        )
+    };
+  }
+
+
+    function shortageReceiptMaterialOptions(
+    group,
+    option = null
+  ) {
+    const modelOptions =
+      Array.isArray(
+        group?.productionModelOptions
+      )
+        ? group.productionModelOptions
+        : [];
+
+
+    const candidates =
+      modelOptions.length
+
+        ? modelOptions.flatMap(
+            model =>
+              (
+                Array.isArray(model?.inputs)
+                  ? model.inputs
+                  : []
+              ).map(input => ({
+                input,
+
+                productionModelName:
+                  String(
+                    model?.modelName
+                    || ''
+                  )
+              }))
+          )
+
+        : shortageInputsForGroup(
+            group,
+            option
+          ).map(input => ({
+            input,
+
+            productionModelName:
+              String(
+                option?.modelName
+                || group?.productionModelName
+                || ''
+              )
+          }));
+
+
+    const byMaterial =
+      new Map();
+
+
+    candidates.forEach(candidate => {
+      const input =
+        candidate.input
+        || {};
+
+      const materialId =
+        String(
+          input.materialId
+          || ''
+        );
+
+      if (!materialId) {
+        return;
+      }
+
+      const catalogMaterial =
+        findMaterialById(
+          materials,
+          materialId
+        )
+        || {};
+
+
+      if (!byMaterial.has(materialId)) {
+        byMaterial.set(
+          materialId,
+          {
+            materialId,
+
+            materialName:
+              String(
+                input.materialName
+                || catalogMaterial?.name
+                || materialId
+              ),
+
+            materialCode:
+              String(
+                catalogMaterial?.code
+                ?? catalogMaterial?.materialCode
+                ?? catalogMaterial?.material_code
+                ?? ''
+              ),
+
+            unit:
+              String(
+                catalogMaterial?.primary_unit
+                ?? catalogMaterial?.primaryUnit
+                ?? input.unit
+                ?? 'kg'
+              ),
+
+            productionModelName:
+              candidate.productionModelName
+          }
+        );
+      }
+    });
+
+
+    return [
+      ...byMaterial.values()
+    ];
+  }
+
+   function readShortageSelections(root, groups = []) {
+    return new Map(
+      groups.map(group => {
+        const selector =
+          window.CSS?.escape
+            ? window.CSS.escape(group.key)
+            : group.key;
+
+        const card =
+          root?.querySelector?.(
+            `[data-shortage-key="${selector}"]`
+          );
+
+        return [
+          String(group.key),
+
+          {
+            action:
+              card
+                ?.querySelector(
+                  '.planning-shortage-actions input:checked'
+                )
+                ?.value
+              || 'keep',
+
+            productionModelName:
+              card
+                ?.querySelector(
+                  '.planning-shortage-model select'
+                )
+                ?.value
+              || group.productionModelName
+              || '',
+
+            targetProductionQty:
+              Number(
+                card
+                  ?.querySelector(
+                    '[name^="production-quantity-"]'
+                  )
+                  ?.value
+                || 0
+              )
+          }
+        ];
+      })
+    );
+  }
+
+    function shortageBaseProductionQuantity(
+    group = {}
+  ) {
+    const production =
+      draft.productions?.[
+        Number(
+          group.productionIndex || 0
+        )
+      ] || {};
+
+    return Number(
+      production.plannedQty
+      || 0
+    );
+  }
+
+  function shortageFinalProductionUnit(
+    group = {}
+  ) {
+    const production =
+      draft.productions?.[
+        Number(
+          group.productionIndex || 0
+        )
+      ] || {};
+
+    const material =
+      findMaterialById(
+        materials,
+        production.materialId
+      ) || {};
+
+    return String(
+      material.primary_unit
+      ?? material.primaryUnit
+      ?? production.plannedUnit
+      ?? production.unit
+      ?? group.unit
+      ?? ''
+    );
+  }
+
+  function shortageEffectiveRequiredQuantity(
+    group = {},
+    selection = {}
+  ) {
+    const baseRequired =
+      Number(
+        group.requiredQty || 0
+      );
+
+    const baseProductionQty =
+      shortageBaseProductionQuantity(
+        group
+      );
+
+    const requestedProductionQty =
+      Number(
+        selection.targetProductionQty
+        || 0
+      );
+
+    if (
+      selection.action !== 'quantity'
+      || !(requestedProductionQty > 0)
+      || !(baseProductionQty > 0)
+    ) {
+      return baseRequired;
+    }
+
+    return Number(
+      (
+        baseRequired
+        * requestedProductionQty
+        / baseProductionQty
+      ).toFixed(6)
+    );
+  }
+
+  function shortageGlobalReceiptMaterialOptions(
+    groups = []
+  ) {
+    const byMaterial =
+      new Map();
+
+    groups.forEach(group => {
+      shortageReceiptMaterialOptions(
+        group
+      ).forEach(item => {
+        const materialId =
+          String(
+            item.materialId || ''
+          );
+
+        if (
+          materialId
+          && !byMaterial.has(
+            materialId
+          )
+        ) {
+          byMaterial.set(
+            materialId,
+            item
+          );
+        }
+      });
+    });
+
+    return [
+      ...byMaterial.values()
+    ].sort(
+      (left, right) =>
+        String(
+          left.materialName || ''
+        ).localeCompare(
+          String(
+            right.materialName || ''
+          ),
+          'pt-BR',
+          {
+            numeric: true
+          }
+        )
+    );
+  }
+
+  function readGlobalShortageReceipts(
+    root
+  ) {
+    return [
+      ...(
+        root?.querySelectorAll?.(
+          '.planning-global-receipt-row'
+        ) || []
+      )
+    ].map(row => ({
+      id:
+        String(
+          row.dataset.receiptId
+          || ''
+        ),
+
+      materialId:
+        String(
+          row
+            .querySelector(
+              '[name="global-receipt-material"]'
+            )
+            ?.value
+          || ''
+        ),
+
+      quantity:
+        Number(
+          row
+            .querySelector(
+              '[name="global-receipt-quantity"]'
+            )
+            ?.value
+          || 0
+        ),
+
+      arrivalDate:
+        String(
+          row
+            .querySelector(
+              '[name="global-receipt-arrival"]'
+            )
+            ?.value
+          || ''
+        ).slice(
+          0,
+          10
+        ),
+
+      locationId:
+        String(
+          row
+            .querySelector(
+              '[name="global-receipt-location"]'
+            )
+            ?.value
+          || ''
+        )
     }));
   }
 
-  function buildProductionShortageCascade(groups = [], stockRowsByMaterial = new Map(), selections = new Map()) {
-    const balances = new Map();
-    const previewByKey = new Map();
-    [...groups].sort((left, right) => Number(left.productionIndex) - Number(right.productionIndex)).forEach(group => {
-      const selection = selections.get(String(group.key)) || {};
-      if (selection.action === 'skip') {
-        previewByKey.set(String(group.key), []);
+  function initialGlobalShortageReceipts(
+    groups = [],
+    stockRowsByMaterial = new Map()
+  ) {
+    const previews =
+      buildProductionShortageCascade(
+        groups,
+        stockRowsByMaterial,
+        new Map(),
+        []
+      );
+
+    const shortageByMaterial =
+      new Map();
+
+    groups.forEach(group => {
+      const rows =
+        previews.get(
+          String(group.key)
+        ) || [];
+
+      rows.forEach(row => {
+        const materialId =
+          String(
+            row.materialId || ''
+          );
+
+        if (!materialId) {
+          return;
+        }
+
+        const shortageQty =
+          Math.max(
+            Number(
+              row.shortageQty || 0
+            ),
+            0
+          );
+
+        const current =
+          shortageByMaterial.get(
+            materialId
+          )
+          || {
+            materialId,
+
+            materialName:
+              row.materialName
+              || materialId,
+
+            unit:
+              row.unit
+              || 'kg',
+
+            quantity:
+              0,
+
+            group
+          };
+
+        /*
+         * O saldo vai ficando acumulado
+         * entre Produção 1, 2, 3...
+         *
+         * Portanto usamos o maior déficit
+         * acumulado daquele Fio Máquina.
+         */
+        current.quantity =
+          Math.max(
+            current.quantity,
+            shortageQty
+          );
+
+        shortageByMaterial.set(
+          materialId,
+          current
+        );
+      });
+    });
+
+    const defaultArrivalDate =
+      addDays(
+        draft.planningStartDate
+        || today(),
+        1
+      );
+
+    return [
+      ...shortageByMaterial.values()
+    ]
+      .filter(
+        item =>
+          item.quantity > 0
+      )
+      .map(
+        (
+          item,
+          index
+        ) => {
+          const location =
+            planningShortageReceiptLocation(
+              item.group
+            );
+
+          return {
+            id:
+              `shortage-global-receipt-${Date.now()}-${index}`,
+
+            materialId:
+              item.materialId,
+
+            quantity:
+              Math.max(
+                Math.ceil(
+                  item.quantity
+                ),
+                1
+              ),
+
+            arrivalDate:
+              defaultArrivalDate,
+
+            locationId:
+              location.locationId,
+
+            unit:
+              item.unit
+          };
+        }
+      );
+  }
+
+  function renderGlobalShortageReceiptRows(
+    receipts = [],
+    groups = []
+  ) {
+    const materialOptions =
+      shortageGlobalReceiptMaterialOptions(
+        groups
+      );
+
+    return receipts
+      .map(
+        (
+          receipt,
+          index
+        ) => {
+          const material =
+            materialOptions.find(
+              item =>
+                String(
+                  item.materialId
+                ) ===
+                String(
+                  receipt.materialId
+                )
+            )
+            || materialOptions[0]
+            || null;
+
+          const arrivalDate =
+            isValidDateOnly(
+              receipt.arrivalDate
+            )
+              ? receipt.arrivalDate
+              : addDays(
+                  draft.planningStartDate
+                  || today(),
+                  1
+                );
+
+          const availableDate =
+            addDays(
+              arrivalDate,
+              1
+            );
+
+          const selectedLocationId =
+            String(
+              receipt.locationId
+              || planningShortageReceiptLocation(
+                groups[0] || {}
+              ).locationId
+              || ''
+            );
+
+          return `
+            <div
+              class="planning-global-receipt-row"
+              data-receipt-id="${escapeHtml(
+                receipt.id
+                || `shortage-global-receipt-${Date.now()}-${index}`
+              )}"
+            >
+
+              <label>
+                Insumo previsto
+
+                <select
+                  name="global-receipt-material"
+                >
+                  ${
+                    materialOptions
+                      .map(
+                        item => `
+                          <option
+                            value="${escapeHtml(
+                              item.materialId
+                            )}"
+                            data-unit="${escapeHtml(
+                              item.unit || ''
+                            )}"
+                            ${
+                              String(
+                                item.materialId
+                              ) ===
+                              String(
+                                material?.materialId
+                                || ''
+                              )
+                                ? 'selected'
+                                : ''
+                            }
+                          >
+                            ${escapeHtml(
+                              item.materialName
+                            )}
+                          </option>
+                        `
+                      )
+                      .join('')
+
+                    ||
+
+                    '<option value="">Sem insumo cadastrado</option>'
+                  }
+                </select>
+              </label>
+
+              <label>
+                Quantidade prevista
+
+                <input
+                  type="number"
+                  min="0.001"
+                  step="0.001"
+                  name="global-receipt-quantity"
+                  value="${escapeHtml(
+                    String(
+                      receipt.quantity
+                      || ''
+                    )
+                  )}"
+                />
+              </label>
+
+              <label>
+                Data estimada de chegada
+
+                <input
+                  type="date"
+                  name="global-receipt-arrival"
+                  value="${escapeHtml(
+                    arrivalDate
+                  )}"
+                />
+              </label>
+
+              <label>
+                Local de entrada
+
+                <select
+                  name="global-receipt-location"
+                >
+                  ${locationOptions(
+                    selectedLocationId
+                  )}
+                </select>
+              </label>
+
+              <div
+                class="planning-global-receipt-availability"
+              >
+
+                <span>
+                  Disponível para produção
+                </span>
+
+                <strong
+                  data-global-receipt-available-date
+                >
+                  ${escapeHtml(
+                    formatDateOnly(
+                      availableDate
+                    )
+                  )}
+                </strong>
+
+                <small
+                  data-global-receipt-unit
+                >
+                  ${escapeHtml(
+                    material?.unit
+                    || ''
+                  )}
+                </small>
+
+              </div>
+
+              <button
+                class="planning-global-receipt-remove"
+                type="button"
+                data-remove-global-receipt
+                aria-label="Remover entrada prevista"
+                title="Remover entrada prevista"
+              >
+                ×
+              </button>
+
+            </div>
+          `;
+        }
+      )
+      .join('');
+  }
+
+    function buildProductionShortageCascade(
+    groups = [],
+    stockRowsByMaterial = new Map(),
+    selections = new Map(),
+    plannedReceipts = []
+  ) {
+    const balances =
+      new Map();
+
+    const previewByKey =
+      new Map();
+
+    const receiptTotalsByMaterial =
+      new Map();
+
+    (
+      Array.isArray(
+        plannedReceipts
+      )
+        ? plannedReceipts
+        : []
+    ).forEach(receipt => {
+      const materialId =
+        String(
+          receipt?.materialId || ''
+        );
+
+      const quantity =
+        Number(
+          receipt?.quantity || 0
+        );
+
+      if (
+        !materialId
+        || !(quantity > 0)
+      ) {
         return;
       }
-      const option = selectedShortageOption(group, selection.productionModelName);
-      const rows = shortageInputsForGroup(group, option).map(input => {
-        const materialKey = String(input.materialId);
-        const availableBefore = balances.has(materialKey)
-          ? Number(balances.get(materialKey) || 0)
-          : stockQuantityForMaterial(stockRowsByMaterial, materialKey);
-        const requiredQty = Number((Number(group.requiredQty || 0) * Number(input.qtyPerOutput || 0)).toFixed(3));
-        const availableAfter = Number((availableBefore - requiredQty).toFixed(3));
-        balances.set(materialKey, availableAfter);
-        return {
-          materialId: input.materialId,
-          materialName: input.materialName || '',
-          unit: input.unit || group.unit || '',
-          requiredQty,
-          availableBefore,
-          availableAfter,
-          shortageQty: Math.max(requiredQty - availableBefore, 0)
-        };
-      });
-      previewByKey.set(String(group.key), rows);
+
+      receiptTotalsByMaterial.set(
+        materialId,
+
+        Number(
+          (
+            Number(
+              receiptTotalsByMaterial.get(
+                materialId
+              ) || 0
+            )
+            +
+            quantity
+          ).toFixed(6)
+        )
+      );
     });
+
+    [
+      ...groups
+    ]
+      .sort(
+        (
+          left,
+          right
+        ) =>
+          Number(
+            left.productionIndex
+          )
+          -
+          Number(
+            right.productionIndex
+          )
+      )
+      .forEach(group => {
+        const selection =
+          selections.get(
+            String(group.key)
+          )
+          || {};
+
+        if (
+          selection.action ===
+          'skip'
+        ) {
+          previewByKey.set(
+            String(group.key),
+            []
+          );
+
+          return;
+        }
+
+        const option =
+          selectedShortageOption(
+            group,
+            selection
+              .productionModelName
+          );
+
+        /*
+         * Se o usuário marcou
+         * PRODUZIR OUTRA QUANTIDADE,
+         * reduz/aumenta toda a cadeia.
+         */
+        const effectiveRequiredQty =
+          shortageEffectiveRequiredQuantity(
+            group,
+            selection
+          );
+
+        const rows =
+          shortageInputsForGroup(
+            group,
+            option
+          ).map(input => {
+            const materialKey =
+              String(
+                input.materialId
+              );
+
+            /*
+             * SALDO GLOBAL:
+             *
+             * estoque físico
+             * +
+             * todas as chegadas previstas
+             * daquele insumo.
+             */
+            const initialAvailable =
+              stockQuantityForMaterial(
+                stockRowsByMaterial,
+                materialKey
+              )
+              +
+              Number(
+                receiptTotalsByMaterial.get(
+                  materialKey
+                ) || 0
+              );
+
+            /*
+             * Produção 2 recebe o saldo
+             * restante da Produção 1.
+             */
+            const availableBefore =
+              balances.has(
+                materialKey
+              )
+                ? Number(
+                    balances.get(
+                      materialKey
+                    ) || 0
+                  )
+                : initialAvailable;
+
+            const requiredQty =
+              Number(
+                (
+                  Number(
+                    effectiveRequiredQty
+                    || 0
+                  )
+                  *
+                  Number(
+                    input.qtyPerOutput
+                    || 0
+                  )
+                ).toFixed(3)
+              );
+
+            const availableAfter =
+              Number(
+                (
+                  availableBefore
+                  -
+                  requiredQty
+                ).toFixed(3)
+              );
+
+            balances.set(
+              materialKey,
+              availableAfter
+            );
+
+            return {
+              materialId:
+                input.materialId,
+
+              materialName:
+                input.materialName
+                || '',
+
+              unit:
+                input.unit
+                || group.unit
+                || '',
+
+              requiredQty,
+
+              availableBefore,
+
+              availableAfter,
+
+              shortageQty:
+                Math.max(
+                  -availableAfter,
+                  0
+                )
+            };
+          });
+
+        previewByKey.set(
+          String(group.key),
+          rows
+        );
+      });
+
     return previewByKey;
   }
 
-  function renderProductionShortageDecisionRows(groups = [], stockRowsByMaterial = new Map(), previewRowsByKey = null) {
-    const previews = previewRowsByKey || buildProductionShortageCascade(groups, stockRowsByMaterial);
-    return groups.map(group => {
-      const finalMaterialLabel = [group.finalMaterialName, group.finalMaterialCode ? `(${group.finalMaterialCode})` : '']
-        .filter(Boolean)
-        .join(' ');
-      const showFinalMaterial = finalMaterialLabel
-        && String(group.finalMaterialName || group.finalMaterialCode || '') !== String(group.materialName || group.materialCode || '');
-      const currentModelName = String(group.productionModelName || group.productionModelOptions?.[0]?.modelName || '');
-      const selectedOption = selectedShortageOption(group, currentModelName);
-      const options = (group.productionModelOptions || []).map(option => {
-        return `<option value="${escapeHtml(option.modelName)}" ${String(option.modelName) === String(selectedOption?.modelName || '') ? 'selected' : ''}>${escapeHtml(option.modelName)}</option>`;
-      }).join('');
-      const previewRows = previews.get(String(group.key)) || [];
-      const totalShortageQty = previewRows.length
-        ? previewRows.reduce((sum, item) => sum + Number(item.shortageQty || 0), 0)
-        : group.shortages.reduce((sum, item) => sum + Number(item.shortageQty || 0), 0);
-      return `
-        <article class="planning-shortage-card" data-shortage-key="${escapeHtml(group.key)}" data-production-index="${escapeHtml(group.productionIndex)}" data-material-id="${escapeHtml(group.materialId)}">
-          <header class="planning-shortage-card-header">
-            <div>
-              <strong>${escapeHtml(group.productionTitle)} - ${escapeHtml(group.materialName)}</strong>
-              ${showFinalMaterial ? `<em>Produ&ccedil;&atilde;o final: ${escapeHtml(finalMaterialLabel)}</em>` : ''}
-              <span>${escapeHtml(group.materialCode || '')}</span>
+    function renderProductionShortageDecisionRows(
+    groups = [],
+    stockRowsByMaterial = new Map(),
+    previewRowsByKey = null,
+    plannedReceipts = []
+  ) {
+    const previews =
+      previewRowsByKey
+      ||
+      buildProductionShortageCascade(
+        groups,
+        stockRowsByMaterial,
+        new Map(),
+        plannedReceipts
+      );
+
+    return groups
+      .map(group => {
+        const finalMaterialLabel =
+          [
+            group.finalMaterialName,
+
+            group.finalMaterialCode
+              ? `(${group.finalMaterialCode})`
+              : ''
+          ]
+            .filter(Boolean)
+            .join(' ');
+
+        const showFinalMaterial =
+          finalMaterialLabel
+          &&
+          String(
+            group.finalMaterialName
+            || group.finalMaterialCode
+            || ''
+          ) !==
+          String(
+            group.materialName
+            || group.materialCode
+            || ''
+          );
+
+        const currentModelName =
+          String(
+            group.productionModelName
+            ||
+            group.productionModelOptions
+              ?.[0]
+              ?.modelName
+            ||
+            ''
+          );
+
+        const selectedOption =
+          selectedShortageOption(
+            group,
+            currentModelName
+          );
+
+        const options =
+          (
+            group.productionModelOptions
+            || []
+          )
+            .map(
+              option => `
+                <option
+                  value="${escapeHtml(
+                    option.modelName
+                  )}"
+                  ${
+                    String(
+                      option.modelName
+                    ) ===
+                    String(
+                      selectedOption
+                        ?.modelName
+                      || ''
+                    )
+                      ? 'selected'
+                      : ''
+                  }
+                >
+                  ${escapeHtml(
+                    option.modelName
+                  )}
+                </option>
+              `
+            )
+            .join('');
+
+        const previewRows =
+          previews.get(
+            String(group.key)
+          ) || [];
+
+        const totalShortageQty =
+          previewRows.reduce(
+            (
+              sum,
+              item
+            ) =>
+              sum
+              +
+              Number(
+                item.shortageQty || 0
+              ),
+            0
+          );
+
+        const isCovered =
+          previewRows.length > 0
+          &&
+          totalShortageQty
+          <= 0.000001;
+
+        const baseProductionQty =
+          shortageBaseProductionQuantity(
+            group
+          );
+
+        const finalProductionUnit =
+          shortageFinalProductionUnit(
+            group
+          );
+
+        return `
+          <article
+            class="planning-shortage-card"
+            data-shortage-key="${escapeHtml(
+              group.key
+            )}"
+            data-production-index="${escapeHtml(
+              group.productionIndex
+            )}"
+            data-material-id="${escapeHtml(
+              group.materialId
+            )}"
+          >
+
+            <header
+              class="planning-shortage-card-header"
+            >
+
+              <div>
+
+                <strong>
+                  ${escapeHtml(
+                    group.productionTitle
+                  )}
+                  -
+                  ${escapeHtml(
+                    group.materialName
+                  )}
+                </strong>
+
+                ${
+                  showFinalMaterial
+                    ? `
+                      <em>
+                        Produção final:
+                        ${escapeHtml(
+                          finalMaterialLabel
+                        )}
+                      </em>
+                    `
+                    : ''
+                }
+
+                <span>
+                  ${escapeHtml(
+                    group.materialCode
+                    || ''
+                  )}
+                </span>
+
+              </div>
+
+              <span
+                class="planning-shortage-badge ${
+                  isCovered
+                    ? 'is-ok'
+                    : ''
+                }"
+              >
+                ${
+                  isCovered
+                    ? 'OK'
+                    : `${escapeHtml(
+                        formatPtBrDecimal(
+                          totalShortageQty
+                        )
+                      )} em falta`
+                }
+              </span>
+
+            </header>
+
+            <div
+              class="planning-shortage-current"
+            >
+              ${renderProductionShortageModelPreview(
+                group,
+                selectedOption,
+                stockRowsByMaterial,
+                previewRows
+              )}
             </div>
-            <span class="planning-shortage-badge">${escapeHtml(formatPtBrDecimal(totalShortageQty))} em falta</span>
-          </header>
-          <div class="planning-shortage-current">
-            ${renderProductionShortageModelPreview(group, selectedOption, stockRowsByMaterial, previewRows)}
-          </div>
-          <div class="planning-shortage-actions">
-            <label><input type="radio" name="shortage-action-${escapeHtml(group.key)}" value="keep" checked /><span>Prosseguir<strong>Manter como está</strong></span></label>
-            <label><input type="radio" name="shortage-action-${escapeHtml(group.key)}" value="model" ${options ? '' : 'disabled'} /><span>Trocar modelo<strong>Usar outro insumo</strong></span></label>
-            <label><input type="radio" name="shortage-action-${escapeHtml(group.key)}" value="skip" /><span>Não produzir<strong>Cortar esta cadeia</strong></span></label>
-          </div>
-          <label class="planning-shortage-model">Modelo de produção
-            <select name="model-${escapeHtml(group.key)}" ${options ? '' : 'disabled'}>${options || '<option value="">Sem alternativa cadastrada</option>'}</select>
-          </label>
-        </article>
-      `;
-    }).join('');
+
+            <div
+              class="planning-shortage-actions"
+            >
+
+              <label>
+
+                <input
+                  type="radio"
+                  name="shortage-action-${escapeHtml(
+                    group.key
+                  )}"
+                  value="keep"
+                  checked
+                />
+
+                <span>
+                  Prosseguir
+                  <strong>
+                    Manter como está
+                  </strong>
+                </span>
+
+              </label>
+
+              <label>
+
+                <input
+                  type="radio"
+                  name="shortage-action-${escapeHtml(
+                    group.key
+                  )}"
+                  value="model"
+                  ${
+                    options
+                      ? ''
+                      : 'disabled'
+                  }
+                />
+
+                <span>
+                  Trocar modelo
+                  <strong>
+                    Usar outro insumo
+                  </strong>
+                </span>
+
+              </label>
+
+              <label>
+
+                <input
+                  type="radio"
+                  name="shortage-action-${escapeHtml(
+                    group.key
+                  )}"
+                  value="quantity"
+                />
+
+                <span>
+                  Produzir outra quantidade
+                  <strong>
+                    Alterar esta produção
+                  </strong>
+                </span>
+
+              </label>
+
+              <label>
+
+                <input
+                  type="radio"
+                  name="shortage-action-${escapeHtml(
+                    group.key
+                  )}"
+                  value="skip"
+                />
+
+                <span>
+                  Não produzir
+                  <strong>
+                    Cortar esta cadeia
+                  </strong>
+                </span>
+
+              </label>
+
+            </div>
+
+            <div
+              class="planning-shortage-quantity"
+            >
+
+              <label>
+                Nova quantidade da produção final
+
+                <div>
+
+                  <input
+                    type="number"
+                    min="0.001"
+                    step="0.001"
+                    name="production-quantity-${escapeHtml(
+                      group.key
+                    )}"
+                    value="${escapeHtml(
+                      String(
+                        baseProductionQty
+                        || ''
+                      )
+                    )}"
+                  />
+
+                  <span>
+                    ${escapeHtml(
+                      finalProductionUnit
+                    )}
+                  </span>
+
+                </div>
+
+              </label>
+
+              <small>
+                Ao alterar, toda a necessidade desta cadeia é recalculada automaticamente.
+              </small>
+
+            </div>
+
+            <label
+              class="planning-shortage-model"
+            >
+              Modelo de produção
+
+              <select
+                name="model-${escapeHtml(
+                  group.key
+                )}"
+                ${
+                  options
+                    ? ''
+                    : 'disabled'
+                }
+              >
+                ${
+                  options
+                  ||
+                  '<option value="">Sem alternativa cadastrada</option>'
+                }
+              </select>
+
+            </label>
+
+          </article>
+        `;
+      })
+      .join('');
   }
 
   function renderProductionShortageModelPreview(group, option = null, stockRowsByMaterial = new Map(), previewRows = null) {
@@ -2121,7 +7738,20 @@ export function PlanningPage() {
     page.querySelector('.production-shortage-modal')?.remove();
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop production-shortage-modal';
-    const initialPreviews = buildProductionShortageCascade(groups, stockRowsByMaterial);
+        let globalReceipts =
+      initialGlobalShortageReceipts(
+        groups,
+        stockRowsByMaterial
+      );
+
+    const initialPreviews =
+      buildProductionShortageCascade(
+        groups,
+        stockRowsByMaterial,
+        new Map(),
+        globalReceipts
+      );
+
     backdrop.innerHTML = `
       <div class="modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="production-shortage-title">
         <div class="modal-header">
@@ -2130,8 +7760,59 @@ export function PlanningPage() {
             <p class="modal-subtitle">Revise os modelos antes de levar o planejamento para o calendário.</p>
           </div>
         </div>
-        <form class="production-shortage-form">
-          <div class="planning-shortage-list">${renderProductionShortageDecisionRows(groups, stockRowsByMaterial, initialPreviews)}</div>
+               <form class="production-shortage-form">
+
+          <section
+            class="planning-global-receipts"
+          >
+
+            <div
+              class="planning-global-receipts-head"
+            >
+
+              <div>
+
+                <strong>
+                  Prever chegada
+                </strong>
+
+                <span>
+                  Compra estimada / entrada geral da simulação
+                </span>
+
+              </div>
+
+              <button
+                class="secondary-button"
+                type="button"
+                data-add-global-receipt
+              >
+                + Adicionar chegada
+              </button>
+
+            </div>
+
+            <div
+              class="planning-global-receipts-list"
+            >
+              ${renderGlobalShortageReceiptRows(
+                globalReceipts,
+                groups
+              )}
+            </div>
+
+          </section>
+
+          <div
+            class="planning-shortage-list"
+          >
+            ${renderProductionShortageDecisionRows(
+              groups,
+              stockRowsByMaterial,
+              initialPreviews,
+              globalReceipts
+            )}
+          </div>
           <p class="form-error" hidden></p>
           <div class="form-actions modal-actions">
             <button class="secondary-button" type="button" data-shortage-cancel>Cancelar simulação</button>
@@ -2141,55 +7822,1315 @@ export function PlanningPage() {
       </div>
     `;
     return new Promise(resolve => {
-      const close = value => {
-        backdrop.remove();
-        resolve(value);
-      };
-      const refreshCascadePreview = () => {
-        const selections = readShortageSelections(backdrop, groups);
-        const previews = buildProductionShortageCascade(groups, stockRowsByMaterial, selections);
+
+  const originalPlannedQtyByIndex =
+    new Map(
+      groups.map(group => [
+        String(group.productionIndex),
+        String(
+          shortageBaseProductionQuantity(group)
+          || ''
+        )
+      ])
+    );
+
+  const syncShortageProductionCards =
+    (selections = new Map()) => {
+      groups.forEach(group => {
+        const productionIndex =
+          Number(group.productionIndex);
+
+        const production =
+          draft.productions?.[
+            productionIndex
+          ];
+
+        if (!production) {
+          return;
+        }
+
+        const selection =
+          selections.get(
+            String(group.key)
+          )
+          || {};
+
+        const originalQty =
+          String(
+            originalPlannedQtyByIndex.get(
+              String(productionIndex)
+            )
+            || production.plannedQty
+            || ''
+          );
+
+        const nextQty =
+          selection.action === 'quantity'
+          &&
+          Number.isFinite(
+            Number(
+              selection.targetProductionQty
+            )
+          )
+          &&
+          Number(
+            selection.targetProductionQty
+          ) > 0
+            ? String(
+                Number(
+                  Number(
+                    selection.targetProductionQty
+                  ).toFixed(6)
+                )
+              )
+            : originalQty;
+
+        const productionId =
+          String(
+            production.id || ''
+          );
+
+        const escapedProductionId =
+          window.CSS?.escape
+            ? window.CSS.escape(
+                productionId
+              )
+            : productionId;
+
+        const productionCard =
+          page.querySelector(
+            `.productions-target [data-production-id="${escapedProductionId}"]`
+          );
+
+        const qtyInput =
+          productionCard?.querySelector(
+            'input[name="plannedQty"]'
+          );
+
+        if (qtyInput) {
+          qtyInput.value = nextQty;
+        }
+      });
+    };
+
+  const close = value => {
+    if (value?.action !== 'apply') {
+      syncShortageProductionCards(
+        new Map()
+      );
+    }
+
+    backdrop.remove();
+    resolve(value);
+  };
+
+    const refreshCascadePreview = () => {
+    const selections =
+      readShortageSelections(
+        backdrop,
+        groups
+      );
+
+    syncShortageProductionCards(
+      selections
+    );
+
+    globalReceipts =
+      readGlobalShortageReceipts(
+        backdrop
+      );
+
+    const previews =
+      buildProductionShortageCascade(
+        groups,
+        stockRowsByMaterial,
+        selections,
+        globalReceipts
+      );
+
         groups.forEach(group => {
-          const selector = window.CSS?.escape ? window.CSS.escape(group.key) : group.key;
-          const card = backdrop.querySelector(`[data-shortage-key="${selector}"]`);
-          if (!card) return;
-          const selection = selections.get(String(group.key)) || {};
-          const selectedOption = selectedShortageOption(group, selection.productionModelName);
-          const previewRows = previews.get(String(group.key)) || [];
-          const preview = card.querySelector('.planning-shortage-current');
-          if (preview) preview.innerHTML = renderProductionShortageModelPreview(group, selectedOption, stockRowsByMaterial, previewRows);
-          const badge = card.querySelector('.planning-shortage-badge');
+          const selector =
+            window.CSS?.escape
+              ? window.CSS.escape(
+                  group.key
+                )
+              : group.key;
+
+          const card =
+            backdrop.querySelector(
+              `[data-shortage-key="${selector}"]`
+            );
+
+          if (!card) {
+            return;
+          }
+
+          const selection =
+            selections.get(
+              String(group.key)
+            )
+            || {};
+
+          const selectedOption =
+            selectedShortageOption(
+              group,
+              selection.productionModelName
+            );
+
+          const previewRows =
+            previews.get(
+              String(group.key)
+            )
+            || [];
+
+          const preview =
+            card.querySelector(
+              '.planning-shortage-current'
+            );
+
+          if (preview) {
+            preview.innerHTML =
+              renderProductionShortageModelPreview(
+                group,
+                selectedOption,
+                stockRowsByMaterial,
+                previewRows
+              );
+          }
+
+          const badge =
+            card.querySelector(
+              '.planning-shortage-badge'
+            );
+
           if (badge) {
-            const totalShortageQty = previewRows.reduce((sum, item) => sum + Number(item.shortageQty || 0), 0);
-            badge.textContent = `${formatPtBrDecimal(totalShortageQty)} em falta`;
+            const totalShortageQty =
+              previewRows.reduce(
+                (sum, item) =>
+                  sum
+                  + Number(
+                      item.shortageQty
+                      || 0
+                    ),
+                0
+              );
+
+                        const isCovered =
+              previewRows.length > 0
+              &&
+              totalShortageQty
+              <= 0.000001;
+
+            badge.classList.toggle(
+              'is-ok',
+              isCovered
+            );
+
+            badge.textContent =
+              isCovered
+                ? 'OK'
+                : `${formatPtBrDecimal(
+                    totalShortageQty
+                  )} em falta`;
+          }
+
+
+          /*
+           * Se trocar o modelo:
+           *
+           * Fio Máquina 6,5
+           *        ↓
+           * Fio Máquina 5,5
+           *
+           * atualizamos também o insumo
+           * da entrada prevista.
+           */
+          const receiptSelect =
+            card.querySelector(
+              '[name^="receipt-material-"]'
+            );
+
+          if (receiptSelect) {
+            const previousValue =
+              receiptSelect.value;
+
+            const receiptMaterials =
+              shortageReceiptMaterialOptions(
+                group,
+                selectedOption
+              );
+
+            receiptSelect.innerHTML =
+              receiptMaterials.length
+
+                ? receiptMaterials
+                    .map(item => `
+                      <option
+                        value="${escapeHtml(item.materialId)}"
+                        data-unit="${escapeHtml(item.unit)}"
+                      >
+                        ${escapeHtml(item.materialName)}
+                      </option>
+                    `)
+                    .join('')
+
+                : '<option value="">Sem insumo cadastrado</option>';
+
+
+            if (
+              receiptMaterials.some(
+                item =>
+                  String(item.materialId)
+                  === String(previousValue)
+              )
+            ) {
+              receiptSelect.value =
+                previousValue;
+            }
+
+
+            const selectedReceiptMaterial =
+              receiptMaterials.find(
+                item =>
+                  String(item.materialId)
+                  === String(
+                    receiptSelect.value
+                  )
+              )
+              || receiptMaterials[0]
+              || null;
+
+
+            const availabilityMeta =
+              card.querySelector(
+                '.planning-shortage-receipt-availability small'
+              );
+
+
+            if (availabilityMeta) {
+              const receiptLocation =
+                planningShortageReceiptLocation(
+                  group
+                );
+
+              availabilityMeta.textContent =
+                [
+                  receiptLocation.locationName
+                  || 'Local não definido',
+
+                  selectedReceiptMaterial?.unit
+                  || ''
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
+            }
           }
         });
       };
+
+            const renderGlobalReceipts =
+        () => {
+          const target =
+            backdrop.querySelector(
+              '.planning-global-receipts-list'
+            );
+
+          if (!target) {
+            return;
+          }
+
+          target.innerHTML =
+            renderGlobalShortageReceiptRows(
+              globalReceipts,
+              groups
+            );
+
+          refreshCascadePreview();
+        };
+
+      backdrop
+        .querySelector(
+          '[data-add-global-receipt]'
+        )
+        ?.addEventListener(
+          'click',
+          () => {
+            globalReceipts =
+              readGlobalShortageReceipts(
+                backdrop
+              );
+
+            const materialOptions =
+              shortageGlobalReceiptMaterialOptions(
+                groups
+              );
+
+            const firstMaterial =
+              materialOptions[0]
+              || null;
+
+            const defaultLocation =
+              planningShortageReceiptLocation(
+                groups[0] || {}
+              );
+
+            globalReceipts.push({
+              id:
+                `shortage-global-receipt-${Date.now()}-${globalReceipts.length}`,
+
+              materialId:
+                firstMaterial
+                  ?.materialId
+                || '',
+
+              quantity:
+                '',
+
+              arrivalDate:
+                addDays(
+                  draft.planningStartDate
+                  || today(),
+                  1
+                ),
+
+              locationId:
+                defaultLocation
+                  .locationId
+            });
+
+            renderGlobalReceipts();
+          }
+        );
+
+      backdrop.addEventListener(
+        'click',
+        event => {
+          const removeButton =
+            event.target.closest(
+              '[data-remove-global-receipt]'
+            );
+
+          if (!removeButton) {
+            return;
+          }
+
+          const row =
+            removeButton.closest(
+              '.planning-global-receipt-row'
+            );
+
+          globalReceipts =
+            readGlobalShortageReceipts(
+              backdrop
+            ).filter(
+              receipt =>
+                String(
+                  receipt.id
+                ) !==
+                String(
+                  row?.dataset
+                    .receiptId
+                  || ''
+                )
+            );
+
+          renderGlobalReceipts();
+        }
+      );
+
+      backdrop.addEventListener(
+        'input',
+        event => {
+          if (
+            event.target.matches(
+              '[name="global-receipt-quantity"], [name^="production-quantity-"]'
+            )
+          ) {
+            refreshCascadePreview();
+          }
+        }
+      );
+
       backdrop.querySelector('[data-shortage-cancel]').addEventListener('click', () => close({ action: 'cancel' }));
       backdrop.addEventListener('click', event => {
         if (event.target === backdrop) close({ action: 'cancel' });
       });
-      backdrop.addEventListener('change', event => {
-        if (event.target.matches('.planning-shortage-model select')) {
-          event.target.closest('.planning-shortage-card')?.querySelector('.planning-shortage-actions input[value="model"]')?.click();
-          refreshCascadePreview();
-          return;
+            backdrop.addEventListener(
+        'change',
+        event => {
+
+          /*
+           * CHEGADA GLOBAL:
+           * TROCOU A DATA DE CHEGADA
+           */
+          if (
+            event.target.matches(
+              '[name="global-receipt-arrival"]'
+            )
+          ) {
+            const row =
+              event.target.closest(
+                '.planning-global-receipt-row'
+              );
+
+            const target =
+              row?.querySelector(
+                '[data-global-receipt-available-date]'
+              );
+
+            const arrivalDate =
+              String(
+                event.target.value
+                || ''
+              ).slice(
+                0,
+                10
+              );
+
+            if (
+              target
+              &&
+              isValidDateOnly(
+                arrivalDate
+              )
+            ) {
+              target.textContent =
+                formatDateOnly(
+                  addDays(
+                    arrivalDate,
+                    1
+                  )
+                );
+            }
+
+            refreshCascadePreview();
+
+            return;
+          }
+
+
+          /*
+           * CHEGADA GLOBAL:
+           * TROCOU O FIO MÁQUINA / INSUMO
+           */
+          if (
+            event.target.matches(
+              '[name="global-receipt-material"]'
+            )
+          ) {
+            const row =
+              event.target.closest(
+                '.planning-global-receipt-row'
+              );
+
+            const unit =
+              event.target
+                .selectedOptions?.[0]
+                ?.dataset?.unit
+              || '';
+
+            const unitTarget =
+              row?.querySelector(
+                '[data-global-receipt-unit]'
+              );
+
+            if (unitTarget) {
+              unitTarget.textContent =
+                unit;
+            }
+
+            refreshCascadePreview();
+
+            return;
+          }
+
+
+          /*
+           * CHEGADA GLOBAL:
+           * TROCOU O LOCAL DE ENTRADA
+           */
+          if (
+            event.target.matches(
+              '[name="global-receipt-location"]'
+            )
+          ) {
+            refreshCascadePreview();
+
+            return;
+          }
+
+
+          /*
+           * TROCOU O MODELO DE PRODUÇÃO
+           */
+          if (
+            event.target.matches(
+              '.planning-shortage-model select'
+            )
+          ) {
+            const card =
+              event.target.closest(
+                '.planning-shortage-card'
+              );
+
+            const selectedAction =
+              card
+                ?.querySelector(
+                  '.planning-shortage-actions input:checked'
+                )
+                ?.value;
+
+            /*
+             * Se estiver em "Prever chegada",
+             * continua em Prever chegada.
+             *
+             * Só troca automaticamente para
+             * "Trocar modelo" nos outros casos.
+             */
+                        if (
+              selectedAction
+              !== 'quantity'
+            ) {
+              card
+                ?.querySelector(
+                  '.planning-shortage-actions input[value="model"]'
+                )
+                ?.click();
+            }
+
+            refreshCascadePreview();
+
+            return;
+          }
+
+
+          /*
+           * TROCOU A DATA DE CHEGADA
+           *
+           * Atualiza D+1 na hora.
+           */
+          if (
+            event.target.matches(
+              '[name^="receipt-arrival-"]'
+            )
+          ) {
+            const card =
+              event.target.closest(
+                '.planning-shortage-card'
+              );
+
+            const availableTarget =
+              card?.querySelector(
+                '[data-receipt-available-date]'
+              );
+
+            const arrivalDate =
+              String(
+                event.target.value
+                || ''
+              ).slice(0, 10);
+
+            if (
+              availableTarget
+              &&
+              isValidDateOnly(
+                arrivalDate
+              )
+            ) {
+              availableTarget.textContent =
+                formatDateOnly(
+                  addDays(
+                    arrivalDate,
+                    1
+                  )
+                );
+            }
+
+            return;
+          }
+
+
+          /*
+           * TROCOU O INSUMO PREVISTO
+           */
+          if (
+            event.target.matches(
+              '[name^="receipt-material-"]'
+            )
+          ) {
+            const card =
+              event.target.closest(
+                '.planning-shortage-card'
+              );
+
+            const unit =
+              event.target
+                .selectedOptions?.[0]
+                ?.dataset
+                ?.unit
+              || '';
+
+            const groupKey =
+              card?.dataset
+                ?.shortageKey
+              || '';
+
+            const group =
+              groups.find(item => (
+                String(item.key)
+                === String(groupKey)
+              ));
+
+            const location =
+              planningShortageReceiptLocation(
+                group || {}
+              );
+
+            const availabilityMeta =
+              card?.querySelector(
+                '.planning-shortage-receipt-availability small'
+              );
+
+            if (availabilityMeta) {
+              availabilityMeta.textContent =
+                [
+                  location.locationName
+                  || 'Local não definido',
+
+                  unit
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
+            }
+
+            return;
+          }
+
+
+          /*
+           * TROCOU:
+           *
+           * Prosseguir
+           * Trocar modelo
+           * Prever chegada
+           * Não produzir
+           */
+          if (
+            event.target.matches(
+              '.planning-shortage-actions input'
+            )
+          ) {
+            refreshCascadePreview();
+          }
         }
-        if (event.target.matches('.planning-shortage-actions input')) refreshCascadePreview();
-      });
-      backdrop.querySelector('.production-shortage-form').addEventListener('submit', event => {
-        event.preventDefault();
-        const decisions = groups.map(group => {
-          const card = backdrop.querySelector(`[data-shortage-key="${window.CSS?.escape ? window.CSS.escape(group.key) : group.key}"]`);
-          const action = card?.querySelector('.planning-shortage-actions input:checked')?.value || 'keep';
-          const productionModelName = card?.querySelector('.planning-shortage-model select')?.value || '';
-          return { ...group, action, productionModelName };
-        });
-        close({ action: 'apply', decisions });
-      });
+      );
+            backdrop
+        .querySelector(
+          '.production-shortage-form'
+        )
+        .addEventListener(
+          'submit',
+          event => {
+
+            event.preventDefault();
+
+
+            const formError =
+              backdrop.querySelector(
+                '.form-error'
+              );
+
+
+            if (formError) {
+              formError.hidden = true;
+              formError.textContent = '';
+            }
+
+
+                        let invalidMessage =
+              '';
+
+            const decisions =
+              groups.map(group => {
+                const selector =
+                  window.CSS?.escape
+                    ? window.CSS.escape(
+                        group.key
+                      )
+                    : group.key;
+
+                const card =
+                  backdrop.querySelector(
+                    `[data-shortage-key="${selector}"]`
+                  );
+
+                const action =
+                  card
+                    ?.querySelector(
+                      '.planning-shortage-actions input:checked'
+                    )
+                    ?.value
+                  || 'keep';
+
+                const productionModelName =
+                  card
+                    ?.querySelector(
+                      '.planning-shortage-model select'
+                    )
+                    ?.value
+                  || '';
+
+                const targetProductionQty =
+                  Number(
+                    card
+                      ?.querySelector(
+                        '[name^="production-quantity-"]'
+                      )
+                      ?.value
+                    || 0
+                  );
+
+                if (
+                  action ===
+                    'quantity'
+                  &&
+                  !invalidMessage
+                  &&
+                  !(
+                    Number.isFinite(
+                      targetProductionQty
+                    )
+                    &&
+                    targetProductionQty
+                    > 0
+                  )
+                ) {
+                  invalidMessage =
+                    'Informe uma nova quantidade de produção maior que zero.';
+                }
+
+                return {
+                  ...group,
+
+                  action,
+
+                  productionModelName,
+
+                  targetProductionQty
+                };
+              });
+
+            globalReceipts =
+              readGlobalShortageReceipts(
+                backdrop
+              );
+
+            globalReceipts.forEach(
+              receipt => {
+                if (
+                  invalidMessage
+                ) {
+                  return;
+                }
+
+                if (
+                  !receipt.materialId
+                ) {
+                  invalidMessage =
+                    'Selecione o insumo de todas as chegadas previstas.';
+
+                } else if (
+                  !Number.isFinite(
+                    receipt.quantity
+                  )
+                  ||
+                  !(receipt.quantity > 0)
+                ) {
+                  invalidMessage =
+                    'Informe uma quantidade maior que zero em todas as chegadas previstas.';
+
+                } else if (
+                  !isValidDateOnly(
+                    receipt.arrivalDate
+                  )
+                ) {
+                  invalidMessage =
+                    'Informe uma data estimada de chegada válida em todas as entradas.';
+
+                } else if (
+                  !receipt.locationId
+                ) {
+                  invalidMessage =
+                    'Selecione o local de entrada de todas as chegadas previstas.';
+                }
+              }
+            );
+
+            if (
+              invalidMessage
+            ) {
+              if (formError) {
+                formError.textContent =
+                  invalidMessage;
+
+                formError.hidden =
+                  false;
+              }
+
+              return;
+            }
+
+            const selections =
+              new Map(
+                decisions.map(
+                  decision => [
+                    String(
+                      decision.key
+                    ),
+
+                    {
+                      action:
+                        decision.action,
+
+                      productionModelName:
+                        decision
+                          .productionModelName,
+
+                      targetProductionQty:
+                        decision
+                          .targetProductionQty
+                    }
+                  ]
+                )
+              );
+
+            const finalPreviews =
+              buildProductionShortageCascade(
+                groups,
+                stockRowsByMaterial,
+                selections,
+                globalReceipts
+              );
+
+            /*
+             * Quais cards foram efetivamente
+             * atendidos pelas chegadas globais?
+             */
+            const coveredShortageKeys =
+              groups
+                .filter(group => {
+                  const rows =
+                    finalPreviews.get(
+                      String(group.key)
+                    ) || [];
+
+                  return (
+                    rows.length > 0
+                    &&
+                    rows.every(
+                      row =>
+                        Number(
+                          row.shortageQty
+                          || 0
+                        )
+                        <= 0.000001
+                    )
+                  );
+                })
+                .map(
+                  group =>
+                    String(
+                      group.key
+                    )
+                );
+
+            close({
+              action:
+                'apply',
+
+              decisions,
+
+              plannedReceipts:
+                globalReceipts.map(
+                  receipt => ({
+                    ...receipt,
+
+                    sourceShortageKeys:
+                      coveredShortageKeys
+                  })
+                )
+            });
+          }
+        );
       page.appendChild(backdrop);
       backdrop.querySelector('input, button, select')?.focus();
     });
   }
+
+  function unresolvedTheoreticalMaterialChoiceGroups(
+  result
+) {
+  return collectProductionShortageDecisions(
+    result
+  )
+    .filter(group => (
+      Array.isArray(
+        group.productionModelOptions
+      )
+
+      &&
+
+      group.productionModelOptions.length > 1
+    ))
+    .filter(group => {
+
+      const selectedModelName =
+        String(
+          draft.operationOverrides
+            ?.[group.key]
+            ?.productionModelName
+          || ''
+        ).trim();
+
+
+      if (!selectedModelName) {
+        return true;
+      }
+
+
+      return !group.productionModelOptions
+        .some(option =>
+          String(option.modelName)
+          === selectedModelName
+        );
+    });
+}
+
+
+async function requestTheoreticalMaterialChoices(
+  result
+) {
+
+  const groups =
+    unresolvedTheoreticalMaterialChoiceGroups(
+      result
+    );
+
+
+  if (!groups.length) {
+    return {
+      action: 'none'
+    };
+  }
+
+
+  page
+    .querySelector(
+      '.theoretical-material-choice-modal'
+    )
+    ?.remove();
+
+
+  const backdrop =
+    document.createElement(
+      'div'
+    );
+
+
+  backdrop.className =
+    'modal-backdrop theoretical-material-choice-modal';
+
+
+  backdrop.innerHTML = `
+    <div
+      class="modal wide-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="theoretical-material-choice-title"
+    >
+
+      <div class="modal-header">
+
+        <div>
+
+          <h2 id="theoretical-material-choice-title">
+            Escolha das mat&eacute;rias-primas
+          </h2>
+
+          <p class="modal-subtitle">
+            Como esta &eacute; uma simula&ccedil;&atilde;o te&oacute;rica,
+            escolha qual mat&eacute;ria-prima ser&aacute; usada em cada etapa.
+          </p>
+
+        </div>
+
+      </div>
+
+
+      <form class="theoretical-material-choice-form">
+
+        <div class="theoretical-material-choice-list">
+
+          ${groups.map(group => {
+
+            const options =
+              group.productionModelOptions
+              || [];
+
+
+            return `
+              <article
+                class="theoretical-material-choice-card"
+                data-theoretical-choice-key="${escapeHtml(
+                  group.key
+                )}"
+              >
+
+                <div class="theoretical-material-choice-heading">
+
+                  <strong>
+                    ${escapeHtml(
+                      group.materialName
+                      || ''
+                    )}
+                  </strong>
+
+                  <span>
+                    ${escapeHtml(
+                      `${formatPtBrDecimal(
+                        group.requiredQty
+                      )} ${group.unit || ''}`
+                    )}
+                  </span>
+
+                </div>
+
+
+                <label>
+                  Mat&eacute;ria-prima / modelo
+
+                  <select
+                    name="model-${escapeHtml(
+                      group.key
+                    )}"
+                  >
+
+                    ${options.map(option => {
+
+                      const inputs =
+                        (
+                          option.inputs
+                          || []
+                        )
+                          .map(input => {
+
+                            const material =
+                              findMaterialById(
+                                materials,
+                                input.materialId
+                              );
+
+
+                            const quantity =
+                              Number(
+                                group.requiredQty
+                                || 0
+                              )
+                              *
+                              Number(
+                                input.qtyPerOutput
+                                || 0
+                              );
+
+
+                            return `${
+                              input.materialName
+                              || ''
+                            } - ${
+                              formatPtBrDecimal(
+                                quantity
+                              )
+                            } ${
+                              material
+                                ?.primary_unit
+                              || ''
+                            }`;
+
+                          })
+                          .join(' + ');
+
+
+                      return `
+                        <option
+                          value="${escapeHtml(
+                            option.modelName
+                          )}"
+                        >
+                          ${escapeHtml(
+                            option.modelName
+                          )}
+                          ${
+                            inputs
+                              ? ` - ${escapeHtml(
+                                  inputs
+                                )}`
+                              : ''
+                          }
+                        </option>
+                      `;
+
+                    }).join('')}
+
+                  </select>
+
+                </label>
+
+              </article>
+            `;
+
+          }).join('')}
+
+        </div>
+
+
+        <div class="form-actions modal-actions">
+
+          <button
+            class="secondary-button"
+            type="button"
+            data-theoretical-choice-cancel
+          >
+            Cancelar simula&ccedil;&atilde;o
+          </button>
+
+
+          <button
+            class="primary-button"
+            type="submit"
+          >
+            Confirmar mat&eacute;rias-primas
+          </button>
+
+        </div>
+
+      </form>
+
+    </div>
+  `;
+
+
+  return new Promise(resolve => {
+
+    const close =
+      value => {
+        backdrop.remove();
+
+        resolve(value);
+      };
+
+
+    backdrop
+      .querySelector(
+        '[data-theoretical-choice-cancel]'
+      )
+      .addEventListener(
+        'click',
+        () =>
+          close({
+            action:
+              'cancel'
+          })
+      );
+
+
+    backdrop.addEventListener(
+      'click',
+      event => {
+
+        if (
+          event.target
+          === backdrop
+        ) {
+          close({
+            action:
+              'cancel'
+          });
+        }
+      }
+    );
+
+
+    backdrop
+      .querySelector(
+        '.theoretical-material-choice-form'
+      )
+      .addEventListener(
+        'submit',
+        event => {
+
+          event.preventDefault();
+
+
+          const decisions =
+            groups.map(group => {
+
+              const selector =
+                window.CSS?.escape
+                  ? window.CSS.escape(
+                      group.key
+                    )
+                  : group.key;
+
+
+              const card =
+                backdrop.querySelector(
+                  `[data-theoretical-choice-key="${selector}"]`
+                );
+
+
+              const productionModelName =
+                card
+                  ?.querySelector(
+                    'select'
+                  )
+                  ?.value
+                || '';
+
+
+              return {
+                ...group,
+
+                action:
+                  'model',
+
+                productionModelName
+              };
+            });
+
+
+          close({
+            action:
+              'apply',
+
+            decisions
+          });
+        }
+      );
+
+
+    page.appendChild(
+      backdrop
+    );
+
+
+    backdrop
+      .querySelector(
+        'select'
+      )
+      ?.focus();
+
+  });
+}
 
   function requestEmptyProductionSimulationNotice() {
     page.querySelector('.empty-production-simulation-modal')?.remove();
@@ -2222,40 +9163,1511 @@ export function PlanningPage() {
     });
   }
 
-  function applyProductionShortageDecisions(decisions = []) {
+        function applyProductionShortageDecisions(
+    decisions = [],
+    globalReceipts = []
+  ) {
     let changed = false;
-    const productionIndexesToRemove = new Set();
-    draft.operationOverrides = draft.operationOverrides && typeof draft.operationOverrides === 'object' ? draft.operationOverrides : {};
-    draft.skipProductionMaterials = Array.isArray(draft.skipProductionMaterials) ? draft.skipProductionMaterials : [];
+
+
+    draft.operationOverrides =
+      draft.operationOverrides
+      &&
+      typeof draft.operationOverrides
+        === 'object'
+
+        ? draft.operationOverrides
+
+        : {};
+
+
+    draft.skipProductionMaterials =
+      Array.isArray(
+        draft.skipProductionMaterials
+      )
+
+        ? draft.skipProductionMaterials
+
+        : [];
+
+
+    draft.plannedReceipts =
+      Array.isArray(
+        draft.plannedReceipts
+      )
+
+        ? draft.plannedReceipts
+
+        : [];
+
+
     decisions.forEach(decision => {
-      const productionIndex = Number(decision.productionIndex || 0);
-      const materialId = Number(decision.materialId);
-      if (!Number.isFinite(materialId)) return;
-      const key = stockOnlyKey(productionIndex, materialId);
-      if (decision.action === 'model' && decision.productionModelName) {
-        draft.operationOverrides[key] = {
-          ...(draft.operationOverrides[key] || {}),
-          productionModelName: decision.productionModelName
-        };
-        draft.skipProductionMaterials = draft.skipProductionMaterials.filter(item =>
-          !(Number(item.productionIndex) === productionIndex && Number(item.materialId) === materialId)
+
+      const productionIndex =
+        Number(
+          decision.productionIndex
+          || 0
         );
+
+
+      const materialId =
+        Number(
+          decision.materialId
+        );
+
+
+      if (
+        !Number.isFinite(
+          materialId
+        )
+      ) {
+        return;
+      }
+
+
+      const key =
+        stockOnlyKey(
+          productionIndex,
+          materialId
+        );
+
+
+      const sourceShortageKey =
+        String(
+          decision.key
+          || key
+        );
+
+
+      /*
+       * Remove previsão anterior
+       * daquela mesma falta.
+       */
+      const removeExistingReceipt = () => {
+
+        const before =
+          draft.plannedReceipts.length;
+
+
+        draft.plannedReceipts =
+          draft.plannedReceipts
+            .filter(receipt => (
+              String(
+                receipt?.sourceShortageKey
+                || ''
+              )
+              !==
+              sourceShortageKey
+            ));
+
+
+        if (
+          draft.plannedReceipts.length
+          !== before
+        ) {
+          changed = true;
+        }
+      };
+
+
+      /*
+       * TROCAR MODELO
+       */
+      if (
+        decision.action === 'model'
+        &&
+        decision.productionModelName
+      ) {
+
+        removeExistingReceipt();
+
+
+        draft.operationOverrides[key] = {
+          ...(
+            draft.operationOverrides[key]
+            || {}
+          ),
+
+          productionModelName:
+            decision.productionModelName
+        };
+
+
+        draft.skipProductionMaterials =
+          draft.skipProductionMaterials
+            .filter(item => (
+              !(
+                Number(
+                  item.productionIndex
+                )
+                === productionIndex
+
+                &&
+
+                Number(
+                  item.materialId
+                )
+                === materialId
+              )
+            ));
+
+
         changed = true;
-      } else if (decision.action === 'skip') {
-        productionIndexesToRemove.add(productionIndex);
+
+              /*
+       * PRODUZIR OUTRA QUANTIDADE
+       */
+      } else if (
+        decision.action ===
+          'quantity'
+      ) {
+        removeExistingReceipt();
+
+        const targetProductionQty =
+          Number(
+            decision
+              .targetProductionQty
+            || 0
+          );
+
+        const production =
+          draft.productions?.[
+            productionIndex
+          ];
+
+        if (
+          production
+          &&
+          Number.isFinite(
+            targetProductionQty
+          )
+          &&
+          targetProductionQty > 0
+        ) {
+          production.plannedQty =
+            String(
+              Number(
+                targetProductionQty
+                  .toFixed(6)
+              )
+            );
+
+          if (
+            decision
+              .productionModelName
+          ) {
+            draft.operationOverrides[
+              key
+            ] = {
+              ...(
+                draft
+                  .operationOverrides[
+                  key
+                ]
+                || {}
+              ),
+
+              productionModelName:
+                decision
+                  .productionModelName
+            };
+          }
+
+          draft.skipProductionMaterials =
+            draft
+              .skipProductionMaterials
+              .filter(
+                item => (
+                  !(
+                    Number(
+                      item
+                        .productionIndex
+                    ) ===
+                    productionIndex
+                    &&
+                    Number(
+                      item.materialId
+                    ) ===
+                    materialId
+                  )
+                )
+              );
+
+          changed =
+            true;
+        }
+
+
+      /*
+       * PREVER CHEGADA
+       */
+      } else if (
+        decision.action === 'receipt'
+      ) {
+
+        if (
+          decision.productionModelName
+        ) {
+          draft.operationOverrides[key] = {
+            ...(
+              draft.operationOverrides[key]
+              || {}
+            ),
+
+            productionModelName:
+              decision.productionModelName
+          };
+        }
+
+
+        draft.skipProductionMaterials =
+          draft.skipProductionMaterials
+            .filter(item => (
+              !(
+                Number(
+                  item.productionIndex
+                )
+                === productionIndex
+
+                &&
+
+                Number(
+                  item.materialId
+                )
+                === materialId
+              )
+            ));
+
+
+        const receiptMaterial =
+          findMaterialById(
+            materials,
+            decision.plannedReceiptMaterialId
+          )
+          || {};
+
+
+        const receiptLocation =
+          planningShortageReceiptLocation(
+            decision
+          );
+
+
+        const arrivalDate =
+          String(
+            decision.plannedReceiptArrivalDate
+            || ''
+          ).slice(0, 10);
+
+
+        const plannedReceipt =
+          normalizeManualSchedulePlannedReceipt({
+
+            receiptId:
+              `planned-receipt:${sourceShortageKey}`,
+
+            receiptType:
+              'planned-purchase',
+
+            sourceShortageKey,
+
+            productionModelName:
+              decision.productionModelName
+              || '',
+
+
+            materialId:
+              String(
+                decision.plannedReceiptMaterialId
+                || ''
+              ),
+
+
+            materialCode:
+              String(
+                receiptMaterial?.code
+                ??
+                receiptMaterial?.materialCode
+                ??
+                receiptMaterial?.material_code
+                ??
+                ''
+              ),
+
+
+            materialName:
+              String(
+                receiptMaterial?.name
+                ??
+                receiptMaterial?.materialName
+                ??
+                receiptMaterial?.material_name
+                ??
+                decision.plannedReceiptMaterialId
+                ??
+                ''
+              ),
+
+
+            locationId:
+              receiptLocation.locationId,
+
+
+            locationName:
+              receiptLocation.locationName,
+
+
+            quantity:
+              Number(
+                decision.plannedReceiptQuantity
+                || 0
+              ),
+
+
+            unit:
+              String(
+                receiptMaterial?.primary_unit
+                ??
+                receiptMaterial?.primaryUnit
+                ??
+                'kg'
+              ),
+
+
+            arrivalDate,
+
+
+            availableDate:
+              isValidDateOnly(
+                arrivalDate
+              )
+
+                ? addDays(
+                    arrivalDate,
+                    1
+                  )
+
+                : ''
+          });
+
+
+        /*
+         * Uma previsão por falta.
+         *
+         * Se repetir a decisão,
+         * substitui a antiga.
+         */
+        draft.plannedReceipts = [
+          ...draft.plannedReceipts
+            .filter(receipt => (
+              String(
+                receipt?.sourceShortageKey
+                || ''
+              )
+              !== sourceShortageKey
+            )),
+
+          plannedReceipt
+        ];
+
+
+        changed = true;
+
+
+      /*
+       * NÃO PRODUZIR
+       */
+      } else if (
+        decision.action === 'skip'
+      ) {
+
+        removeExistingReceipt();
+
+
+        draft.skipProductionMaterials =
+          draft.skipProductionMaterials
+            .filter(item => (
+              !(
+                Number(
+                  item.productionIndex
+                )
+                === productionIndex
+
+                &&
+
+                Number(
+                  item.materialId
+                )
+                === materialId
+              )
+            ));
+
+
+        draft.skipProductionMaterials.push({
+          productionIndex,
+          materialId
+        });
+
+
         changed = true;
       }
     });
-    [...productionIndexesToRemove]
-      .filter(index => Number.isInteger(index) && index >= 0 && index < draft.productions.length)
-      .sort((left, right) => right - left)
-      .forEach(index => {
-        draft.productions.splice(index, 1);
-        removeProductionScopedState(index);
-      });
-    if (changed) saveDraftNow();
+
+        (
+      Array.isArray(
+        globalReceipts
+      )
+        ? globalReceipts
+        : []
+    ).forEach(
+      (
+        receipt,
+        index
+      ) => {
+        const materialId =
+          String(
+            receipt?.materialId
+            || ''
+          );
+
+        const quantity =
+          Number(
+            receipt?.quantity
+            || 0
+          );
+
+        const arrivalDate =
+          String(
+            receipt?.arrivalDate
+            || ''
+          ).slice(
+            0,
+            10
+          );
+
+        const locationId =
+          String(
+            receipt?.locationId
+            || ''
+          );
+
+        if (
+          !materialId
+          ||
+          !(quantity > 0)
+          ||
+          !isValidDateOnly(
+            arrivalDate
+          )
+          ||
+          !locationId
+        ) {
+          return;
+        }
+
+        const material =
+          findMaterialById(
+            materials,
+            materialId
+          ) || {};
+
+        const location =
+          (
+            locations || []
+          ).find(
+            item =>
+              String(
+                item?.id
+                ??
+                item?.locationId
+                ??
+                item?.location_id
+                ??
+                ''
+              )
+              ===
+              locationId
+          ) || {};
+
+        const plannedReceipt =
+          normalizeManualSchedulePlannedReceipt({
+            receiptId:
+              `planned-receipt-global:${Date.now()}:${index}`,
+
+            receiptType:
+              'planned-purchase',
+
+            receiptScope:
+              'global-shortage',
+
+            sourceShortageKeys:
+              Array.isArray(
+                receipt
+                  ?.sourceShortageKeys
+              )
+                ? receipt
+                    .sourceShortageKeys
+                    .map(String)
+                : [],
+
+            materialId,
+
+            materialCode:
+              String(
+                material?.code
+                ??
+                material?.materialCode
+                ??
+                material
+                  ?.material_code
+                ??
+                ''
+              ),
+
+            materialName:
+              String(
+                material?.name
+                ??
+                material?.materialName
+                ??
+                material
+                  ?.material_name
+                ??
+                materialId
+              ),
+
+            locationId,
+
+            locationName:
+              String(
+                location?.name
+                ??
+                location?.locationName
+                ??
+                location
+                  ?.location_name
+                ??
+                locationId
+              ),
+
+            quantity,
+
+            unit:
+              String(
+                material
+                  ?.primary_unit
+                ??
+                material
+                  ?.primaryUnit
+                ??
+                'kg'
+              ),
+
+            arrivalDate,
+
+            availableDate:
+              addDays(
+                arrivalDate,
+                1
+              )
+          });
+
+        draft.plannedReceipts = [
+          ...draft.plannedReceipts,
+
+          plannedReceipt
+        ];
+
+        changed =
+          true;
+      }
+    );
+    
+
+    if (changed) {
+      saveDraftNow();
+    }
+
+
     return changed;
   }
+
+  function planningStockLimitProductionMeta(
+  productionIndex
+) {
+
+  const production =
+    draft.productions?.[
+      Number(
+        productionIndex
+      )
+    ]
+    || {};
+
+
+  const material =
+    findMaterialById(
+      materials,
+      production.materialId
+    )
+    || {};
+
+
+  return {
+
+    productionIndex:
+      Number(
+        productionIndex
+      ),
+
+    materialId:
+      String(
+        production.materialId
+        ??
+        material.id
+        ??
+        ''
+      ),
+
+    materialName:
+      String(
+        material.name
+        ??
+        production.materialName
+        ??
+        `Produção ${
+          Number(
+            productionIndex
+          )
+          +
+          1
+        }`
+      ),
+
+    unit:
+      String(
+        material.primary_unit
+        ??
+        material.primaryUnit
+        ??
+        production.plannedUnit
+        ??
+        production.unit
+        ??
+        ''
+      ),
+
+    plannedQty:
+      Number(
+        production.plannedQty
+        ||
+        0
+      )
+
+  };
+}
+
+
+function planningStockLimitAssessment(
+  result
+) {
+
+  return evaluatePlanningStockLimits({
+
+    simulation:
+      result,
+
+    materials,
+
+    plannedReceipts:
+      draft.plannedReceipts
+      || [],
+
+    productions:
+      draft.productions
+      || []
+
+  });
+
+}
+
+
+function requestPlanningStockLimitDecision(
+  result
+) {
+
+  const assessment =
+    planningStockLimitAssessment(
+      result
+    );
+
+
+  if (
+    !assessment
+      .violations
+      .length
+  ) {
+
+    return Promise.resolve({
+      action:
+        'none',
+
+      assessment
+    });
+
+  }
+
+
+  page
+    .querySelector(
+      '.planning-stock-limit-modal'
+    )
+    ?.remove();
+
+
+  const backdrop =
+    document.createElement(
+      'div'
+    );
+
+
+  backdrop.className =
+    'modal-backdrop planning-stock-limit-modal';
+
+
+  const productionRows =
+    assessment
+      .suggestions
+      .map(
+        suggestion => {
+
+          const production =
+            planningStockLimitProductionMeta(
+              suggestion
+                .productionIndex
+            );
+
+
+          const suggestedQty =
+            Number(
+              suggestion
+                .suggestedQty
+            );
+
+
+          const displayedQty =
+            Number.isFinite(
+              suggestedQty
+            )
+
+              ? suggestedQty
+
+              : production
+                  .plannedQty;
+
+
+          return `
+            <label
+              class="planning-stock-limit-production-row"
+            >
+
+              <span>
+
+                <strong>
+                  ${escapeHtml(
+                    production
+                      .materialName
+                  )}
+                </strong>
+
+                <small>
+                  Solicitado:
+                  ${formatPtBrDecimal(
+                    production
+                      .plannedQty
+                  )}
+                  ${escapeHtml(
+                    production.unit
+                  )}
+                </small>
+
+              </span>
+
+
+              <div>
+
+                <input
+                  type="number"
+                  min="0"
+                  max="${escapeHtml(
+                    String(
+                      production
+                        .plannedQty
+                    )
+                  )}"
+                  step="0.001"
+                  value="${escapeHtml(
+                    String(
+                      displayedQty
+                    )
+                  )}"
+                  data-stock-limit-production-index="${escapeHtml(
+                    String(
+                      production
+                        .productionIndex
+                    )
+                  )}"
+                  data-stock-limit-current-qty="${escapeHtml(
+                    String(
+                      production
+                        .plannedQty
+                    )
+                  )}"
+                />
+
+                <span>
+                  ${escapeHtml(
+                    production.unit
+                  )}
+                </span>
+
+              </div>
+
+            </label>
+          `;
+
+        }
+      )
+      .join('');
+
+
+  const violationRows =
+    assessment
+      .violations
+      .map(
+        violation => {
+
+          const isMinimum =
+            violation.kind
+            ===
+            'minimum';
+
+
+          const productionNames =
+            violation
+              .productionIndexes
+              .map(
+                index =>
+                  planningStockLimitProductionMeta(
+                    index
+                  )
+                    .materialName
+              )
+              .filter(
+                Boolean
+              );
+
+
+          return `
+            <article
+              class="planning-stock-limit-violation ${
+                isMinimum
+                  ? 'minimum'
+                  : 'maximum'
+              }"
+            >
+
+              <div
+                class="planning-stock-limit-violation-head"
+              >
+
+                <div>
+
+                  <span>
+                    ${
+                      isMinimum
+                        ? 'ESTOQUE MÍNIMO'
+                        : 'ESTOQUE MÁXIMO'
+                    }
+                  </span>
+
+                  <strong>
+                    ${escapeHtml(
+                      violation
+                        .materialName
+                    )}
+                  </strong>
+
+                </div>
+
+
+                <b>
+                  ${
+                    isMinimum
+                      ? 'Abaixo do limite'
+                      : 'Acima do limite'
+                  }
+                </b>
+
+              </div>
+
+
+              <div
+                class="planning-stock-limit-values"
+              >
+
+                <div>
+                  <span>Limite</span>
+
+                  <strong>
+                    ${formatPtBrDecimal(
+                      violation
+                        .limitQuantity
+                    )}
+                    ${escapeHtml(
+                      violation.unit
+                    )}
+                  </strong>
+                </div>
+
+
+                <div>
+                  <span>Antes</span>
+
+                  <strong>
+                    ${formatPtBrDecimal(
+                      violation
+                        .balanceBefore
+                    )}
+                    ${escapeHtml(
+                      violation.unit
+                    )}
+                  </strong>
+                </div>
+
+
+                <div>
+                  <span>Projetado</span>
+
+                  <strong>
+                    ${formatPtBrDecimal(
+                      violation
+                        .projectedQuantity
+                    )}
+                    ${escapeHtml(
+                      violation.unit
+                    )}
+                  </strong>
+                </div>
+
+
+                <div>
+                  <span>
+                    ${
+                      isMinimum
+                        ? 'Abaixo'
+                        : 'Excesso'
+                    }
+                  </span>
+
+                  <strong>
+                    ${formatPtBrDecimal(
+                      violation
+                        .differenceQuantity
+                    )}
+                    ${escapeHtml(
+                      violation.unit
+                    )}
+                  </strong>
+                </div>
+
+              </div>
+
+
+              <p>
+
+                Limite atingido em
+
+                <strong>
+                  ${escapeHtml(
+                    formatDateOnly(
+                      violation.date
+                    )
+                  )}${
+                    violation.time
+                      ? ` às ${escapeHtml(
+                          violation
+                            .time
+                            .slice(
+                              0,
+                              5
+                            )
+                        )}`
+                      : ''
+                  }
+                </strong>.
+
+                ${
+                  productionNames.length
+
+                    ? `
+                      Produção relacionada:
+                      <strong>
+                        ${escapeHtml(
+                          productionNames
+                            .join(', ')
+                        )}
+                      </strong>.
+                    `
+
+                    : ''
+                }
+
+              </p>
+
+            </article>
+          `;
+
+        }
+      )
+      .join('');
+
+
+  backdrop.innerHTML = `
+    <div
+      class="modal planning-stock-limit-dialog"
+      role="dialog"
+      aria-modal="true"
+    >
+
+      <div
+        class="modal-header"
+      >
+
+        <div>
+
+          <h2>
+            Limites de estoque da simulação
+          </h2>
+
+          <p
+            class="modal-subtitle"
+          >
+            A simulação atinge estoque mínimo ou máximo em materiais da cadeia produtiva.
+          </p>
+
+        </div>
+
+      </div>
+
+
+      <form
+        class="planning-stock-limit-form"
+      >
+
+        <div
+          class="planning-stock-limit-violations"
+        >
+          ${violationRows}
+        </div>
+
+
+        ${
+          productionRows
+
+            ? `
+              <section
+                class="planning-stock-limit-suggestions"
+              >
+
+                <div>
+
+                  <h3>
+                    Quantidade sugerida
+                  </h3>
+
+                  <p>
+                    O sistema calculou uma quantidade menor para tentar respeitar todos os limites. Você também pode digitar outra quantidade.
+                  </p>
+
+                </div>
+
+
+                <div
+                  class="planning-stock-limit-production-list"
+                >
+                  ${productionRows}
+                </div>
+
+              </section>
+            `
+
+            : ''
+        }
+
+
+        <p
+          class="form-error"
+          data-stock-limit-error
+          hidden
+        ></p>
+
+
+        <div
+          class="form-actions modal-actions planning-stock-limit-actions"
+        >
+
+          <button
+            class="secondary-button"
+            type="button"
+            data-stock-limit-cancel
+          >
+            Cancelar simulação
+          </button>
+
+
+          <button
+            class="secondary-button planning-stock-limit-override"
+            type="button"
+            data-stock-limit-override
+          >
+            Prosseguir mesmo assim
+          </button>
+
+
+          ${
+            productionRows
+
+              ? `
+                <button
+                  class="primary-button"
+                  type="submit"
+                >
+                  Recalcular com estas quantidades
+                </button>
+              `
+
+              : ''
+          }
+
+        </div>
+
+      </form>
+
+    </div>
+  `;
+
+
+  return new Promise(
+    resolve => {
+
+      const form =
+        backdrop.querySelector(
+          '.planning-stock-limit-form'
+        );
+
+
+      const error =
+        backdrop.querySelector(
+          '[data-stock-limit-error]'
+        );
+
+
+      const close =
+        value => {
+
+          backdrop.remove();
+
+          resolve(
+            value
+          );
+
+        };
+
+
+      backdrop
+        .querySelector(
+          '[data-stock-limit-cancel]'
+        )
+        ?.addEventListener(
+          'click',
+          () =>
+            close({
+              action:
+                'cancel',
+
+              assessment
+            })
+        );
+
+
+      backdrop
+        .querySelector(
+          '[data-stock-limit-override]'
+        )
+        ?.addEventListener(
+          'click',
+          () =>
+            close({
+              action:
+                'override',
+
+              assessment
+            })
+        );
+
+
+      backdrop.addEventListener(
+        'click',
+        event => {
+
+          if (
+            event.target
+            ===
+            backdrop
+          ) {
+
+            close({
+              action:
+                'cancel',
+
+              assessment
+            });
+
+          }
+
+        }
+      );
+
+
+      form?.addEventListener(
+        'submit',
+        event => {
+
+          event.preventDefault();
+
+
+          const quantities =
+            [];
+
+
+          let invalidMessage =
+            '';
+
+
+          backdrop
+            .querySelectorAll(
+              '[data-stock-limit-production-index]'
+            )
+            .forEach(
+              input => {
+
+                if (
+                  invalidMessage
+                ) {
+                  return;
+                }
+
+
+                const productionIndex =
+                  Number(
+                    input.dataset
+                      .stockLimitProductionIndex
+                  );
+
+
+                const currentQty =
+                  Number(
+                    input.dataset
+                      .stockLimitCurrentQty
+                  );
+
+
+                const quantity =
+                  Number(
+                    input.value
+                  );
+
+
+                if (
+                  !Number.isFinite(
+                    quantity
+                  )
+                  ||
+                  !(quantity > 0)
+                ) {
+
+                  invalidMessage =
+                    'Informe uma quantidade maior que zero.';
+
+                  return;
+                }
+
+
+                if (
+                  Number.isFinite(
+                    currentQty
+                  )
+                  &&
+                  quantity
+                    >
+                    currentQty
+                    +
+                    0.000001
+                ) {
+
+                  invalidMessage =
+                    'A quantidade não pode ser maior que a quantidade originalmente simulada.';
+
+                  return;
+                }
+
+
+                quantities.push({
+                  productionIndex,
+                  quantity
+                });
+
+              }
+            );
+
+
+          if (
+            invalidMessage
+          ) {
+
+            error.textContent =
+              invalidMessage;
+
+            error.hidden =
+              false;
+
+            return;
+          }
+
+
+          close({
+
+            action:
+              'apply',
+
+            assessment,
+
+            quantities
+
+          });
+
+        }
+      );
+
+
+      page.appendChild(
+        backdrop
+      );
+
+
+      backdrop
+        .querySelector(
+          '[data-stock-limit-production-index]'
+        )
+        ?.focus();
+
+    }
+  );
+}
+
+
+function applyPlanningStockLimitQuantities(
+  quantities = []
+) {
+
+  let changed =
+    false;
+
+
+  for (
+    const item
+    of quantities
+  ) {
+
+    const productionIndex =
+      Number(
+        item
+          ?.productionIndex
+      );
+
+
+    const quantity =
+      Number(
+        item
+          ?.quantity
+      );
+
+
+    const production =
+      draft.productions?.[
+        productionIndex
+      ];
+
+
+    if (
+      !production
+      ||
+      !Number.isFinite(
+        quantity
+      )
+      ||
+      !(quantity > 0)
+    ) {
+      continue;
+    }
+
+
+    const currentQty =
+      Number(
+        production
+          .plannedQty
+        ||
+        0
+      );
+
+
+    if (
+      Math.abs(
+        currentQty
+        -
+        quantity
+      )
+      <=
+      0.000001
+    ) {
+      continue;
+    }
+
+
+    production.plannedQty =
+      String(
+        Number(
+          quantity
+            .toFixed(6)
+        )
+      );
+
+
+    changed =
+      true;
+  }
+
+
+  if (
+    changed
+  ) {
+    saveDraftNow();
+  }
+
+
+  return changed;
+}
 
   function applySkippedProductionCascade(result) {
     const skipped = new Set((draft.skipProductionMaterials || [])
@@ -2414,6 +10826,22 @@ export function PlanningPage() {
       .filter(item => Number(item.productionIndex) !== Number(productionIndex));
     draft.operationSplits = (draft.operationSplits || [])
       .filter(item => Number(item.productionIndex || 0) !== Number(productionIndex));
+      draft.operationOverrides =
+  Object.fromEntries(
+    Object.entries(
+      draft.operationOverrides
+      || {}
+    )
+      .filter(
+        ([key]) =>
+          !String(key)
+            .startsWith(
+              `${Number(
+                productionIndex
+              )}:`
+            )
+      )
+  );
   }
 
   function removeProductionScopedState(removedIndex) {
@@ -2507,12 +10935,5601 @@ export function PlanningPage() {
     `;
   }
 
+  function planningLocationLabel(locationId) {
+  const normalizedId =
+    String(locationId || '').trim();
+
+  if (!normalizedId) {
+    return '-';
+  }
+
+  const location =
+    (locations || []).find(item => (
+      String(
+        item?.id
+        ?? item?.locationId
+        ?? item?.location_id
+        ?? ''
+      ).trim() === normalizedId
+    ));
+
+  return String(
+    location?.name
+    ?? location?.locationName
+    ?? location?.location_name
+    ?? normalizedId
+  );
+}
+
+
+function buildPlanningTransportCardsModel(
+  result = {},
+  groups = []
+) {
+  const allocations =
+    manualScheduleDraft?.allocations
+    || [];
+
+  const transports =
+    manualScheduleDraft?.transports
+    || [];
+
+  const machines =
+    productionCalendarMachines(
+      result
+    );
+
+    const availability =
+    buildPlanningLocalStockAvailability({
+      result,
+
+      allocations,
+
+      transports,
+
+      plannedReceipts:
+        manualScheduleDraft?.plannedReceipts
+        || draft.plannedReceipts
+        || [],
+
+      machines
+    });
+
+
+  /*
+   * Saldo ainda disponível em cada
+   * material + local para transporte.
+   */
+  const remainingSource =
+    new Map();
+
+
+  availability
+    .availableByMaterialLocation
+    .forEach(item => {
+
+      const materialId =
+        String(
+          item?.materialId
+          || ''
+        ).trim();
+
+      const locationId =
+        String(
+          item?.locationId
+          || ''
+        ).trim();
+
+      const quantity =
+        Math.max(
+          Number(
+            item?.quantity
+            || 0
+          ),
+          0
+        );
+
+
+      if (
+        !materialId
+        || !locationId
+        || locationId
+          === PLANNING_DEFAULT_LOCATION_ID
+        || !(quantity > 0)
+      ) {
+        return;
+      }
+
+
+      remainingSource.set(
+        planningLocalStockKey(
+          materialId,
+          locationId
+        ),
+        quantity
+      );
+    });
+
+
+  const cards = [];
+
+
+  /*
+   * Respeita a prioridade das produções.
+   *
+   * Isso também impede o mesmo saldo físico
+   * de aparecer disponível em dois cards
+   * de transporte diferentes.
+   */
+  [...groups]
+    .sort(
+      (left, right) =>
+        Number(
+          left.productionIndex
+          || 0
+        )
+        -
+        Number(
+          right.productionIndex
+          || 0
+        )
+    )
+    .forEach(group => {
+
+      /*
+       * Agrupa a necessidade por:
+       *
+       * material necessário + local destino
+       */
+      const demandByRoute =
+        new Map();
+
+
+      (
+        group.materials
+        || []
+      ).forEach(consumer => {
+
+        if (
+          consumer.completed
+          ||
+          !(
+            Number(
+              consumer.remainingQty
+              || 0
+            ) > 0
+          )
+        ) {
+          return;
+        }
+
+
+        const targetLocations =
+          planningMaterialConsumerLocationIds(
+            consumer
+          );
+
+
+        /*
+         * Se a etapa puder rodar fisicamente
+         * em mais de um local, ainda não
+         * sabemos qual transporte sugerir.
+         *
+         * Só criamos o card quando o destino
+         * físico é inequívoco.
+         */
+        if (
+          targetLocations.length
+          !== 1
+        ) {
+          return;
+        }
+
+
+        const targetLocation =
+          String(
+            targetLocations[0]
+          );
+
+
+        const requirements =
+          availability
+            .requirementsByConsumer
+            .get(
+              String(
+                consumer.operationId
+              )
+            )
+          || [];
+
+
+        const consumerRatio =
+          Number(
+            consumer.requiredQty
+            || 0
+          ) > 0
+
+            ? Math.min(
+                Math.max(
+                  Number(
+                    consumer.remainingQty
+                    || 0
+                  )
+                  /
+                  Number(
+                    consumer.requiredQty
+                    || 0
+                  ),
+                  0
+                ),
+                1
+              )
+
+            : 0;
+
+
+        requirements.forEach(
+          requirement => {
+
+            const materialId =
+              String(
+                requirement?.materialId
+                || ''
+              ).trim();
+
+
+            const requiredQuantity =
+              Number(
+                requirement
+                  ?.requiredQuantity
+                || 0
+              )
+              *
+              consumerRatio;
+
+
+            if (
+              !materialId
+              ||
+              !(
+                requiredQuantity
+                > 0
+              )
+            ) {
+              return;
+            }
+
+
+            const key =
+              `${
+                materialId
+              }\u0000${
+                targetLocation
+              }`;
+
+
+            const current =
+              demandByRoute.get(key)
+              || {
+                materialId,
+
+                targetLocation,
+
+                requiredQuantity:
+                  0,
+
+                consumerParentOperationIds:
+                  new Set(),
+
+                unit:
+                  String(
+                    requirement?.unit
+                    || consumer.unit
+                    || ''
+                  )
+              };
+
+
+            current.requiredQuantity +=
+              requiredQuantity;
+
+
+            current
+              .consumerParentOperationIds
+              .add(
+                String(
+                  consumer.operationId
+                )
+              );
+
+
+            demandByRoute.set(
+              key,
+              current
+            );
+          }
+        );
+      });
+
+
+      demandByRoute.forEach(
+        demand => {
+
+          /*
+           * Quanto já existe no destino?
+           */
+          const destinationAvailable =
+            planningLocalStockQuantity(
+              availability
+                .availableByMaterialLocation,
+
+              demand.materialId,
+
+              demand.targetLocation
+            );
+
+
+          let missingAtDestination =
+            Math.max(
+              Number(
+                demand.requiredQuantity
+                || 0
+              )
+              -
+              destinationAvailable,
+              0
+            );
+
+
+          if (
+            !(
+              missingAtDestination
+              > 0
+            )
+          ) {
+            return;
+          }
+
+
+          const producerMaterial =
+            (
+              group.materials
+              || []
+            ).find(material => (
+              String(
+                material?.materialId
+                || ''
+              )
+              ===
+              demand.materialId
+            ));
+
+
+          const catalogMaterial =
+            findMaterialById(
+              materials,
+              demand.materialId
+            )
+            || {};
+
+
+          /*
+           * Procura o mesmo material
+           * disponível em outro local.
+           */
+                    let sources =
+            [
+              ...remainingSource.entries()
+            ]
+              .map(
+                ([key, quantity]) => {
+
+                  const [
+                    materialId,
+                    locationId
+                  ] =
+                    key.split(
+                      '\u0000'
+                    );
+
+
+                  return {
+                    key,
+                    materialId,
+                    locationId,
+                    quantity,
+                    awaitingSourceStock:
+                      false
+                  };
+                }
+              )
+              .filter(source => (
+                source.materialId
+                  === demand.materialId
+
+                &&
+
+                source.locationId
+                  !== demand.targetLocation
+
+                &&
+
+                Number(
+                  source.quantity
+                  || 0
+                ) > 0
+              ));
+
+
+          if (!sources.length) {
+            const producerLocations =
+              [
+                ...new Set(
+                  (
+                    Array.isArray(
+                      producerMaterial
+                        ?.consumerLocationIds
+                    )
+                      ? producerMaterial
+                          .consumerLocationIds
+                      : []
+                  )
+                    .map(value =>
+                      String(
+                        value || ''
+                      ).trim()
+                    )
+                    .filter(Boolean)
+                )
+              ];
+
+            if (
+              producerLocations.length === 1
+              &&
+              producerLocations[0]
+                !== demand.targetLocation
+            ) {
+              const sourceLocation =
+                producerLocations[0];
+
+              sources = [{
+                key:
+                  planningLocalStockKey(
+                    demand.materialId,
+                    sourceLocation
+                  ),
+
+                materialId:
+                  demand.materialId,
+
+                locationId:
+                  sourceLocation,
+
+                quantity:
+                  0,
+
+                awaitingSourceStock:
+                  true
+              }];
+            }
+          }
+
+
+          for (
+            const source
+            of sources
+          ) {
+            if (
+              !(
+                missingAtDestination
+                > 0
+              )
+            ) {
+              break;
+            }
+
+
+                        const sourceAvailableQuantity =
+              Math.max(
+                Number(
+                  source.quantity
+                  || 0
+                ),
+                0
+              );
+
+
+            const availableQuantity =
+              Math.min(
+                sourceAvailableQuantity,
+                missingAtDestination
+              );
+
+
+                        const awaitingSourceStock =
+              source.awaitingSourceStock === true
+              &&
+              !(availableQuantity > 0);
+
+
+            if (
+              !(availableQuantity > 0)
+              &&
+              !awaitingSourceStock
+            ) {
+              continue;
+            }
+
+            const transportKey =
+              [
+                'transport',
+                group.productionIndex,
+                demand.materialId,
+                source.locationId,
+                demand.targetLocation
+              ].join(':');
+
+
+            cards.push({
+              scheduleType:
+                'transport',
+
+              transportKey,
+
+              productionId:
+                group.productionId,
+
+              productionIndex:
+                group.productionIndex,
+
+              productionTitle:
+                group.title,
+
+              productionColor:
+                group.color,
+
+              materialId:
+                demand.materialId,
+
+              materialCode:
+                String(
+                  catalogMaterial?.code
+                  || producerMaterial
+                    ?.materialCode
+                  || ''
+                ),
+
+              materialName:
+                String(
+                  catalogMaterial?.name
+                  || producerMaterial
+                    ?.materialName
+                  || demand.materialId
+                ),
+
+                            /*
+               * A unidade do transporte pertence
+               * ao MATERIAL TRANSPORTADO.
+               *
+               * Não pode herdar a unidade do
+               * consumidor Longitudinal/Transversal.
+               *
+               * CA60 3,4 Bobina = kg.
+               */
+              unit:
+                String(
+                  producerMaterial?.unit
+                  || catalogMaterial?.primary_unit
+                  || catalogMaterial?.primaryUnit
+                  || demand.unit
+                  || ''
+                ),
+
+              sourceLocation:
+                source.locationId,
+
+              sourceLocationName:
+                planningLocationLabel(
+                  source.locationId
+                ),
+
+              targetLocation:
+                demand.targetLocation,
+
+              targetLocationName:
+                planningLocationLabel(
+                  demand.targetLocation
+                ),
+
+                            /*
+               * availableQty / suggestedQty:
+               * quanto a cadeia precisa receber agora.
+               *
+               * sourceAvailableQty:
+               * saldo físico inteiro ainda disponível
+               * na origem.
+               */
+              availableQty:
+                Number(
+                  availableQuantity
+                    .toFixed(6)
+                ),
+
+              suggestedQty:
+                Number(
+                  availableQuantity
+                    .toFixed(6)
+                ),
+
+                            sourceAvailableQty:
+                Number(
+                  sourceAvailableQuantity
+                    .toFixed(6)
+                ),
+
+              awaitingSourceStock,
+
+              requiredQty:
+                Number(
+                  missingAtDestination
+                    .toFixed(6)
+                ),
+
+              producerParentOperationIds:
+                producerMaterial
+                  ?.operationId
+
+                  ? [
+                      String(
+                        producerMaterial
+                          .operationId
+                      )
+                    ]
+
+                  : [
+                      `${
+                        Number(
+                          group
+                            .productionIndex
+                          || 0
+                        )
+                      }:${
+                        demand.materialId
+                      }`
+                    ],
+
+              consumerParentOperationIds:
+                [
+                  ...demand
+                    .consumerParentOperationIds
+                ]
+            });
+
+
+            remainingSource.set(
+              source.key,
+
+              Number(
+                (
+                  Number(
+                    source.quantity
+                    || 0
+                  )
+                  -
+                  availableQuantity
+                ).toFixed(6)
+              )
+            );
+
+
+            missingAtDestination =
+              Number(
+                (
+                  missingAtDestination
+                  -
+                  availableQuantity
+                ).toFixed(6)
+              );
+          }
+        }
+      );
+    });
+
+
+  return cards;
+}
+
+function planningTransportRouteKey(
+  value = {}
+) {
+  return [
+    Number(
+      value?.productionIndex
+      || 0
+    ),
+
+    String(
+      value?.materialId
+      || ''
+    ),
+
+    String(
+      value?.sourceLocation
+      || value?.sourceLocationId
+      || ''
+    ),
+
+    String(
+      value?.targetLocation
+      || value?.targetLocationId
+      || ''
+    )
+  ].join('|');
+}
+
+
+function withScheduledPlanningTransportProgress(
+  cards = []
+) {
+  const pendingCards =
+    Array.isArray(cards)
+      ? cards
+      : [];
+
+  const scheduledByRoute =
+    new Map();
+
+
+  (
+    manualScheduleDraft?.transports
+    || []
+  ).forEach(transport => {
+
+    const routeKey =
+      planningTransportRouteKey(
+        transport
+      );
+
+    const current =
+      scheduledByRoute.get(
+        routeKey
+      )
+      || {
+        quantity:
+          0,
+
+        transports:
+          []
+      };
+
+
+    current.quantity +=
+      Math.max(
+        Number(
+          transport?.quantity
+          || 0
+        ),
+        0
+      );
+
+
+    current.transports.push(
+      transport
+    );
+
+
+    scheduledByRoute.set(
+      routeKey,
+      current
+    );
+  });
+
+
+  const result =
+    pendingCards.map(card => {
+
+      const routeKey =
+        planningTransportRouteKey(
+          card
+        );
+
+      const scheduled =
+        scheduledByRoute.get(
+          routeKey
+        );
+
+      const scheduledQty =
+        Number(
+          scheduled?.quantity
+          || 0
+        );
+
+      /*
+       * requiredQty neste ponto representa
+       * aquilo que AINDA falta transportar.
+       *
+       * Portanto:
+       *
+       * total = já programado + restante.
+       */
+      const remainingQty =
+        Math.max(
+          Number(
+            card?.requiredQty
+            || 0
+          ),
+          0
+        );
+
+           const totalQty =
+        planningTransportDisplayTargetQuantity(
+          scheduledQty
+          +
+          remainingQty
+        );
+
+
+      scheduledByRoute.delete(
+        routeKey
+      );
+
+
+      return {
+        ...card,
+
+        scheduledQty:
+          Number(
+            scheduledQty.toFixed(6)
+          ),
+
+        remainingQty:
+          Number(
+            remainingQty.toFixed(6)
+          ),
+
+        totalQty
+      };
+    });
+
+
+  /*
+   * Se o transporte foi totalmente
+   * programado, ele deixa de aparecer
+   * no modelo "pendente".
+   *
+   * Nós o recolocamos aqui apenas para
+   * apresentação do status TOTAL.
+   */
+  scheduledByRoute.forEach(
+    scheduled => {
+
+      const first =
+        scheduled.transports[0];
+
+      if (!first) {
+        return;
+      }
+
+
+      const scheduledQty =
+        Number(
+          scheduled.quantity
+          || 0
+        );
+
+
+      const declaredTotal =
+        Number(
+          first?.totalQuantity
+          ??
+          first?.requiredQuantity
+          ??
+          scheduledQty
+        );
+
+
+            const totalQty =
+        Number.isFinite(
+          declaredTotal
+        )
+        && declaredTotal > 0
+
+          ? declaredTotal
+
+          : scheduledQty;
+
+
+      const remainingQty =
+        Math.max(
+          totalQty
+          -
+          scheduledQty,
+          0
+        );
+
+
+      result.push({
+        scheduleType:
+          'transport',
+
+        transportKey:
+          String(
+            first?.transportKey
+            || [
+              'transport',
+              first?.productionIndex
+              || 0,
+              first?.materialId
+              || '',
+              first?.sourceLocation
+              || '',
+              first?.targetLocation
+              || ''
+            ].join(':')
+          ),
+
+        productionId:
+          first?.productionId,
+
+        productionIndex:
+          Number(
+            first?.productionIndex
+            || 0
+          ),
+
+        productionTitle:
+          first?.productionTitle,
+
+        productionColor:
+          first?.productionColor,
+
+        materialId:
+          String(
+            first?.materialId
+            || ''
+          ),
+
+        materialCode:
+          String(
+            first?.materialCode
+            || ''
+          ),
+
+        materialName:
+          String(
+            first?.materialName
+            || first?.materialCode
+            || first?.materialId
+            || ''
+          ),
+
+        unit:
+          String(
+            first?.unit
+            || ''
+          ),
+
+        sourceLocation:
+          String(
+            first?.sourceLocation
+            || ''
+          ),
+
+        sourceLocationName:
+          String(
+            first?.sourceLocationName
+            || planningLocationLabel(
+              first?.sourceLocation
+            )
+          ),
+
+        targetLocation:
+          String(
+            first?.targetLocation
+            || ''
+          ),
+
+        targetLocationName:
+          String(
+            first?.targetLocationName
+            || planningLocationLabel(
+              first?.targetLocation
+            )
+          ),
+
+        availableQty:
+          0,
+
+        scheduledQty:
+          Number(
+            scheduledQty.toFixed(6)
+          ),
+
+        remainingQty:
+          Number(
+            remainingQty.toFixed(6)
+          ),
+
+        totalQty:
+          Number(
+            totalQty.toFixed(6)
+          ),
+
+        producerParentOperationIds:
+          first?.producerParentOperationIds
+          || [],
+
+        consumerParentOperationIds:
+          first?.consumerParentOperationIds
+          || []
+      });
+    }
+  );
+
+
+  return result;
+}
+
+
+function planningTransportCardByKey(
+  transportKey
+) {
+  if (!currentSimulation) {
+    return null;
+  }
+
+
+  const groups =
+    buildPlanningMaterialsToScheduleModel(
+      currentSimulation,
+      {
+        allocations:
+          manualScheduleDraft
+            ?.allocations
+          || [],
+
+                transports:
+          manualScheduleDraft
+            ?.transports
+          || [],
+
+        plannedReceipts:
+          manualScheduleDraft
+            ?.plannedReceipts
+          || draft.plannedReceipts
+          || [],
+
+        machines:
+          productionCalendarMachines(
+            currentSimulation
+          ),
+
+        resolveConsumerLocationIds:
+          material =>
+            planningMaterialConsumerLocationIds(
+              material
+            ),
+
+        ignoreStock:
+          draft.planningMode
+          === 'theoretical'
+      }
+    );
+
+
+  return withScheduledPlanningTransportProgress(
+  buildPlanningTransportCardsModel(
+    currentSimulation,
+    groups
+  )
+).find(
+    card =>
+      String(
+        card.transportKey
+      )
+      ===
+      String(
+        transportKey
+      )
+  )
+  || null;
+}
+
+
+function planningProgramMaterialQuantityHtml(
+  material = {},
+  quantity = 0
+) {
+  const catalogMaterial =
+    findMaterialById(
+      materials,
+      material?.materialId
+    )
+    || {};
+
+  const primaryUnit =
+    String(
+      material?.unit
+      || catalogMaterial?.primary_unit
+      || ''
+    ).trim();
+
+  const secondaryUnit =
+    String(
+      catalogMaterial?.secondary_unit
+      || ''
+    ).trim();
+
+  const factor =
+    Number(
+      catalogMaterial
+        ?.primary_to_secondary_factor
+    );
+
+  const primaryText =
+    `${formatPtBrDecimal(quantity)} ${primaryUnit}`
+      .trim();
+
+  /*
+   * Bobina:
+   * kg / kg não faz sentido mostrar duas vezes.
+   */
+  if (
+    !secondaryUnit
+    || !primaryUnit
+    || secondaryUnit === primaryUnit
+    || !Number.isFinite(factor)
+    || !(factor > 0)
+  ) {
+    return escapeHtml(
+      primaryText
+    );
+  }
+
+  const secondaryQuantity =
+    numericQuantity(quantity)
+    *
+    factor;
+
+  return `
+    ${escapeHtml(primaryText)}
+
+    <span class="planning-material-secondary-qty">
+      /
+      ${escapeHtml(
+        `${formatPtBrDecimal(
+          secondaryQuantity
+        )} ${secondaryUnit}`
+      )}
+    </span>
+  `;
+}
+
+function planningSharedInputBalancesForGroup(
+  materialsToSchedule = []
+) {
+  const balances =
+    new Map();
+
+
+  (
+    Array.isArray(
+      materialsToSchedule
+    )
+      ? materialsToSchedule
+      : []
+  ).forEach(material => {
+
+    (
+      Array.isArray(
+        material?.inputBalances
+      )
+        ? material.inputBalances
+        : []
+    ).forEach(balance => {
+
+      const materialId =
+        String(
+          balance?.materialId
+          || ''
+        ).trim();
+
+
+      if (!materialId) {
+        return;
+      }
+
+
+      const locationIds =
+        (
+          Array.isArray(
+            balance?.locationIds
+          )
+            ? balance.locationIds
+            : []
+        )
+          .map(value =>
+            String(value || '').trim()
+          )
+          .filter(Boolean)
+          .sort();
+
+
+      const key =
+        `${materialId}\u0000${locationIds.join(',')}`;
+
+
+      /*
+       * Se Longitudinal e Transversal usam
+       * a mesma Bobina / FEITAL, ela aparece
+       * UMA vez nesta produção.
+       */
+      if (!balances.has(key)) {
+
+        balances.set(
+          key,
+          {
+            ...balance,
+
+            materialId,
+
+            locationIds
+          }
+        );
+      }
+    });
+  });
+
+
+  return [...balances.values()]
+    .sort((left, right) => {
+
+      const leftMaterial =
+        findMaterialById(
+          materials,
+          left.materialId
+        )
+        || {};
+
+      const rightMaterial =
+        findMaterialById(
+          materials,
+          right.materialId
+        )
+        || {};
+
+
+      return (
+        planningMaterialVisualRank({
+          materialName:
+            leftMaterial?.name
+            || left.materialId
+        })
+
+        -
+
+        planningMaterialVisualRank({
+          materialName:
+            rightMaterial?.name
+            || right.materialId
+        })
+
+        ||
+
+        String(
+          leftMaterial?.name
+          || left.materialId
+        ).localeCompare(
+          String(
+            rightMaterial?.name
+            || right.materialId
+          ),
+
+          'pt-BR',
+
+          {
+            numeric: true
+          }
+        )
+      );
+    });
+}
+
+
+function planningBalancesStripHtml(
+  balances = [],
+  {
+    title = 'Saldos compartilhados'
+  } = {}
+) {
+  const normalizedBalances =
+    (
+      Array.isArray(balances)
+        ? balances
+        : []
+    ).filter(balance => (
+      balance
+      &&
+      String(
+        balance?.materialId
+        || ''
+      ).trim()
+    ));
+
+
+  if (!normalizedBalances.length) {
+    return '';
+  }
+
+
+  return `
+    <div class="planning-shared-stock-strip">
+
+      <span class="planning-shared-stock-strip-title">
+        ${escapeHtml(title)}
+      </span>
+
+      <div class="planning-shared-stock-strip-items">
+
+        ${normalizedBalances.map(balance => {
+
+          const catalogMaterial =
+            findMaterialById(
+              materials,
+              balance.materialId
+            )
+            || {};
+
+
+          const materialName =
+            String(
+              catalogMaterial?.name
+              || balance.materialId
+            );
+
+
+          const locationIds =
+            (
+              Array.isArray(
+                balance?.locationIds
+              )
+                ? balance.locationIds
+                : []
+            )
+              .map(value =>
+                String(value || '').trim()
+              )
+              .filter(Boolean);
+
+
+          const locationLabel =
+            locationIds.length
+
+              ? locationIds
+                  .map(
+                    planningLocationLabel
+                  )
+                  .join(' / ')
+
+              : 'Todos os locais';
+
+
+          return `
+            <div class="planning-shared-stock-strip-item">
+
+              <span>
+
+                ${escapeHtml(
+                  materialName
+                )}
+
+                <small>
+                  ${escapeHtml(
+                    locationLabel
+                  )}
+                </small>
+
+              </span>
+
+              <strong>
+                ${planningProgramMaterialQuantityHtml(
+                  {
+                    materialId:
+                      balance.materialId,
+
+                    unit:
+                      balance.unit
+                  },
+
+                  balance.availableQty
+                )}
+              </strong>
+
+            </div>
+          `;
+
+        }).join('')}
+
+      </div>
+
+    </div>
+  `;
+}
+
+
+function planningSharedInputBalancesHtml(
+  materialsToSchedule = [],
+  {
+    title = 'Saldos compartilhados',
+    locationIds = []
+  } = {}
+) {
+  const normalizedLocationIds =
+    (
+      Array.isArray(locationIds)
+        ? locationIds
+        : []
+    )
+      .map(value =>
+        String(value || '').trim()
+      )
+      .filter(Boolean);
+
+
+  const balances =
+    planningSharedInputBalancesForGroup(
+      materialsToSchedule
+    )
+      .filter(balance => {
+
+        if (
+          !normalizedLocationIds.length
+        ) {
+          return true;
+        }
+
+
+        const balanceLocationIds =
+          (
+            Array.isArray(
+              balance?.locationIds
+            )
+              ? balance.locationIds
+              : []
+          )
+            .map(value =>
+              String(value || '').trim()
+            )
+            .filter(Boolean);
+
+
+        return balanceLocationIds.some(
+          locationId =>
+            normalizedLocationIds.includes(
+              locationId
+            )
+        );
+      });
+
+
+  return planningBalancesStripHtml(
+    balances,
+    {
+      title
+    }
+  );
+}
+
+
+function planningTransportSourceBalancesHtml(
+  transportCards = [],
+  result = currentSimulation || {}
+) {
+  const normalizedCards =
+    Array.isArray(transportCards)
+      ? transportCards
+      : [];
+
+
+  if (!normalizedCards.length) {
+    return '';
+  }
+
+
+  const availability =
+    buildPlanningLocalStockAvailability({
+      result,
+
+      allocations:
+        manualScheduleDraft?.allocations
+        || [],
+
+            transports:
+        manualScheduleDraft?.transports
+        || [],
+
+      plannedReceipts:
+        manualScheduleDraft?.plannedReceipts
+        || draft.plannedReceipts
+        || [],
+
+      machines:
+        productionCalendarMachines(
+          result
+        )
+    });
+
+
+  const balancesMap =
+    new Map();
+
+
+  normalizedCards.forEach(card => {
+
+    const materialId =
+      String(
+        card?.materialId
+        || ''
+      ).trim();
+
+    const sourceLocation =
+      String(
+        card?.sourceLocation
+        || card?.sourceLocationId
+        || ''
+      ).trim();
+
+
+    if (
+      !materialId
+      || !sourceLocation
+    ) {
+      return;
+    }
+
+
+    const key =
+      `${materialId}\u0000${sourceLocation}`;
+
+
+    if (balancesMap.has(key)) {
+      return;
+    }
+
+
+    balancesMap.set(
+      key,
+      {
+        materialId,
+
+        unit:
+          String(
+            card?.unit
+            || ''
+          ).trim(),
+
+        availableQty:
+          planningLocalStockQuantity(
+            availability.availableByMaterialLocation,
+            materialId,
+            sourceLocation
+          ),
+
+        locationIds:
+          [sourceLocation]
+      }
+    );
+  });
+
+
+  const balances =
+    [...balancesMap.values()]
+      .filter(
+        balance =>
+          Number(
+            balance?.availableQty
+            || 0
+          ) > 0
+      );
+
+
+  return planningBalancesStripHtml(
+    balances,
+    {
+      title:
+        'Saldo disponível na origem'
+    }
+  );
+}
+
+
+function planningStructuredFlowSectorHeaderHtml(
+  {
+    materialsToSchedule = [],
+    transportCards = [],
+    result = currentSimulation || {}
+  } = {}
+) {
+  const normalizedTransportCards =
+    Array.isArray(transportCards)
+      ? transportCards
+      : [];
+
+
+  if (!normalizedTransportCards.length) {
+    return planningSharedInputBalancesHtml(
+      materialsToSchedule
+    );
+  }
+
+
+  const sourceLocationNames =
+    [
+      ...new Set(
+        normalizedTransportCards
+          .map(card =>
+            String(
+              card?.sourceLocationName
+              || ''
+            ).trim()
+          )
+          .filter(Boolean)
+      )
+    ];
+
+
+  const targetLocationNames =
+    [
+      ...new Set(
+        normalizedTransportCards
+          .map(card =>
+            String(
+              card?.targetLocationName
+              || ''
+            ).trim()
+          )
+          .filter(Boolean)
+      )
+    ];
+
+
+  const targetLocationIds =
+    [
+      ...new Set(
+        normalizedTransportCards
+          .map(card =>
+            String(
+              card?.targetLocation
+              || card?.targetLocationId
+              || ''
+            ).trim()
+          )
+          .filter(Boolean)
+      )
+    ];
+
+
+  const sourceTitle =
+    sourceLocationNames.join(' / ')
+    || 'Origem';
+
+
+  const targetTitle =
+    targetLocationNames.join(' / ')
+    || 'Destino';
+
+
+  const sourceBalancesHtml =
+    planningTransportSourceBalancesHtml(
+      normalizedTransportCards,
+      result
+    );
+
+
+  const targetBalancesHtml =
+    planningSharedInputBalancesHtml(
+      materialsToSchedule,
+      {
+        title:
+          'Saldo compartilhado',
+        locationIds:
+          targetLocationIds
+      }
+    )
+    ||
+    planningSharedInputBalancesHtml(
+      materialsToSchedule,
+      {
+        title:
+          'Saldo compartilhado'
+      }
+    );
+
+
+  return `
+    <div class="planning-flow-sectors">
+
+      <div class="planning-flow-sector planning-flow-sector--source">
+
+        <div class="planning-flow-sector-head">
+          <span class="planning-flow-sector-label">
+            ${escapeHtml(sourceTitle)}
+          </span>
+          <small class="planning-flow-sector-subtitle">
+            estoque na origem
+          </small>
+        </div>
+
+        ${
+          sourceBalancesHtml
+          ||
+          `
+            <div class="planning-flow-sector-empty">
+              Nenhum saldo disponível na origem.
+            </div>
+          `
+        }
+
+      </div>
+
+  
+
+      <div class="planning-flow-sector planning-flow-sector--target">
+
+        <div class="planning-flow-sector-head">
+          <span class="planning-flow-sector-label">
+            ${escapeHtml(targetTitle)}
+          </span>
+          <small class="planning-flow-sector-subtitle">
+            saldo compartilhado de consumo
+          </small>
+        </div>
+
+        ${targetBalancesHtml}
+
+      </div>
+
+    </div>
+  `;
+}
+
+function planningProgramMaterialCardHtml(
+  material = {}
+) {
+  const cardClass =
+    material.completed
+      ? 'is-completed'
+      : material.partial
+        ? 'is-partial'
+        : material.blocked
+          ? 'is-blocked'
+          : 'is-ready';
+
+  const canDrag =
+    !material.blocked
+    &&
+    !material.completed;
+
+  return `
+    <article
+      class="
+        planning-material-program-card
+        ${cardClass}
+      "
+      data-operation-id="${escapeHtml(
+        material.operationId
+      )}"
+      data-material-id="${escapeHtml(
+        material.materialId
+      )}"
+      draggable="${canDrag ? 'true' : 'false'}"
+    >
+
+           <div class="planning-material-program-card-title">
+
+        <strong>
+          ${escapeHtml(material.materialName)}
+        </strong>
+
+        <div class="planning-material-program-card-actions">
+
+                    ${
+            material.attendedBySharedStock
+              ? `
+                <span
+                  class="
+                    planning-material-program-card-pill
+                    is-shared-stock
+                  "
+                >
+                  ATENDIDO POR SALDO
+                </span>
+              `
+
+              : material.partial
+                ? `
+                  <span class="planning-material-program-card-pill">
+                    PARCIAL
+                  </span>
+                `
+
+                : ''
+          }
+
+
+          ${
+            numericQuantity(
+              material.sharedDemandQty
+            ) > 0
+              ? `
+                <span
+                  class="
+                    planning-material-program-card-pill
+                    is-shared-demand
+                  "
+                >
+                  +${formatPtBrInteger(
+                    material.sharedDemandQty
+                  )} COMPARTILHADO
+                </span>
+              `
+              : ''
+          }
+
+          ${
+            canDrag
+              ? `
+                <label
+                  class="planning-gantt-select-control"
+                  title="Selecionar para programar no Gantt"
+                >
+                  <input
+                    type="checkbox"
+                    data-planning-gantt-select
+                    aria-label="Selecionar ${escapeHtml(material.materialName)} para programar no Gantt"
+                    draggable="false"
+                  />
+                </label>
+              `
+              : ''
+          }
+
+        </div>
+
+      </div>
+
+      <dl>
+
+        <div>
+          <dt>Necess&aacute;rio</dt>
+          <dd>
+                        ${planningProgramMaterialQuantityHtml(
+              material,
+              material.requiredQty
+            )}
+          </dd>
+        </div>
+
+        <div>
+          <dt>Programado</dt>
+          <dd>
+                        ${planningProgramMaterialQuantityHtml(
+              material,
+              material.scheduledQty
+            )}
+          </dd>
+        </div>
+
+                ${
+          material.attendedBySharedStock
+            ? `
+              <div>
+                <dt>Atendido por saldo</dt>
+                <dd>
+                  ${planningProgramMaterialQuantityHtml(
+                    material,
+                    material.sharedStockCoveredQty
+                  )}
+                </dd>
+              </div>
+            `
+
+            : material.showPermitted
+              ? `
+                <div>
+                  <dt>Permitido</dt>
+                  <dd>
+                    ${planningProgramMaterialQuantityHtml(
+                      material,
+                      material.permittedQty
+                    )}
+                  </dd>
+                </div>
+              `
+
+              : ''
+        }
+
+        <div>
+          <dt>Restante</dt>
+          <dd>
+                       ${planningProgramMaterialQuantityHtml(
+              material,
+              material.remainingQty
+            )}
+          </dd>
+        </div>
+
+      </dl>
+
+    </article>
+  `;
+}
+
+function planningTransportDisplayTargetQuantity(
+  value
+) {
+  const quantity =
+    Math.max(
+      Number(value || 0),
+      0
+    );
+
+  if (!(quantity > 0)) {
+    return 0;
+  }
+
+  return Math.ceil(
+    quantity - 0.000001
+  );
+}
+
+function parsePlanningTransportQuantity(
+  value,
+  fallback = NaN
+) {
+  const rawValue =
+    String(value ?? '').trim();
+
+  if (!rawValue) {
+    return fallback;
+  }
+
+  /*
+   * Padrão pt-BR:
+   *
+   * 1.646     -> 1646
+   * 1.852     -> 1852
+   * 1.850,5   -> 1850.5
+   * 1850,5    -> 1850.5
+   *
+   * Também aceita:
+   *
+   * 1850.5    -> 1850.5
+   */
+  if (rawValue.includes(',')) {
+    const normalizedValue =
+      rawValue
+        .replace(/\./g, '')
+        .replace(',', '.');
+
+    const number =
+      Number(normalizedValue);
+
+    return Number.isFinite(number)
+      ? number
+      : fallback;
+  }
+
+  if (/^\d{1,3}(?:\.\d{3})+$/.test(rawValue)) {
+    const number =
+      Number(
+        rawValue.replace(/\./g, '')
+      );
+
+    return Number.isFinite(number)
+      ? number
+      : fallback;
+  }
+
+  const number =
+    Number(rawValue);
+
+  return Number.isFinite(number)
+    ? number
+    : fallback;
+}
+
+
+function planningTransportProgramCardHtml(
+  transport = {}
+) {
+  const scheduledQty =
+    Math.max(
+      Number(
+        transport?.scheduledQty
+        || 0
+      ),
+      0
+    );
+
+  const totalQty =
+    Math.max(
+      Number(
+        transport?.totalQty
+        ??
+        transport?.requiredQty
+        ??
+        transport?.availableQty
+        ??
+        0
+      ),
+      0
+    );
+
+    const displayTargetQty =
+    planningTransportDisplayTargetQuantity(
+      totalQty
+    );
+
+
+  /*
+   * Antes de existir um transporte programado,
+   * o card precisa refletir o que realmente
+   * existe AGORA na origem.
+   *
+   * Exemplo:
+   *
+   * necessidade total = 3.340 kg
+   * saldo MATRIZ      = 1.852 kg
+   *
+   * A TRANSPORTAR     = 1.852 kg
+   *
+   * Depois que a Bobina for produzida e
+   * o saldo da MATRIZ subir para 3.340 kg:
+   *
+   * A TRANSPORTAR     = 3.340 kg
+   *
+   * Também preservamos a regra anterior:
+   *
+   * necessidade = 1.645,192 kg
+   * saldo origem = 1.852 kg
+   *
+   * A TRANSPORTAR = 1.646 kg
+   */
+  const sourceAvailableQty =
+    Math.max(
+      Number(
+        transport?.sourceAvailableQty
+        ?? transport?.availableQty
+        ?? 0
+      ),
+      0
+    );
+
+
+  const displayAvailableQty =
+    Math.min(
+      displayTargetQty,
+      sourceAvailableQty
+    );
+
+
+  const remainingQty =
+    Math.max(
+      Number(
+        transport?.remainingQty
+        ??
+        (
+          totalQty
+          -
+          scheduledQty
+        )
+      ),
+      0
+    );
+
+  const isTotal =
+    scheduledQty > 0
+    &&
+    remainingQty <= 0.000001;
+
+   const isPartial =
+    scheduledQty > 0
+    &&
+    !isTotal;
+
+  const awaitingSourceStock =
+    transport?.awaitingSourceStock === true
+    &&
+    scheduledQty <= 0
+    &&
+    sourceAvailableQty <= 0
+    &&
+    totalQty > 0;
+
+  const canDrag =
+    !isTotal
+    &&
+    Number(
+      transport?.availableQty
+      || 0
+    ) > 0;
+
+   const statusLabel =
+    isTotal
+      ? 'TOTAL'
+      : isPartial
+        ? 'PARCIAL'
+        : awaitingSourceStock
+          ? 'AGUARDANDO SALDO'
+          : 'LOGÍSTICA';
+
+
+  return `
+    <article
+      class="
+        planning-material-program-card
+        planning-transport-program-card
+        ${
+          isTotal
+            ? 'is-completed'
+            : isPartial
+              ? 'is-partial'
+              : 'is-ready'
+        }
+      "
+      data-transport-key="${escapeHtml(
+        transport.transportKey
+      )}"
+      draggable="${
+        canDrag
+          ? 'true'
+          : 'false'
+      }"
+           title="${
+        canDrag
+          ? 'Arraste para a linha Transporte do Gantt'
+          : awaitingSourceStock
+            ? 'Aguardando saldo do material na origem'
+            : 'Transporte totalmente programado'
+      }"
+    >
+
+           <div class="planning-transport-program-card-head">
+
+        <strong>
+          Transporte
+        </strong>
+
+        <div class="planning-transport-program-card-actions">
+
+          <span>
+            ${statusLabel}
+          </span>
+
+          ${
+            canDrag
+              ? `
+                <label
+                  class="planning-gantt-select-control"
+                  title="Selecionar transporte para programar no Gantt"
+                >
+                  <input
+                    type="checkbox"
+                    data-planning-gantt-select
+                    aria-label="Selecionar transporte de ${escapeHtml(transport.materialName)} para programar no Gantt"
+                    draggable="false"
+                  />
+                </label>
+              `
+              : ''
+          }
+
+        </div>
+
+      </div>
+
+      <div class="planning-transport-program-material">
+        ${escapeHtml(
+          transport.materialName
+        )}
+      </div>
+
+      <div class="planning-transport-program-route">
+
+        <b>
+          ${escapeHtml(
+            transport.sourceLocationName
+          )}
+        </b>
+
+        <span aria-hidden="true">
+          &rarr;
+        </span>
+
+        <b>
+          ${escapeHtml(
+            transport.targetLocationName
+          )}
+        </b>
+
+      </div>
+
+                  <div class="planning-transport-program-qty">
+
+        <small>
+          ${
+                        scheduledQty > 0
+              ? 'Programado / total'
+              : awaitingSourceStock
+                ? 'Necessidade logística'
+                : 'A transportar'
+          }
+        </small>
+
+                <strong>
+          ${
+            scheduledQty > 0
+              ? `
+                ${formatPtBrDecimal(
+                  scheduledQty
+                )}
+                /
+                ${formatPtBrInteger(
+                  displayTargetQty
+                )}
+              `
+                            : awaitingSourceStock
+                ? `
+                  ${formatPtBrInteger(
+                    displayTargetQty
+                  )}
+                `
+                : `
+                  ${formatPtBrDecimal(
+                    displayAvailableQty
+                  )}
+                `
+          }
+
+          ${escapeHtml(
+            transport.unit
+          )}
+        </strong>
+
+      </div>
+
+    </article>
+  `;
+}
+
+
+function planningProgramMaterialNameKey(
+  material = {}
+) {
+  return normalizeText(
+    material?.materialName
+    || ''
+  )
+    .toLocaleLowerCase('pt-BR');
+}
+
+
+function applyPlanningTransportPermittedQuantities(
+  result = {},
+  groups = [],
+  transportCards = [],
+  {
+    asOfDate = null,
+    targetMachineId = null
+  } = {}
+) {
+  if (!Array.isArray(groups) || !groups.length) {
+    return groups;
+  }
+
+  const availability =
+    buildPlanningLocalStockAvailability({
+      result,
+
+      allocations:
+        manualScheduleDraft?.allocations
+        || [],
+
+      transports:
+        manualScheduleDraft?.transports
+        || [],
+
+      machines:
+        productionCalendarMachines(
+          result
+        ),
+
+      asOfDate
+    });
+
+
+  /*
+   * REGRA:
+   *
+   * Longitudinal e Transversal consomem
+   * a mesma Bobina no mesmo local.
+   *
+   * Portanto o saldo do Feital não pode
+   * ser entregue inteiro para os dois.
+   *
+   * Também não podemos redistribuir o saldo
+   * usando o "restante" depois de cada allocation,
+   * pois isso gerava:
+   *
+   * 5.368 -> 1.074 -> 282 -> ...
+   *
+   * A divisão abaixo é ESTÁVEL:
+   *
+   * saldo disponível para a rota
+   *        ↓
+   * dividido proporcionalmente pela
+   * necessidade ORIGINAL Long + Trans
+   *        ↓
+   * cada operação recebe uma cota fixa
+   *        ↓
+   * o que já foi produzido é descontado
+   * da própria cota.
+   */
+  groups.forEach(group => {
+
+    const groupMaterials =
+      Array.isArray(group?.materials)
+        ? group.materials
+        : [];
+
+
+    const groupTransportCards =
+      (
+        Array.isArray(transportCards)
+          ? transportCards
+          : []
+      ).filter(card => (
+        Number(
+          card?.productionIndex
+          || 0
+        )
+        ===
+        Number(
+          group?.productionIndex
+          || 0
+        )
+      ));
+
+
+    /*
+     * Se não existe etapa logística nesta produção,
+     * não aplicamos essa trava especial.
+     */
+    if (!groupTransportCards.length) {
+      return;
+    }
+
+
+    /*
+     * Rota:
+     *
+     * material + destino
+     *
+     * Exemplo:
+     *
+     * CA60 3,4 Bobina + FEITAL
+     */
+    const routes =
+      new Map();
+
+
+    groupTransportCards.forEach(card => {
+
+      const materialId =
+        String(
+          card?.materialId
+          || ''
+        ).trim();
+
+
+      const targetLocation =
+        String(
+          card?.targetLocation
+          || card?.targetLocationId
+          || ''
+        ).trim();
+
+
+      if (
+        !materialId
+        || !targetLocation
+      ) {
+        return;
+      }
+
+
+      const key =
+        planningLocalStockKey(
+          materialId,
+          targetLocation
+        );
+
+
+      const route =
+        routes.get(key)
+        || {
+          key,
+
+          materialId,
+
+          targetLocation,
+
+          consumerIds:
+            new Set(),
+
+          members:
+            [],
+
+          /*
+           * Necessidade ORIGINAL total
+           * Long + Trans.
+           */
+          originalDemand:
+            0,
+
+          /*
+           * Quanto dessa Bobina já foi
+           * efetivamente consumido pelas
+           * allocations.
+           */
+          consumedDemand:
+            0
+        };
+
+
+      (
+        Array.isArray(
+          card?.consumerParentOperationIds
+        )
+          ? card.consumerParentOperationIds
+          : []
+      ).forEach(operationId => {
+
+        const id =
+          String(
+            operationId
+            || ''
+          ).trim();
+
+
+        if (id) {
+          route
+            .consumerIds
+            .add(id);
+        }
+      });
+
+
+      routes.set(
+        key,
+        route
+      );
+    });
+
+
+    /*
+     * Descobre quanto cada operação
+     * ORIGINALMENTE precisa da Bobina.
+     */
+    routes.forEach(route => {
+
+      groupMaterials.forEach(material => {
+
+        const operationId =
+          String(
+            material?.operationId
+            || ''
+          );
+
+
+        if (
+          !operationId
+          ||
+          !route
+            .consumerIds
+            .has(operationId)
+        ) {
+          return;
+        }
+
+
+        const requirements =
+          availability
+            .requirementsByConsumer
+            .get(operationId)
+          || [];
+
+
+        /*
+         * Pode existir mais de um requirement
+         * do mesmo material. Somamos.
+         */
+        const requirementQuantity =
+          requirements
+            .filter(requirement => (
+              String(
+                requirement?.materialId
+                || ''
+              )
+              ===
+              route.materialId
+            ))
+
+            .reduce(
+              (
+                sum,
+                requirement
+              ) =>
+                sum
+                +
+                Math.max(
+                  Number(
+                    requirement
+                      ?.requiredQuantity
+                    || 0
+                  ),
+                  0
+                ),
+
+              0
+            );
+
+
+        const baseQuantity =
+          Math.max(
+            Number(
+              material?.requiredQty
+              || 0
+            ),
+            0
+          );
+
+
+        if (
+          !(requirementQuantity > 0)
+          ||
+          !(baseQuantity > 0)
+        ) {
+          return;
+        }
+
+
+        /*
+         * Quanto dessa operação já foi
+         * efetivamente colocado no Gantt.
+         */
+        const scheduledQuantity =
+          Math.min(
+            Math.max(
+              Number(
+                material?.scheduledQty
+                || 0
+              ),
+              0
+            ),
+
+            baseQuantity
+          );
+
+
+        const usagePerUnit =
+          requirementQuantity
+          /
+          baseQuantity;
+
+
+        /*
+         * Consumo correspondente ao que já
+         * foi produzido.
+         */
+        const consumedQuantity =
+          requirementQuantity
+          *
+          (
+            scheduledQuantity
+            /
+            baseQuantity
+          );
+
+
+        route.originalDemand +=
+          requirementQuantity;
+
+
+        route.consumedDemand +=
+          consumedQuantity;
+
+
+        route.members.push({
+          material,
+
+          requirementQuantity,
+
+          baseQuantity,
+
+          usagePerUnit,
+
+          consumedQuantity
+        });
+      });
+    });
+
+
+    /*
+     * Agora calcula UMA cobertura por rota.
+     */
+    routes.forEach(route => {
+
+      if (
+        !(route.originalDemand > 0)
+        ||
+        !route.members.length
+      ) {
+        return;
+      }
+
+
+      /*
+       * Quanto de Bobina existe AGORA
+       * no destino.
+       *
+       * Antes do transporte:
+       * somente estoque que já está no Feital.
+       *
+       * Depois do transporte:
+       * inclui a Bobina transportada.
+       *
+       * Depois da produção:
+       * as allocations já descontaram consumo.
+       */
+      const availableNow =
+        Math.max(
+          planningLocalStockQuantity(
+            availability
+              .availableByMaterialLocation,
+
+            route.materialId,
+
+            route.targetLocation
+          ),
+
+          0
+        );
+
+
+      /*
+             /*
+            /*
+       * availableNow já é o saldo físico ATUAL
+       * deste material no destino.
+       *
+       * As allocations já tiveram seu consumo
+       * descontado por buildPlanningLocalStockAvailability().
+       *
+       * Portanto NÃO descontamos consumo novamente.
+       *
+       * Para o "Permitido" dos cards calculamos
+       * qual percentual da necessidade ORIGINAL
+       * conjunta da rota ainda é coberto pelo
+       * saldo físico atual.
+       *
+       * Exemplo conceitual:
+       *
+       * Bobina necessária Long + Trans = 100%
+       * Bobina disponível no Feital    = 86%
+       *
+       * Long e Trans mostram 86% de suas
+       * necessidades originais como Permitido.
+       *
+       * Se uma allocation consumir Bobina,
+       * availableNow diminui e os DOIS cards
+       * são recalculados pelo mesmo saldo.
+       */
+      const coverageRatio =
+        route.originalDemand > 0
+
+          ? Math.min(
+              Math.max(
+                availableNow
+                /
+                route.originalDemand,
+
+                0
+              ),
+
+              1
+            )
+
+          : 0;
+
+
+      route.members.forEach(member => {
+
+        const remainingQty =
+          Math.max(
+            Number(
+              member
+                .material
+                ?.remainingQty
+              || 0
+            ),
+
+            0
+          );
+
+
+        if (!(remainingQty > 0)) {
+          member.material.permittedQty =
+            0;
+
+          member.material.blocked =
+            false;
+
+          member.material.partial =
+            false;
+
+          member.material.ready =
+            false;
+
+          member.material.status =
+            'completed';
+
+          return;
+        }
+
+                /*
+         * Cada operação recebe a mesma cobertura
+         * percentual da necessidade ORIGINAL.
+         *
+         * IMPORTANTE:
+         *
+         * não fazemos:
+         *
+         *   - member.consumedQuantity
+         *
+         * porque esse consumo já saiu de
+         * availableNow no ledger físico.
+         */
+        const coveredMaterialQuantity =
+          member.requirementQuantity
+          *
+          coverageRatio;
+
+
+        const routePermittedQty =
+          member.usagePerUnit > 0
+
+            ? Math.floor(
+                Math.max(
+                  coveredMaterialQuantity
+                  /
+                  member.usagePerUnit,
+
+                  0
+                )
+              )
+
+            : 0;
+
+
+        /*
+         * Ainda respeita qualquer limite
+         * mais restritivo vindo do cálculo
+         * normal do planejamento.
+         */
+        const basePermittedQty =
+          Math.max(
+            Number(
+              member
+                .material
+                ?.permittedQty
+              ??
+              remainingQty
+            ),
+
+            0
+          );
+
+
+        const permittedQty =
+          Math.min(
+            remainingQty,
+
+            basePermittedQty,
+
+            routePermittedQty
+          );
+
+
+        member.material.permittedQty =
+          permittedQty;
+
+
+        member.material.blocked =
+          remainingQty > 0
+          &&
+          permittedQty <= 0;
+
+
+        member.material.partial =
+          permittedQty > 0
+          &&
+          permittedQty
+            < remainingQty;
+
+
+        member.material.ready =
+          remainingQty > 0
+          &&
+          permittedQty
+            >= remainingQty;
+
+
+        member.material.status =
+          member.material.completed
+            ? 'completed'
+
+            : member.material.blocked
+              ? 'blocked'
+
+              : member.material.partial
+                ? 'partial'
+
+                : 'ready';
+      });
+    });
+  });
+
+
+  return groups;
+}
+
+function planningPlannedReceiptsHtml(
+  plannedReceipts = []
+) {
+  const receipts =
+    (
+      Array.isArray(plannedReceipts)
+        ? plannedReceipts
+        : []
+    )
+      .map(
+        normalizeManualSchedulePlannedReceipt
+      )
+      .filter(receipt => (
+        receipt.materialId
+        &&
+        receipt.locationId
+        &&
+        receipt.quantity > 0
+        &&
+        isValidDateOnly(
+          receipt.arrivalDate
+        )
+        &&
+        isValidDateOnly(
+          receipt.availableDate
+        )
+      ))
+      .sort((left, right) => (
+        left.availableDate.localeCompare(
+          right.availableDate
+        )
+
+        ||
+
+        String(
+          left.materialName
+          || left.materialId
+        ).localeCompare(
+          String(
+            right.materialName
+            || right.materialId
+          ),
+          'pt-BR',
+          {
+            numeric: true
+          }
+        )
+      ));
+
+
+  if (!receipts.length) {
+    return '';
+  }
+
+
+  return `
+    <section class="planning-planned-receipts">
+
+      <div class="planning-planned-receipts-head">
+
+        <div>
+          <h3>
+            Entradas previstas
+          </h3>
+
+          <p>
+            Compras estimadas que entram no saldo do planejamento na data de disponibilidade.
+          </p>
+        </div>
+
+        <span>
+          ${formatPtBrInteger(receipts.length)}
+          ${receipts.length === 1 ? 'entrada' : 'entradas'}
+        </span>
+
+      </div>
+
+
+      <div class="planning-planned-receipts-list">
+
+        ${receipts.map(receipt => `
+          <article class="planning-planned-receipt-card">
+
+            <div class="planning-planned-receipt-material">
+
+              <strong>
+                ${escapeHtml(
+                  receipt.materialName
+                  || receipt.materialId
+                )}
+              </strong>
+
+              <small>
+                ${escapeHtml(
+                  receipt.locationName
+                  || planningLocationLabel(
+                    receipt.locationId
+                  )
+                )}
+              </small>
+
+            </div>
+
+
+            <div>
+
+              <span>
+                Quantidade prevista
+              </span>
+
+              <strong>
+                ${formatPtBrDecimal(
+                  receipt.quantity
+                )}
+                ${escapeHtml(
+                  receipt.unit
+                  || ''
+                )}
+              </strong>
+
+            </div>
+
+
+            <div>
+
+              <span>
+                Chegada estimada
+              </span>
+
+              <strong>
+                ${escapeHtml(
+                  formatDateOnly(
+                    receipt.arrivalDate
+                  )
+                )}
+              </strong>
+
+            </div>
+
+
+            <div>
+
+              <span>
+                Disponível para produção
+              </span>
+
+              <strong>
+                ${escapeHtml(
+                  formatDateOnly(
+                    receipt.availableDate
+                  )
+                )}
+              </strong>
+
+            </div>
+
+          </article>
+        `).join('')}
+
+      </div>
+
+    </section>
+  `;
+}
+
+   function renderPlanningMaterialsToSchedule(result) {
+  const groups =
+    buildPlanningMaterialsToScheduleModel(
+      result,
+      {
+        allocations:
+          manualScheduleDraft?.allocations
+          || [],
+
+                transports:
+          manualScheduleDraft?.transports
+          || [],
+
+        plannedReceipts:
+          manualScheduleDraft?.plannedReceipts
+          || draft.plannedReceipts
+          || [],
+
+        machines:
+          productionCalendarMachines(
+            result
+          ),
+
+        resolveConsumerLocationIds:
+          material =>
+            planningMaterialConsumerLocationIds(
+              material
+            ),
+
+        ignoreStock:
+          draft.planningMode
+          === 'theoretical'
+      }
+       );
+
+
+  const plannedReceiptsHtml =
+    planningPlannedReceiptsHtml(
+      manualScheduleDraft?.plannedReceipts
+      || draft.plannedReceipts
+      || []
+    );
+
+
+  if (!groups.length) {
+    return `
+      <p class="muted-text">
+        Nenhum material pendente de produ&ccedil;&atilde;o.
+      </p>
+
+      ${plannedReceiptsHtml}
+    `;
+  }
+
+
+            const transportCards =
+  withScheduledPlanningTransportProgress(
+    buildPlanningTransportCardsModel(
+      result,
+      groups
+    )
+  );
+
+
+    const groupsHtml =
+    groups
+      .map(group => {
+
+      const groupTransportCards =
+        transportCards.filter(
+          card =>
+            Number(card.productionIndex)
+            ===
+            Number(group.productionIndex)
+        );
+
+
+      const groupMaterials =
+        Array.isArray(group.materials)
+          ? group.materials
+          : [];
+
+
+      /*
+       * Longitudinal e Transversal
+       * ficam empilhados.
+       */
+      const branchMaterials =
+        groupMaterials
+          .filter(material => {
+
+            const key =
+              planningProgramMaterialNameKey(
+                material
+              );
+
+            return (
+              key.includes('longitudinal')
+              ||
+              key.includes('transversal')
+            );
+          })
+          .sort(
+            comparePlanningMaterialCards
+          );
+
+
+      /*
+       * Produto final = material escolhido
+       * na Produção #N.
+       */
+      const finalMaterialId =
+        String(
+          draft.productions
+            ?.[Number(group.productionIndex)]
+            ?.materialId
+          || ''
+        );
+
+
+      const finalMaterial =
+        (
+          finalMaterialId
+            ? groupMaterials.find(
+                material =>
+                  String(
+                    material?.materialId
+                    || ''
+                  )
+                  === finalMaterialId
+              )
+            : null
+        )
+        ||
+        (
+          branchMaterials.length
+            ? groupMaterials
+                .filter(
+                  material =>
+                    !branchMaterials.includes(
+                      material
+                    )
+                )
+                .at(-1)
+            : null
+        );
+
+
+      /*
+       * Tudo antes do Long/Trans.
+       * No nosso caso normalmente é a Bobina.
+       *
+       * Se a Bobina veio de estoque,
+       * esta lista fica vazia.
+       */
+      const sourceMaterials =
+        branchMaterials.length
+          ? groupMaterials.filter(
+              material =>
+                !branchMaterials.includes(
+                  material
+                )
+                &&
+                material !== finalMaterial
+            )
+          : [];
+
+
+      const hasStructuredFlow =
+        branchMaterials.length > 0
+        &&
+        Boolean(finalMaterial);
+
+
+      /*
+       * Outros tipos de produção continuam
+       * usando o layout antigo.
+       */
+      if (!hasStructuredFlow) {
+        return `
+          <section
+            class="planning-materials-program-group"
+            style="${productionThemeStyle(
+              group.productionIndex,
+              group.color
+            )}"
+          >
+
+                        <h3>
+              ${escapeHtml(group.title)}
+            </h3>
+
+            ${planningSharedInputBalancesHtml(
+              groupMaterials
+            )}
+
+            <div class="planning-materials-program-cards">
+
+              ${groupTransportCards
+                .map(
+                  planningTransportProgramCardHtml
+                )
+                .join('')}
+
+              ${groupMaterials
+                .map(
+                  planningProgramMaterialCardHtml
+                )
+                .join('')}
+
+            </div>
+
+          </section>
+        `;
+      }
+
+
+      const hasSourceStage =
+        sourceMaterials.length > 0;
+
+        const hasTransportStage =
+  groupTransportCards.length > 0;
+
+
+      return `
+        <section
+          class="
+            planning-materials-program-group
+            planning-materials-program-group--flow
+          "
+          style="${productionThemeStyle(
+            group.productionIndex,
+            group.color
+          )}"
+        >
+
+                    <h3>
+            ${escapeHtml(group.title)}
+          </h3>
+
+                    ${
+            hasTransportStage
+
+              ? planningStructuredFlowSectorHeaderHtml(
+                  {
+                    materialsToSchedule:
+                      groupMaterials,
+
+                    transportCards:
+                      groupTransportCards,
+
+                    result
+                  }
+                )
+
+              : planningSharedInputBalancesHtml(
+                  groupMaterials
+                )
+          }
+
+
+          <div
+  class="
+    planning-materials-program-flow
+
+    ${
+      hasSourceStage
+        ? 'has-source-stage'
+        : 'without-source-stage'
+    }
+
+    ${
+      hasTransportStage
+        ? 'has-transport-stage'
+        : 'without-transport-stage'
+    }
+  "
+>
+
+            ${
+  hasSourceStage
+    ? `
+      <div
+        class="
+          planning-program-stage
+          planning-program-stage--source
+        "
+      >
+
+        ${sourceMaterials
+          .map(
+            planningProgramMaterialCardHtml
+          )
+          .join('')}
+
+      </div>
+    `
+    : ''
+}
+
+
+${
+  hasTransportStage
+
+    ? `
+      <div
+        class="
+          planning-program-connector
+          planning-program-connector--transport
+          has-transport
+        "
+      >
+
+        <span
+          class="planning-program-connector-line"
+          aria-hidden="true"
+        ></span>
+
+        <div class="planning-program-transport-stack">
+
+          ${groupTransportCards
+            .map(
+              planningTransportProgramCardHtml
+            )
+            .join('')}
+
+        </div>
+
+        <span
+          class="planning-program-connector-arrow"
+          aria-hidden="true"
+        ></span>
+
+      </div>
+    `
+
+    : (
+        hasSourceStage
+
+          ? `
+            <div
+              class="
+                planning-program-connector
+                planning-program-connector--plain
+              "
+              aria-hidden="true"
+            >
+              <span
+                class="planning-program-connector-line"
+              ></span>
+
+              <span
+                class="planning-program-connector-arrow"
+              ></span>
+            </div>
+          `
+
+          : ''
+      )
+}
+
+                          <!-- LONGITUDINAL / TRANSVERSAL -->
+            <div
+              class="
+                planning-program-stage
+                planning-program-stage--parallel
+              "
+            >
+
+              ${branchMaterials
+                .map(
+                  planningProgramMaterialCardHtml
+                )
+                .join('')}
+
+            </div>
+
+
+            <!-- SETA PARA PRODUTO FINAL -->
+            <div
+              class="
+                planning-program-connector
+                planning-program-connector--plain
+              "
+              aria-hidden="true"
+            >
+
+              <span
+                class="planning-program-connector-line"
+              ></span>
+
+              <span
+                class="planning-program-connector-arrow"
+              ></span>
+
+            </div>
+
+
+            <!-- EQ45 / PRODUTO FINAL -->
+            <div
+              class="
+                planning-program-stage
+                planning-program-stage--final
+              "
+            >
+
+              ${planningProgramMaterialCardHtml(
+                finalMaterial
+              )}
+
+            </div>
+
+          </div>
+
+        </section>
+      `;
+          })
+      .join('');
+
+
+  return `
+    ${groupsHtml}
+
+    ${plannedReceiptsHtml}
+  `;
+}
+
+  function planningMaterialToScheduleByOperationId(
+    operationId,
+    {
+      asOfDate = null,
+      targetMachineId = null
+    } = {}
+  ) {
+    const groups =
+      buildPlanningMaterialsToScheduleModel(
+        currentSimulation || {},
+        {
+          allocations:
+            manualScheduleDraft
+              ?.allocations
+            || [],
+
+                    transports:
+            manualScheduleDraft
+              ?.transports
+            || [],
+
+          plannedReceipts:
+            manualScheduleDraft
+              ?.plannedReceipts
+            || draft.plannedReceipts
+            || [],
+
+          machines:
+            productionCalendarMachines(
+              currentSimulation || {}
+            ),
+
+          asOfDate,
+
+                    resolveConsumerLocationIds:
+            material =>
+              planningMaterialConsumerLocationIds(
+                material,
+                {
+                  targetMachineId
+                }
+              ),
+
+          ignoreStock:
+            draft.planningMode
+            === 'theoretical'
+        }
+            );
+
+
+                const transportCards =
+      withScheduledPlanningTransportProgress(
+        buildPlanningTransportCardsModel(
+          currentSimulation || {},
+          groups
+        )
+      );
+
+
+    return groups.flatMap(group => group.materials.map(material => ({
+      ...material,
+      productionId: group.productionId,
+      productionIndex: group.productionIndex,
+      productionTitle: group.title,
+      productionColor: group.color
+    }))).find(material => String(material.operationId) === String(operationId)) || null;
+  }
+
+      function planningMaterialStrictProductivityRows(material = {}) {
+    const normalizeIdentity = value =>
+      normalizeText(value)
+        .toLocaleLowerCase('pt-BR')
+        .trim();
+
+    const primaryCodesFor = source => [
+      source?.code,
+      source?.materialCode,
+      source?.material_code
+    ]
+      .map(normalizeIdentity)
+      .filter(Boolean);
+
+    const directMaterialId = String(
+      material?.materialId
+      ?? material?.material_id
+      ?? material?.id
+      ?? ''
+    ).trim();
+
+    const materialName = normalizeIdentity(
+      material?.materialName
+      || material?.material_name
+      || material?.name
+    );
+
+    const directPrimaryCodes = new Set(
+      primaryCodesFor(material)
+    );
+
+    /*
+     * MATRIZ ESTRITA:
+     *
+     * 1. ID exato do material do card.
+     * 2. Nome exato.
+     * 3. Código PRIMÁRIO como fallback.
+     *
+     * NÃO usamos codes/materialCodes relacionados,
+     * porque eles podem representar materiais da cadeia
+     * e trazer máquinas de etapas sucessoras.
+     */
+    const catalogMaterial =
+      (materials || []).find(candidate => (
+        directMaterialId
+        && String(
+          candidate?.id
+          ?? candidate?.materialId
+          ?? candidate?.material_id
+          ?? ''
+        ).trim() === directMaterialId
+      ))
+
+      || (materials || []).find(candidate => (
+        materialName
+        && normalizeIdentity(
+          candidate?.name
+          || candidate?.materialName
+          || candidate?.material_name
+        ) === materialName
+      ))
+
+      || (materials || []).find(candidate => (
+        primaryCodesFor(candidate)
+          .some(code =>
+            directPrimaryCodes.has(code)
+          )
+      ))
+
+      || null;
+
+    const exactIds = new Set([
+      directMaterialId,
+      catalogMaterial?.id,
+      catalogMaterial?.materialId,
+      catalogMaterial?.material_id
+    ]
+      .map(value => String(value ?? '').trim())
+      .filter(Boolean));
+
+    const primaryCodes = new Set([
+      ...primaryCodesFor(material),
+      ...primaryCodesFor(catalogMaterial)
+    ]);
+
+    const exactName = normalizeIdentity(
+      catalogMaterial?.name
+      || catalogMaterial?.materialName
+      || catalogMaterial?.material_name
+      || material?.materialName
+      || material?.material_name
+      || material?.name
+    );
+
+    const unitKey = normalizeIdentity(
+      material?.unit
+      || material?.plannedUnit
+    ).replace(/\s+/g, '');
+
+    const activeRows =
+      (Array.isArray(matrix) ? matrix : [])
+        .filter(row => {
+          if (row?.active === false) return false;
+
+          const rowUnit = normalizeIdentity(
+            row?.output_unit
+            ?? row?.outputUnit
+          ).replace(/\s+/g, '');
+
+          return (
+            !unitKey
+            || !rowUnit
+            || rowUnit === unitKey
+          );
+        });
+
+    /*
+     * Primeiro: ID EXATO.
+     */
+    const byId = activeRows.filter(row => {
+      const rowId = String(
+        row?.material_id
+        ?? row?.materialId
+        ?? ''
+      ).trim();
+
+      return (
+        rowId
+        && exactIds.has(rowId)
+      );
+    });
+
+    if (byId.length) return byId;
+
+    /*
+     * Segundo: código PRIMÁRIO exato.
+     * Não olha material_codes/codes relacionados.
+     */
+    const byPrimaryCode =
+      activeRows.filter(row =>
+        primaryCodesFor(row)
+          .some(code =>
+            primaryCodes.has(code)
+          )
+      );
+
+    if (byPrimaryCode.length) {
+      return byPrimaryCode;
+    }
+
+    /*
+     * Último fallback: nome EXATO.
+     */
+    return activeRows.filter(row => (
+      exactName
+      && normalizeIdentity(
+        row?.material_name
+        ?? row?.materialName
+      ) === exactName
+    ));
+  }
+
+     function planningMatrixMachineKeys(
+    source = {},
+    { allowGeneric = false } = {}
+  ) {
+    const values = [
+      source?.machineId,
+      source?.machine_id,
+      source?.machineName,
+      source?.machine_name,
+
+      ...(allowGeneric
+        ? [
+            source?.id,
+            source?.name
+          ]
+        : [])
+    ];
+
+    return [...new Set(
+      values
+        .map(value =>
+          normalizeText(value)
+            .replace(/[\s-]+/g, '')
+        )
+        .filter(Boolean)
+    )];
+  }
+
+  function compatiblePlanningMachinesForMaterial(
+    material = {}
+  ) {
+    const snapshot =
+      currentProductionCalendarSnapshot();
+
+    const rows =
+      planningMaterialStrictProductivityRows(
+        material
+      );
+
+    /*
+     * IMPORTANTE:
+     * para uma linha da Matriz usamos SOMENTE
+     * machine_id / machine_name.
+     *
+     * Não usamos o "id" genérico da linha.
+     */
+    const rowMachineKeys =
+      new Set(
+        rows.flatMap(row =>
+          planningMatrixMachineKeys(row)
+        )
+      );
+
+    return (snapshot?.machines || [])
+      .filter(machine =>
+        planningMatrixMachineKeys(
+          machine,
+          { allowGeneric: true }
+        )
+          .some(key =>
+            rowMachineKeys.has(key)
+          )
+      );
+  }
+
+    function planningResolvedMachineLocationId(
+    machine = {}
+  ) {
+    const direct =
+      planningMachineLocationId(
+        machine
+      );
+
+    if (direct) {
+      return direct;
+    }
+
+    /*
+     * Se o adapter do Gantt tiver removido
+     * dados extras da máquina, voltamos
+     * ao cadastro original de /machines.
+     */
+    const machineKeys =
+      new Set(
+        planningMatrixMachineKeys(
+          machine,
+          {
+            allowGeneric: true
+          }
+        )
+      );
+
+    const registered =
+      (
+        registeredMachines || []
+      ).find(candidate => (
+        planningMatrixMachineKeys(
+          candidate,
+          {
+            allowGeneric: true
+          }
+        )
+          .some(key =>
+            machineKeys.has(key)
+          )
+      ));
+
+    return planningMachineLocationId(
+      registered
+    );
+  }
+
+
+  function planningMaterialConsumerLocationIds(
+    material = {},
+    {
+      targetMachineId = null
+    } = {}
+  ) {
+    /*
+     * Modal de drop:
+     * sabemos exatamente a máquina.
+     */
+    const candidates =
+      targetMachineId
+
+        ? productionCalendarMachines(
+            currentSimulation || {}
+          ).filter(machine => {
+            const machineKeys =
+              planningMatrixMachineKeys(
+                machine,
+                {
+                  allowGeneric: true
+                }
+              );
+
+            const targetKeys =
+              planningMatrixMachineKeys(
+                {
+                  machineId:
+                    targetMachineId
+                },
+                {
+                  allowGeneric: true
+                }
+              );
+
+            return machineKeys
+              .some(key =>
+                targetKeys.includes(key)
+              );
+          })
+
+        /*
+         * Card geral:
+         * olha todas as máquinas estritamente
+         * compatíveis da Matriz.
+         */
+        : compatiblePlanningMachinesForMaterial(
+            material
+          );
+
+    return [
+      ...new Set(
+        candidates
+          .map(
+            planningResolvedMachineLocationId
+          )
+          .filter(Boolean)
+      )
+    ];
+  }
+
+  function planningMaterialProductivityConfigurations(
+    material = {},
+    machine = {}
+  ) {
+    const rows =
+      planningMaterialStrictProductivityRows(
+        material
+      );
+
+    const machineKeys =
+      planningMatrixMachineKeys(
+        machine,
+        { allowGeneric: true }
+      );
+
+    const machineRows =
+      rows.filter(row =>
+        planningMatrixMachineKeys(row)
+          .some(key =>
+            machineKeys.includes(key)
+          )
+      );
+
+    const byPeople = new Map();
+
+    machineRows.forEach(row => {
+      const people =
+        Number(
+          row.people_count
+          ?? row.peopleCount
+        );
+
+      if (
+        !Number.isInteger(people)
+        || people < 1
+      ) {
+        return;
+      }
+
+      const current =
+        byPeople.get(people);
+
+      const priority =
+        Number(
+          row.machine_priority
+          ?? row.machinePriority
+          ?? Number.MAX_SAFE_INTEGER
+        );
+
+      const currentPriority =
+        Number(
+          current?.machine_priority
+          ?? current?.machinePriority
+          ?? Number.MAX_SAFE_INTEGER
+        );
+
+      const output =
+        Number(
+          row.output_qty
+          ?? row.outputQty
+          ?? 0
+        );
+
+      const currentOutput =
+        Number(
+          current?.output_qty
+          ?? current?.outputQty
+          ?? 0
+        );
+
+      if (
+        !current
+        || priority < currentPriority
+        || (
+          priority === currentPriority
+          && output > currentOutput
+        )
+      ) {
+        byPeople.set(
+          people,
+          row
+        );
+      }
+    });
+
+    return [...byPeople.entries()]
+      .map(([people, row]) => {
+        const config =
+          resolveProductivityConfiguration({
+            productivityRows: machineRows,
+            machine,
+            peopleCount: people,
+
+            productivityLineId:
+              row.id
+              ?? row.productivityLineId
+              ?? row.productivity_line_id
+              ?? null
+          })
+          || row;
+
+        const capacity =
+          calculateProductivityDailyCapacity(
+            config,
+            planningDraftDailyMinutes()
+              || undefined
+          );
+
+        return {
+          people,
+          row: config,
+
+          capacityMax:
+            Number(
+              capacity.capacityPerDay
+              || 0
+            ),
+
+          priority:
+            Number(
+              config.machine_priority
+              ?? config.machinePriority
+              ?? Number.MAX_SAFE_INTEGER
+            )
+        };
+      })
+
+      .filter(config =>
+        config.capacityMax > 0
+      )
+
+      .sort(
+        (left, right) =>
+          left.priority
+            - right.priority
+
+          || right.capacityMax
+            - left.capacityMax
+
+          || right.people
+            - left.people
+      );
+  }
+
+  function refreshPlanningMaterialsToSchedule() {
+    const materialsTarget = target.querySelector('.planning-materials-program-target');
+    if (!materialsTarget || !currentSimulation) return;
+    materialsTarget.innerHTML = renderPlanningMaterialsToSchedule(currentSimulation);
+    bindPlanningMaterialsToScheduleDrag(materialsTarget);
+  }
+
+    function planningMachineDayCapacityUsage({
+    date,
+    machineId,
+    excludeAllocationId = null
+  } = {}) {
+    const targetDate =
+      String(date || '').slice(0, 10);
+
+    const targetMachine =
+      String(machineId || '');
+
+    return (
+      Array.isArray(
+        manualScheduleDraft?.allocations
+      )
+        ? manualScheduleDraft.allocations
+        : []
+    )
+      .filter(allocation => (
+        String(
+          allocation?.date || ''
+        ).slice(0, 10) === targetDate
+
+        && String(
+          allocation?.machineId || ''
+        ) === targetMachine
+
+        && (
+          !excludeAllocationId
+          || String(
+            allocation?.allocationId || ''
+          ) !== String(excludeAllocationId)
+        )
+      ))
+      .reduce(
+        (sum, allocation) =>
+          sum
+          + Math.max(
+            Number(
+              allocation?.capacityPercent || 0
+            ),
+            0
+          ),
+        0
+      );
+  }
+
+  function planningCapacityPercentForQuantity(
+  quantity,
+  capacityMax
+) {
+  const safeQuantity =
+    Number(quantity);
+
+  const safeCapacityMax =
+    Number(capacityMax);
+
+  if (
+    !(safeQuantity > 0)
+    || !(safeCapacityMax > 0)
+  ) {
+    return 0;
+  }
+
+  const rawPercent =
+    (
+      safeQuantity
+      / safeCapacityMax
+    ) * 100;
+
+  /*
+   * Quantidade -> percentual:
+   * arredonda para CIMA em 2 casas.
+   *
+   * Assim nunca registramos menos capacidade
+   * do que a quantidade realmente produzida.
+   */
+  return Number(
+    (
+      Math.ceil(
+        rawPercent * 100
+        - 0.000000001
+      ) / 100
+    ).toFixed(2)
+  );
+}
+
+
+function planningMaterialAllocationNumbers(
+  config,
+  percent,
+  material = {},
+  explicitQuantity = null
+) {
+  const capacityMax =
+    Number(
+      config?.capacityMax
+      || 0
+    );
+
+  const safePercent =
+    Number(percent);
+
+  /*
+   * Percentual -> quantidade:
+   * SEMPRE para baixo.
+   *
+   * 8.490 * 63,23%
+   * = 5.368,227
+   * = 5.368 unidades
+   */
+  const calculatedQuantity =
+    Number.isFinite(safePercent)
+    && capacityMax > 0
+
+      ? Math.floor(
+          (capacityMax * safePercent) / 100
+          + Number.EPSILON
+            * Math.max(1, capacityMax)
+            * 8
+        )
+
+      : 0;
+
+  const explicit =
+    explicitQuantity === null
+    || explicitQuantity === undefined
+    || explicitQuantity === ''
+
+      ? null
+
+      : Number(
+          explicitQuantity
+        );
+
+  const quantity =
+    explicit !== null
+    && Number.isFinite(explicit)
+
+      ? Number(
+          explicit.toFixed(6)
+        )
+
+      : calculatedQuantity;
+
+  const remaining =
+    Number(
+      material?.remainingQty
+      || 0
+    );
+
+  const permitted =
+    Math.max(
+      0,
+      Number(
+        material?.permittedQty
+        ?? remaining
+      )
+    );
+
+  const allowed =
+    Math.min(
+      remaining,
+      permitted
+    );
+
+  const dailyMinutes =
+    planningDraftDailyMinutes()
+    || 0;
+
+  const totalMinutes =
+    Number.isFinite(safePercent)
+    && dailyMinutes > 0
+
+      ? Math.round(
+          (
+            dailyMinutes
+            * safePercent
+          ) / 100
+        )
+
+      : 0;
+
+  return {
+    capacityMax,
+    quantity,
+    remaining,
+    permitted,
+    allowed,
+    totalMinutes,
+
+    extraPercent:
+      Math.max(
+        0,
+        safePercent - 100
+      ),
+
+    extraQty:
+      Math.max(
+        0,
+        Number(
+          (
+            quantity
+            - capacityMax
+          ).toFixed(6)
+        )
+      ),
+
+    extraMinutes:
+      Math.max(
+        0,
+        totalMinutes
+        - dailyMinutes
+      ),
+
+    overCapacity:
+      safePercent > 100,
+
+    exceedsRemaining:
+      remaining > 0
+      &&
+      quantity
+        > remaining + 0.000001,
+
+    exceedsPermitted:
+      permitted >= 0
+      &&
+      quantity
+        > allowed + 0.000001
+  };
+}
+
+  function openPlanningMaterialAllocationModal({ material, to } = {}) {
+    const dateScopedMaterial =
+    planningMaterialToScheduleByOperationId(
+    material?.operationId,
+    {
+      asOfDate:
+        to?.date,
+
+      targetMachineId:
+        to?.machineId
+    }
+  );
+
+if (dateScopedMaterial) {
+  material = dateScopedMaterial;
+}
+
+if (
+  material?.showPermitted
+  && !(Number(material?.permittedQty || 0) > 0)
+) {
+  toast(
+    new Error(
+      'Não há material disponível para produzir nesta data.'
+    )
+  );
+
+  return Promise.resolve(null);
+}
+    const snapshot = currentProductionCalendarSnapshot();
+    const machine = snapshot?.machines?.find(item => String(item.machineId) === String(to?.machineId)) || {
+      machineId: to?.machineId,
+      machineName: to?.machineName || to?.machineId
+    };
+    const configs = planningMaterialProductivityConfigurations(material, machine);
+    if (!configs.length) {
+      toast(new Error('Nenhuma configuração real da Matriz foi encontrada para este material e máquina.'));
+      return Promise.resolve(null);
+    }
+
+        const usedCapacityPercent =
+      planningMachineDayCapacityUsage({
+        date: to?.date,
+        machineId: machine.machineId
+      });
+
+    const availableCapacityPercent =
+      Math.max(
+        0,
+        100 - usedCapacityPercent
+      );
+
+    if (
+      !(availableCapacityPercent > 0.000001)
+    ) {
+      toast(
+        new Error(
+          'Esta máquina já está com 100% da capacidade utilizada nesta data.'
+        )
+      );
+
+      return Promise.resolve(null);
+    }
+
+    const initialConfig = configs[0];
+    const allowedQty = Math.min(
+      Number(material?.remainingQty || 0),
+      Math.max(0, Number(material?.permittedQty ?? material?.remainingQty ?? 0))
+    );
+        const maxQuantityByDayCapacity =
+  initialConfig.capacityMax > 0
+
+    ? Math.floor(
+        (
+          initialConfig.capacityMax
+          * availableCapacityPercent
+        ) / 100
+        + Number.EPSILON
+          * Math.max(
+              1,
+              initialConfig.capacityMax
+            )
+          * 8
+      )
+
+    : 0;
+
+
+const initialQuantity =
+  Math.min(
+    allowedQty,
+    maxQuantityByDayCapacity
+  );
+
+
+const initialPercent =
+  planningCapacityPercentForQuantity(
+    initialQuantity,
+    initialConfig.capacityMax
+  );
+    page.querySelector('.planning-material-allocation-modal')?.remove();
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop planning-material-allocation-modal';
+    backdrop.innerHTML = `
+      <div class="modal planning-material-allocation-dialog" role="dialog" aria-modal="true" aria-labelledby="planning-material-allocation-title">
+        <div class="modal-header">
+          <div>
+            <h3 id="planning-material-allocation-title">Programar material</h3>
+            <p class="modal-subtitle">${escapeHtml(material?.materialName || 'Material')} | ${escapeHtml(machine.machineName || machine.machineId || '')} | ${escapeHtml(formatDateOnly(to?.date))}</p>
+          </div>
+          <button class="link-button" type="button" data-manual-allocation-cancel>Fechar</button>
+        </div>
+        <form class="planning-material-allocation-form">
+          <div class="planning-material-allocation-summary">
+            <span>Restante: <strong>${formatPtBrDecimal(material?.remainingQty || 0)} ${escapeHtml(material?.unit || '')}</strong></span>
+            <span>Permitido: <strong>${formatPtBrDecimal(allowedQty)} ${escapeHtml(material?.unit || '')}</strong></span>
+            <span data-allocation-capacity-summary></span>
+          </div>
+          <label class="field">
+            <span>Pessoas</span>
+            <select name="peopleCount" ${configs.length === 1 ? 'disabled' : ''}>
+              ${configs.map(config => `<option value="${config.people}">${config.people}</option>`).join('')}
+            </select>
+          </label>
+          <label class="field">
+            <span>Capacidade do dia (%)</span>
+            <input name="capacityPercent" type="number" min="0.01" max="${availableCapacityPercent.toFixed(2)}" step="0.01" inputmode="decimal" value="${initialPercent.toFixed(2)}">
+          </label>
+              <label class="field">
+  <span>
+    Quantidade a produzir (${escapeHtml(material?.unit || '')})
+  </span>
+
+  <input
+    name="quantity"
+    type="number"
+    min="0.000001"
+    max="${Math.max(allowedQty, 0)}"
+    step="any"
+    inputmode="decimal"
+    value="${initialQuantity}"
+  >
+</label>
+          <div class="planning-material-allocation-result" data-allocation-result></div>
+          <div class="planning-material-allocation-alert" data-allocation-alert hidden></div>
+          <p class="form-error" data-allocation-error hidden></p>
+          <div class="form-actions modal-actions">
+            <button class="secondary-button" type="button" data-manual-allocation-cancel>Cancelar</button>
+            <button class="primary-button" type="submit" data-manual-allocation-confirm>Confirmar</button>
+          </div>
+        </form>
+      </div>
+    `;
+    return new Promise(resolve => {
+      const form = backdrop.querySelector('.planning-material-allocation-form');
+      const peopleInput =
+  form.elements.peopleCount;
+
+const percentInput =
+  form.elements.capacityPercent;
+
+const quantityInput =
+  form.elements.quantity;
+      const result = backdrop.querySelector('[data-allocation-result]');
+      const alert = backdrop.querySelector('[data-allocation-alert]');
+      const error = backdrop.querySelector('[data-allocation-error]');
+      const confirmButton = backdrop.querySelector('[data-manual-allocation-confirm]');
+      const capacitySummary = backdrop.querySelector('[data-allocation-capacity-summary]');
+      const configByPeople = new Map(configs.map(config => [String(config.people), config]));
+      const currentConfig = () => configByPeople.get(String(peopleInput.value)) || configs[0];
+      const readPercent = () =>
+  parsePtBrDecimal(
+    percentInput.value
+  );
+
+const readQuantity = () =>
+  parsePtBrDecimal(
+    quantityInput.value
+  );
+      const close = value => {
+        backdrop.remove();
+        resolve(value);
+      };
+      const renderPreview = (
+  explicitQuantity = null
+) => {
+  const config =
+    currentConfig();
+
+  const percent =
+    readPercent();
+
+  const numbers =
+    planningMaterialAllocationNumbers(
+      config,
+      percent,
+      material,
+      explicitQuantity
+    );
+                capacitySummary.textContent =
+          `Capacidade máxima: ${formatPtBrDecimal(
+            numbers.capacityMax
+          )} ${material?.unit || ''}`;
+
+
+        const catalogMaterial =
+          findMaterialById(
+            materials,
+            material?.materialId
+          )
+          || {};
+
+
+        const primaryUnit =
+          String(
+            material?.unit
+            || catalogMaterial?.primary_unit
+            || ''
+          ).trim();
+
+
+        const secondaryUnit =
+          String(
+            catalogMaterial?.secondary_unit
+            || ''
+          ).trim();
+
+
+        const secondaryFactor =
+          Number(
+            catalogMaterial
+              ?.primary_to_secondary_factor
+          );
+
+
+        const hasSecondaryQuantity =
+          Boolean(primaryUnit)
+          &&
+          Boolean(secondaryUnit)
+          &&
+          primaryUnit !== secondaryUnit
+          &&
+          Number.isFinite(
+            secondaryFactor
+          )
+          &&
+          secondaryFactor > 0;
+
+
+        const primaryResultText =
+          `${formatPtBrDecimal(
+            numbers.quantity
+          )} ${primaryUnit}`
+          +
+          ` / `
+          +
+          `${formatPtBrDecimal(
+            numbers.capacityMax
+          )} ${primaryUnit}`;
+
+
+        const secondaryResultText =
+          hasSecondaryQuantity
+
+            ? (
+                `${formatPtBrDecimal(
+                  numbers.quantity
+                  *
+                  secondaryFactor
+                )} ${secondaryUnit}`
+
+                +
+
+                ` / `
+
+                +
+
+                `${formatPtBrDecimal(
+                  numbers.capacityMax
+                  *
+                  secondaryFactor
+                )} ${secondaryUnit}`
+              )
+
+            : '';
+
+
+        result.innerHTML = `
+          <strong
+            class="
+              planning-material-allocation-result-primary
+            "
+          >
+            ${escapeHtml(
+              primaryResultText
+            )}
+          </strong>
+
+          ${
+            secondaryResultText
+              ? `
+                <small
+                  class="
+                    planning-material-allocation-result-secondary
+                  "
+                >
+                  ${escapeHtml(
+                    secondaryResultText
+                  )}
+                </small>
+              `
+              : ''
+          }
+        `;
+        
+                const exceedsDayCapacity =
+          Number.isFinite(percent)
+          && percent
+            > availableCapacityPercent
+              + 0.000001;
+
+                const validationMessage =
+          exceedsDayCapacity
+            ? `A máquina possui somente ${formatPtBrDecimal(availableCapacityPercent)}% de capacidade disponível nesta data.`
+
+            : numbers.exceedsPermitted
+              ? 'Quantidade superior ao permitido pelos materiais disponíveis.'
+
+              : numbers.exceedsRemaining
+                ? 'Quantidade superior ao restante a programar.'
+
+                : '';
+        error.hidden = !validationMessage;
+        error.textContent = validationMessage;
+        percentInput.classList.toggle('is-invalid', Boolean(validationMessage));
+        confirmButton.disabled = !(percent > 0) || Boolean(validationMessage);
+        alert.hidden = !numbers.overCapacity;
+        alert.innerHTML = numbers.overCapacity ? `
+          <strong>Esta programação excede a capacidade normal do dia.</strong>
+          <span>Excedente: ${formatPtBrDecimal(numbers.extraPercent)}% | ${formatPtBrDecimal(numbers.extraQty)} ${escapeHtml(material?.unit || '')}</span>
+          <span>Tempo equivalente: ${escapeHtml(formatDuration(numbers.totalMinutes))} | excedente ${escapeHtml(formatDuration(numbers.extraMinutes))}</span>
+        ` : '';
+      };
+      const syncQuantityFromPercent = () => {
+  const numbers =
+    planningMaterialAllocationNumbers(
+      currentConfig(),
+      readPercent(),
+      material
+    );
+
+  quantityInput.value =
+    String(
+      numbers.quantity
+    );
+
+  renderPreview(
+    numbers.quantity
+  );
+};
+
+
+const syncPercentFromQuantity = () => {
+  const config =
+    currentConfig();
+
+  const quantity =
+    readQuantity();
+
+  const percent =
+    planningCapacityPercentForQuantity(
+      quantity,
+      config.capacityMax
+    );
+
+  percentInput.value =
+    percent > 0
+      ? percent.toFixed(2)
+      : '';
+
+  renderPreview(
+    quantity
+  );
+};
+
+
+peopleInput.value =
+  String(initialConfig.people);
+
+quantityInput.value =
+  String(initialQuantity);
+
+renderPreview(
+  initialQuantity
+);
+
+
+peopleInput.addEventListener(
+  'change',
+  syncQuantityFromPercent
+);
+
+percentInput.addEventListener(
+  'input',
+  syncQuantityFromPercent
+);
+
+quantityInput.addEventListener(
+  'input',
+  syncPercentFromQuantity
+);
+      backdrop.querySelectorAll('[data-manual-allocation-cancel]').forEach(button => {
+        button.addEventListener('click', () => close(null));
+      });
+      backdrop.addEventListener('click', event => {
+        if (event.target === backdrop) close(null);
+      });
+      backdrop.addEventListener('keydown', event => {
+        if (event.key === 'Escape') close(null);
+      });
+            form.addEventListener('submit', event => {
+        event.preventDefault();
+
+       const config =
+  currentConfig();
+
+const percent =
+  readPercent();
+
+const quantity =
+  readQuantity();
+
+const numbers =
+  planningMaterialAllocationNumbers(
+    config,
+    percent,
+    material,
+    quantity
+  );
+
+        const exceedsDayCapacity =
+          Number.isFinite(percent)
+          && percent
+            > availableCapacityPercent
+              + 0.000001;
+
+        if (
+  !(percent > 0)
+  || !(quantity > 0)
+  || exceedsDayCapacity
+  || numbers.exceedsRemaining
+  || numbers.exceedsPermitted
+) {
+  renderPreview(
+    quantity
+  );
+
+  return;
+}
+
+        close({
+          material,
+          machine,
+          date: to?.date,
+          peopleCount: config.people,
+          productivityLineId:
+            config.row?.id
+            ?? config.row?.productivityLineId
+            ?? null,
+          capacityPercent: percent,
+          quantity: numbers.quantity,
+          capacityMax: numbers.capacityMax
+        });
+      });
+      page.appendChild(backdrop);
+      percentInput.focus();
+      percentInput.select?.();
+    });
+  }
+
+
+
+    function planningTransportSourceAvailableQuantityAtDate(
+    material = {},
+    date = null
+  ) {
+    const normalizedDate =
+      isValidDateOnly(date)
+        ? String(date).slice(0, 10)
+        : null;
+
+    if (!normalizedDate) {
+      return 0;
+    }
+
+    const availability =
+      buildPlanningLocalStockAvailability({
+        result:
+          currentSimulation || {},
+
+        allocations:
+          manualScheduleDraft?.allocations
+          || [],
+
+        transports:
+          manualScheduleDraft?.transports
+          || [],
+
+        plannedReceipts:
+          manualScheduleDraft?.plannedReceipts
+          || draft.plannedReceipts
+          || [],
+
+        machines:
+          productionCalendarMachines(
+            currentSimulation || {}
+          ),
+
+        asOfDate:
+          normalizedDate
+      });
+
+    return Math.max(
+      planningLocalStockQuantity(
+        availability
+          .transportAvailableByMaterialLocation,
+
+        material?.materialId,
+
+        material?.sourceLocation
+      ),
+      0
+    );
+  }
+
+
+  function openPlanningTransportAllocationModal({
+  material = {},
+  to = {}
+} = {}) {
+    const startDate =
+    isValidDateOnly(to?.date)
+      ? String(to.date).slice(0, 10)
+      : today();
+
+  const suggestedQuantityRaw =
+    Math.max(
+      Number(
+        material?.suggestedQty
+        ?? material?.availableQty
+        ?? 0
+      ),
+      0
+    );
+
+  const suggestedQuantity =
+    planningTransportDisplayTargetQuantity(
+      suggestedQuantityRaw
+    );
+
+    let maximumQuantity =
+    planningTransportSourceAvailableQuantityAtDate(
+      material,
+      startDate
+    );
+
+  const initialQuantity =
+    Math.min(
+      suggestedQuantity > 0
+        ? suggestedQuantity
+        : maximumQuantity,
+      maximumQuantity
+    );
+
+  page
+    .querySelector(
+      '.planning-transport-allocation-modal'
+    )
+    ?.remove();
+
+  const backdrop =
+    document.createElement('div');
+
+  backdrop.className =
+    'modal-backdrop planning-transport-allocation-modal';
+
+  backdrop.innerHTML = `
+    <div
+      class="modal planning-transport-allocation-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="planning-transport-allocation-title"
+    >
+      <div class="modal-header">
+        <div>
+          <h3 id="planning-transport-allocation-title">
+            Programar transporte
+          </h3>
+
+          <p class="modal-subtitle">
+            ${escapeHtml(material.materialName || 'Material')}
+            &middot;
+            ${escapeHtml(
+              material.sourceLocationName
+              || material.sourceLocation
+              || ''
+            )}
+            &rarr;
+            ${escapeHtml(
+              material.targetLocationName
+              || material.targetLocation
+              || ''
+            )}
+          </p>
+        </div>
+
+        <button
+          class="link-button"
+          type="button"
+          data-transport-allocation-cancel
+        >
+          Fechar
+        </button>
+      </div>
+
+      <form class="planning-transport-allocation-form">
+
+        <div class="planning-transport-allocation-summary">
+
+          <div>
+            <span>Origem</span>
+            <strong>
+              ${escapeHtml(
+                material.sourceLocationName
+                || material.sourceLocation
+                || '-'
+              )}
+            </strong>
+          </div>
+
+          <div>
+            <span>Destino</span>
+            <strong>
+              ${escapeHtml(
+                material.targetLocationName
+                || material.targetLocation
+                || '-'
+              )}
+            </strong>
+          </div>
+
+                                       <div>
+            <span>Saldo na origem</span>
+
+            <strong data-transport-source-balance>
+              ${formatPtBrDecimal(maximumQuantity)}
+              ${escapeHtml(material.unit || '')}
+            </strong>
+          </div>
+
+          <div>
+            <span>Necessidade atual</span>
+            <strong>
+              ${formatPtBrDecimal(suggestedQuantity)}
+              ${escapeHtml(material.unit || '')}
+            </strong>
+          </div>
+
+        </div>
+
+        <label class="field">
+          <span>Quantidade</span>
+
+          <input
+            name="quantity"
+            type="text"
+            inputmode="decimal"
+                        value="${escapeHtml(
+              String(initialQuantity)
+            )}"
+            autocomplete="off"
+            required
+          />
+        </label>
+
+        <div class="planning-transport-allocation-dates">
+
+          <label class="field">
+            <span>Data inicial</span>
+
+            <input
+              name="startDate"
+              type="date"
+              value="${escapeHtml(startDate)}"
+              required
+            />
+          </label>
+
+          <label class="field">
+            <span>Data final</span>
+
+            <input
+              name="endDate"
+              type="date"
+              value="${escapeHtml(startDate)}"
+              required
+            />
+          </label>
+
+        </div>
+
+        <p
+          class="form-error"
+          data-transport-allocation-error
+          hidden
+        ></p>
+
+        <div class="form-actions modal-actions">
+
+          <button
+            class="secondary-button"
+            type="button"
+            data-transport-allocation-cancel
+          >
+            Cancelar
+          </button>
+
+          <button
+            class="primary-button"
+            type="submit"
+          >
+            Programar transporte
+          </button>
+
+        </div>
+
+      </form>
+    </div>
+  `;
+
+  return new Promise(resolve => {
+    const form =
+      backdrop.querySelector(
+        '.planning-transport-allocation-form'
+      );
+
+    const quantityInput =
+      form.elements.quantity;
+
+    const startInput =
+      form.elements.startDate;
+
+    const endInput =
+      form.elements.endDate;
+
+        const error =
+      backdrop.querySelector(
+        '[data-transport-allocation-error]'
+      );
+
+
+    const sourceBalanceTarget =
+      backdrop.querySelector(
+        '[data-transport-source-balance]'
+      );
+
+
+    const refreshTransportSourceBalance =
+      () => {
+
+        const selectedDate =
+          String(
+            startInput.value
+            || ''
+          ).slice(0, 10);
+
+
+        maximumQuantity =
+          planningTransportSourceAvailableQuantityAtDate(
+            material,
+            selectedDate
+          );
+
+
+        if (sourceBalanceTarget) {
+          sourceBalanceTarget.innerHTML =
+            `${
+              formatPtBrDecimal(
+                maximumQuantity
+              )
+            } ${
+              escapeHtml(
+                material.unit || ''
+              )
+            }`;
+        }
+
+
+        const currentQuantity =
+          parsePlanningTransportQuantity(
+            quantityInput.value,
+            NaN
+          );
+
+
+        /*
+         * Se mudou para uma data com menos
+         * saldo, não deixa o campo continuar
+         * acima do máximo daquela data.
+         */
+        if (
+          !Number.isFinite(
+            currentQuantity
+          )
+          ||
+          currentQuantity
+            > maximumQuantity
+        ) {
+          quantityInput.value =
+            String(
+              Math.min(
+                suggestedQuantity > 0
+                  ? suggestedQuantity
+                  : maximumQuantity,
+
+                maximumQuantity
+              )
+            );
+        }
+      };
+
+
+    const close =
+      value => {
+        backdrop.remove();
+        resolve(value);
+      };
+
+    const showError =
+      message => {
+        error.textContent =
+          String(message || '');
+
+        error.hidden =
+          !message;
+      };
+
+    backdrop
+      .querySelectorAll(
+        '[data-transport-allocation-cancel]'
+      )
+      .forEach(button => {
+        button.addEventListener(
+          'click',
+          () => close(null)
+        );
+      });
+
+    backdrop.addEventListener(
+      'click',
+      event => {
+        if (event.target === backdrop) {
+          close(null);
+        }
+      }
+    );
+
+    backdrop.addEventListener(
+      'keydown',
+      event => {
+        if (event.key === 'Escape') {
+          close(null);
+        }
+      }
+    );
+
+       startInput.addEventListener(
+      'change',
+      () => {
+
+        if (
+          isValidDateOnly(
+            startInput.value
+          )
+          &&
+          (
+            !isValidDateOnly(
+              endInput.value
+            )
+            ||
+            endInput.value
+              < startInput.value
+          )
+        ) {
+          endInput.value =
+            startInput.value;
+        }
+
+
+        refreshTransportSourceBalance();
+      }
+    );
+
+    form.addEventListener(
+      'submit',
+      event => {
+        event.preventDefault();
+
+                const quantity =
+          parsePlanningTransportQuantity(
+            quantityInput.value,
+            NaN
+          );
+
+        const startDateValue =
+          String(
+            startInput.value
+            || ''
+          ).slice(0, 10);
+
+        const endDateValue =
+          String(
+            endInput.value
+            || ''
+          ).slice(0, 10);
+
+        if (
+          !Number.isFinite(quantity)
+          ||
+          !(quantity > 0)
+        ) {
+          showError(
+            'Informe uma quantidade válida para o transporte.'
+          );
+          return;
+        }
+
+        if (
+          quantity
+          > maximumQuantity
+            + 0.000001
+        ) {
+          showError(
+            'A quantidade é maior que o saldo disponível para transporte.'
+          );
+          return;
+        }
+
+        if (
+          !isValidDateOnly(
+            startDateValue
+          )
+          ||
+          !isValidDateOnly(
+            endDateValue
+          )
+        ) {
+          showError(
+            'Informe datas válidas para o transporte.'
+          );
+          return;
+        }
+
+        if (
+          endDateValue
+          < startDateValue
+        ) {
+          showError(
+            'A data final não pode ser anterior à data inicial.'
+          );
+          return;
+        }
+
+        close({
+          quantity,
+          startDate:
+            startDateValue,
+          endDate:
+            endDateValue
+        });
+      }
+    );
+
+    page.appendChild(
+      backdrop
+    );
+
+    quantityInput.focus();
+    quantityInput.select?.();
+  });
+}
+
+  async function handlePlanningMaterialDropPreview({ material, to } = {}) {
+    if (
+  material?.scheduleType
+  === 'transport'
+) {
+  if (!manualScheduleDraft) {
+    toast(
+      new Error(
+        'Rascunho manual indisponível para programar transporte.'
+      )
+    );
+
+    return;
+  }
+
+  const configuration =
+    await openPlanningTransportAllocationModal({
+      material,
+      to
+    });
+
+  if (!configuration) {
+    return;
+  }
+
+  const previousManualState =
+    cloneDraftPlanningState();
+
+  try {
+    setOperationLoading(
+      true,
+      'Programando transporte...'
+    );
+
+    const snapshot =
+      currentProductionCalendarSnapshot();
+
+    const candidateDraft =
+      createManualScheduleTransport(
+        manualScheduleDraft,
+        {
+          transport: {
+            scheduleType:
+              'transport',
+
+            materialId:
+              material.materialId,
+
+            materialCode:
+              material.materialCode,
+
+            materialName:
+              material.materialName,
+
+                        quantity:
+  configuration.quantity,
+
+/*
+ * Guarda o total originalmente necessário.
+ * Usado para:
+ *
+ * transportado / total
+ *
+ * e para os estados PARCIAL / TOTAL.
+ *
+ * No transporte, a referência visual deve
+ * ser arredondada para cima.
+ */
+totalQuantity:
+  planningTransportDisplayTargetQuantity(
+    material?.totalQty
+    ??
+    material?.requiredQty
+    ??
+    material?.availableQty
+    ??
+    configuration.quantity
+  ),
+
+requiredQuantity:
+  planningTransportDisplayTargetQuantity(
+    material?.totalQty
+    ??
+    material?.requiredQty
+    ??
+    material?.availableQty
+    ??
+    configuration.quantity
+  ),
+
+transportKey:
+  String(
+    material?.transportKey
+    || ''
+  ),
+
+unit:
+  material.unit,
+
+            sourceLocation:
+              material.sourceLocation,
+
+            sourceLocationName:
+              material.sourceLocationName,
+
+            targetLocation:
+              material.targetLocation,
+
+            targetLocationName:
+              material.targetLocationName,
+
+                        startDate:
+              configuration.startDate,
+
+            /*
+             * O transporte pode usar a produção
+             * realizada no próprio dia.
+             *
+             * Por isso consideramos a saída
+             * no fim da data inicial.
+             */
+            startTime:
+              '23:58',
+
+            endDate:
+              configuration.endDate,
+
+            /*
+             * Se terminar no mesmo dia:
+             *   23:58 -> 23:59
+             *
+             * Se terminar em outro dia:
+             *   chega no começo da data final.
+             */
+            endTime:
+              configuration.endDate
+                > configuration.startDate
+                  ? '00:00'
+                  : '23:59',
+
+                        /*
+             * Regra operacional do planejamento:
+             * transporte programado no dia D
+             * já libera o material no DESTINO
+             * desde o início do próprio dia D.
+             *
+             * A saída física da origem continua
+             * sendo validada no fim do dia, então
+             * o transporte ainda pode usar produção
+             * concluída no próprio dia.
+             */
+            availabilityMode:
+              'day-start',
+
+            productionId:
+              material.productionId,
+
+            productionIndex:
+              material.productionIndex,
+
+            productionTitle:
+              material.productionTitle,
+
+            productionColor:
+              material.productionColor,
+
+            producerParentOperationIds:
+              material.producerParentOperationIds
+              || [],
+
+            consumerParentOperationIds:
+              material.consumerParentOperationIds
+              || []
+          },
+
+                      availableQuantity:
+            planningTransportSourceAvailableQuantityAtDate(
+              material,
+              configuration.startDate
+            ),
+
+          machines:
+            snapshot?.machines
+            || []
+        }
+      );
+
+    manualScheduleDraft =
+      candidateDraft;
+
+    draft.manualScheduleDraft =
+      manualScheduleDraft;
+
+    recordAcceptedManualState(
+      previousManualState
+    );
+
+    saveDraftNow();
+
+    refreshPlanningMaterialsToSchedule();
+    refreshTimelineOnly();
+
+    toast(
+      'Transporte programado no Gantt.'
+    );
+
+  } catch (error) {
+    restoreDraftPlanningState(
+      previousManualState
+    );
+
+    refreshPlanningMaterialsToSchedule();
+    refreshTimelineOnly();
+
+    toast(error);
+
+  } finally {
+    setOperationLoading(
+      false
+    );
+  }
+
+  return;
+}
+    if (!manualScheduleDraft) {
+      toast(new Error('Rascunho manual indisponível para criar allocation.'));
+      return;
+    }
+    const configuration = await openPlanningMaterialAllocationModal({ material, to });
+    if (!configuration) return;
+    const configuredMaterial =
+  configuration.material || material;
+
+const allowedQty = Math.min(
+  Number(configuredMaterial?.remainingQty || 0),
+  Math.max(
+    0,
+    Number(
+      configuredMaterial?.permittedQty
+      ?? configuredMaterial?.remainingQty
+      ?? 0
+    )
+  )
+);
+    if (configuration.quantity > allowedQty + 0.000001) {
+      toast(new Error('Quantidade superior ao permitido pelos materiais disponíveis.'));
+      refreshPlanningMaterialsToSchedule();
+      return;
+    }
+    const previousManualState = cloneDraftPlanningState();
+    const timestamp = new Date().toISOString();
+    try {
+      setOperationLoading(true, 'Criando allocation manual...');
+      const snapshot = currentProductionCalendarSnapshot();
+      const candidateDraft = createManualScheduleAllocation(manualScheduleDraft, {
+        material: configuration.material,
+        date: configuration.date,
+        machineId: configuration.machine.machineId,
+        peopleCount:
+  configuration.peopleCount,
+
+capacityPercent:
+  configuration.capacityPercent,
+
+quantity:
+  configuration.quantity,
+
+machines:
+  snapshot.machines,
+        matrixRows:
+  planningMaterialStrictProductivityRows(
+    configuration.material
+  ),
+        days: snapshot.days,
+        dailyMinutes: planningDraftDailyMinutes(),
+        now: timestamp
+      });
+      const validationTransaction = applyManualScheduleTransaction({
+        currentDraft: candidateDraft,
+        intent: { type: 'VALIDATE_DRAFT' },
+        draftContext: { validatedAt: timestamp },
+        validationContext:
+    currentManualScheduleValidationContext(
+    snapshot,
+    {
+      allocations:
+        candidateDraft.allocations,
+
+      transports:
+        candidateDraft.transports
+        || []
+    }
+  )
+      });
+            if (!validationTransaction.accepted) {
+        const blockingMessage =
+          validationTransaction
+            .blockingIssues?.[0]?.message
+
+          || validationTransaction
+            .validation?.errors?.[0]?.message
+
+          || 'A allocation não passou pela validação do calendário.';
+
+        throw new Error(blockingMessage);
+      }
+
+      manualScheduleDraft =
+        validationTransaction.draft;
+      const createdAllocationId = manualScheduleDraft?.lastManualAction?.allocationId;
+      draft.manualScheduleDraft = manualScheduleDraft;
+      recordAcceptedManualState(previousManualState);
+      saveDraftNow();
+      refreshTimelineOnly();
+      if (createdAllocationId) {
+  planningScheduleRendererHost?.focusAllocation?.(createdAllocationId, {
+    inspectPanel: false,
+    scrollToAllocation: false
+  });
+}
+      toast('Allocation manual criada no rascunho.');
+    } catch (error) {
+      restoreDraftPlanningState(previousManualState);
+      refreshTimelineOnly();
+      toast(error);
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
+  function bindPlanningMaterialsToScheduleDrag(targetElement) {
+    if (!targetElement) return;
+    targetElement.querySelectorAll('.planning-material-program-card.is-ready, .planning-material-program-card.is-partial').forEach(card => {
+      card.draggable = true;
+    });
+    targetElement.querySelectorAll('.planning-material-program-card.is-blocked, .planning-material-program-card.is-completed').forEach(card => {
+      card.draggable = false;
+    });
+  }
+
+  function dispatchPlanningMaterialDragToGantt(type, detail = {}) {
+    const calendar = planningScheduleRendererHost?.getRootElement?.()
+      || target.querySelector('.gantt-aps');
+    calendar?.dispatchEvent?.(new CustomEvent(`gantt-aps:planning-material-${type}`, {
+      detail,
+      bubbles: false
+    }));
+  }
+
   function timelineOperations(result) {
     return buildTimelineOperations(result);
   }
 
   function productionCalendarMachines(result) {
-    return selectProductionCalendarMachines(result, registeredMachines);
+    const matrixMachines = buildPlanningProductivityMachineOptions(matrix);
+    return selectProductionCalendarMachines({
+      ...result,
+      machineOptions: [
+        ...(Array.isArray(result?.machineOptions) ? result.machineOptions : []),
+        ...MANUAL_PLANNING_REQUIRED_MACHINES,
+        ...matrixMachines
+      ]
+    }, registeredMachines);
   }
 
   function productionCalendarPlanningId(result) {
@@ -2536,18 +16553,60 @@ export function PlanningPage() {
 
   function currentManualScheduleValidationContext(snapshot = currentProductionCalendarSnapshot(), options = {}) {
     const summary = currentSimulation?.summary || {};
-    return buildManualScheduleValidationContext({
-      simulation: currentSimulation,
+
+const manualMode =
+  currentSimulation?.manualPlanningMode
+  === MANUAL_PLANNING_MODE;
+
+const validationSimulation = manualMode
+  ? {
+      ...currentSimulation,
+           operations:
+  buildManualPlanningValidationOperations(
+    currentSimulation,
+
+    options.allocations
+      ?? manualScheduleDraft?.allocations
+      ?? [],
+
+    registeredMachines
+  )    }
+  : currentSimulation;
+
+const localStock = manualMode
+  ? (
+      currentSimulation
+        ?.manualPlanningLocalStockSnapshot
+        ?.stock
+      || []
+    )
+  : currentSimulation?.stock;
+
+return buildManualScheduleValidationContext({
+  simulation: validationSimulation,
       materials,
       machines: snapshot?.machines || [],
       productivityMatrix: matrix,
-      stock: options.stock ?? currentSimulation?.stock,
+      stock: options.stock ?? localStock,
       stockMinimums: currentSimulation?.stockMinimums,
       stockLocations: Array.isArray(currentSimulation?.stockLocations) && currentSimulation.stockLocations.length
         ? currentSimulation.stockLocations
         : locations,
-      dependencies: currentSimulation?.dependencies,
-      transports: currentSimulation?.transports,
+      dependencies:
+  (
+    manualMode
+    || draft.planningMode === 'theoretical'
+  )
+    ? []
+    : currentSimulation?.dependencies,
+            transports:
+        manualMode
+          ? (
+              options.transports
+              ?? manualScheduleDraft?.transports
+              ?? []
+            )
+          : currentSimulation?.transports,
       shifts: Array.isArray(summary.shifts) && summary.shifts.length ? summary.shifts : draft.shifts,
       dailyTeamOverrides: manualScheduleDraft?.dailyTeamOverrides ?? draft.dailyTeamOverrides ?? summary.dailyTeamOverrides ?? {},
       manualWorkDates: manualScheduleDraft?.manualWorkDates ?? summary.manualWorkDates ?? lastPayload?.manualWorkDates ?? [],
@@ -2555,19 +16614,133 @@ export function PlanningPage() {
       minimumStartRatio: 1,
       dependencyCompletionBufferMinutes: Number(currentSimulation?.dependencyCompletionBufferMinutes ?? 60),
       holidays: currentSimulation?.holidays || [],
-      timezone: currentSimulation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone
+      timezone: currentSimulation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      ignoreStock:
+  draft.planningMode
+  === 'theoretical'
     });
   }
 
-  async function currentManualScheduleValidationContextWithFreshStock(snapshot = currentProductionCalendarSnapshot()) {
-    try {
-      const stockRows = await loadStockOverviewRows();
-      const stock = manualScheduleStockFromOverviewRows(stockRows);
-      if (stock.length) return currentManualScheduleValidationContext(snapshot, { stock });
-    } catch (error) {
-      console.warn('Nao foi possivel carregar estoque atualizado para validacao manual.', error);
+    async function currentManualScheduleValidationContextWithFreshStock(
+    snapshot = currentProductionCalendarSnapshot()
+  ) {
+    if (
+      draft.planningMode
+      === 'theoretical'
+    ) {
+      return currentManualScheduleValidationContext(
+        snapshot
+      );
     }
-    return currentManualScheduleValidationContext(snapshot);
+
+    if (
+      currentSimulation?.manualPlanningMode
+      === MANUAL_PLANNING_MODE
+    ) {
+      return currentManualScheduleValidationContext(
+        snapshot
+      );
+    }
+
+    try {
+      const stockRows =
+        await loadStockOverviewRows();
+
+      const stock =
+        manualScheduleStockFromOverviewRows(
+          stockRows
+        );
+
+      if (stock.length) {
+        return currentManualScheduleValidationContext(
+          snapshot,
+          { stock }
+        );
+      }
+    } catch (error) {
+      console.warn(
+        'Nao foi possivel carregar estoque atualizado para validacao manual.',
+        error
+      );
+    }
+
+    return currentManualScheduleValidationContext(
+      snapshot
+    );
+  }
+
+   function analyzePlanningManualUnallocation(
+    allocationId
+  ) {
+    if (!manualScheduleDraft) {
+      throw new Error(
+        'Rascunho manual indisponível para desalocação.'
+      );
+    }
+
+    if (!currentSimulation) {
+      throw new Error(
+        'Simulação atual indisponível para desalocação.'
+      );
+    }
+
+    const snapshot =
+      currentProductionCalendarSnapshot();
+
+    const timestamp =
+      new Date().toISOString();
+
+    return buildManualScheduleUnallocationPlan(
+      manualScheduleDraft,
+      {
+        allocationId,
+
+        operations:
+          currentSimulation?.operations
+          || [],
+
+        machines:
+          snapshot?.machines
+          || [],
+
+        now:
+          timestamp,
+
+        validateCandidate:
+          candidateDraft => (
+            applyManualScheduleTransaction({
+              currentDraft:
+                candidateDraft,
+
+              intent: {
+                type:
+                  'VALIDATE_DRAFT'
+              },
+
+              draftContext: {
+                validatedAt:
+                  timestamp
+              },
+
+              validationContext:
+               currentManualScheduleValidationContext(
+  snapshot,
+  {
+    allocations:
+      candidateDraft
+        ?.allocations
+      || [],
+
+    transports:
+      candidateDraft
+        ?.transports
+      || []
+  }
+)
+            })
+          )
+      }
+    );
   }
 
   function prepareCleanSimulationDiscard(simulation, allocations, baseSimulationId, mode = 'automatic-baseline') {
@@ -2586,7 +16759,8 @@ export function PlanningPage() {
       allocations,
       machines: adapted.machines,
       manualWorkDates: [],
-      dailyTeamOverrides: {}
+      dailyTeamOverrides: {},
+      preserveAllocationRows: true
     });
     const previousDiagnostics = manualScheduleDraft?.validation || {
       valid: true,
@@ -2802,6 +16976,441 @@ export function PlanningPage() {
       const move = validateProductionCalendarMoveIntent(intent, snapshot);
       if (!move) return;
       await productionCalendarMoveRunner(intent, move);
+    } catch (error) {
+      toast(error);
+    }
+  }
+
+    async function handleProductionCalendarUnallocationRequest(payload = {}) {
+    const allocationId = String(
+      payload?.allocationId
+      || payload?.id
+      || ''
+    ).trim();
+
+    if (!allocationId) {
+      toast(
+        new Error(
+          'Allocation não informada para desalocação.'
+        )
+      );
+      return;
+    }
+
+    if (
+  !canWritePlanning
+  || !manualScheduleDraft
+  || !currentSimulation
+) {
+  toast(
+    new Error(
+      'Planejamento manual indisponível para desalocação.'
+    )
+  );
+  return;
+}
+
+
+const transportId =
+  String(
+    payload?.task?.transportId
+    ||
+    (
+      allocationId.startsWith(
+        'readonly:transport:'
+      )
+
+        ? allocationId.slice(
+            'readonly:transport:'.length
+          )
+
+        : ''
+    )
+  ).trim();
+
+
+if (transportId) {
+  const transports =
+    Array.isArray(
+      manualScheduleDraft?.transports
+    )
+      ? manualScheduleDraft.transports
+      : [];
+
+
+  const exists =
+    transports.some(transport => (
+      String(
+        transport?.transportId
+        || transport?.id
+        || ''
+      )
+      === transportId
+    ));
+
+
+  if (!exists) {
+    toast(
+      new Error(
+        'Este transporte já foi atualizado. Recarregue o planejamento e tente novamente.'
+      )
+    );
+
+    return;
+  }
+
+
+  const previousManualState =
+    cloneDraftPlanningState();
+
+
+  manualScheduleDraft = {
+    ...manualScheduleDraft,
+
+    transports:
+      transports.filter(transport => (
+        String(
+          transport?.transportId
+          || transport?.id
+          || ''
+        )
+        !== transportId
+      )),
+
+    updatedAt:
+      new Date().toISOString(),
+
+    dirty:
+      true,
+
+    lastManualAction: {
+      type:
+        'REMOVE_MANUAL_TRANSPORT',
+
+      transportId
+    }
+  };
+
+
+  draft.manualScheduleDraft =
+    manualScheduleDraft;
+
+
+  productionCalendarVisualState = {
+    ...productionCalendarVisualState,
+
+    selectedAllocationId:
+      null
+  };
+
+
+  recordAcceptedManualState(
+    previousManualState
+  );
+
+
+  saveDraftNow();
+
+  refreshTimelineOnly();
+
+
+  toast(
+    'Transporte devolvido para Materiais a programar.'
+  );
+
+
+  return;
+}
+
+
+try {
+      /*
+       * Esta função é o cérebro que fizemos
+       * no MANUAL-04A.
+       *
+       * Ela NÃO altera o draft real.
+       * Só devolve o plano final da retirada.
+       */
+      const plan =
+        analyzePlanningManualUnallocation(
+          allocationId
+        );
+
+      if (
+        !plan?.accepted
+        || !plan?.draft
+      ) {
+        const issue =
+          plan?.blockingIssues?.[0]
+          || plan
+            ?.validationResult
+            ?.blockingIssues?.[0]
+          || plan
+            ?.validationResult
+            ?.validation
+            ?.errors?.[0];
+
+        throw new Error(
+          issue?.message
+          || 'Não foi possível desalocar esta produção sem deixar o planejamento inconsistente.'
+        );
+      }
+
+      const sourceAllocation =
+        plan.sourceAllocation || {};
+
+      const cascadeAllocations =
+        Array.isArray(
+          plan.cascadeAllocations
+        )
+          ? plan.cascadeAllocations
+          : [];
+
+      /*
+       * Se a retirada afetar sucessores,
+       * NÃO alteramos nada ainda.
+       *
+       * Primeiro mostramos o modal.
+       */
+      if (cascadeAllocations.length) {
+        const sourceLabel =
+          String(
+            sourceAllocation.materialName
+            || sourceAllocation.materialCode
+            || sourceAllocation.materialId
+            || 'Produção selecionada'
+          );
+
+        const sourceQuantity =
+          Number(
+            sourceAllocation.quantity
+            || 0
+          );
+
+        const sourceUnit =
+          String(
+            sourceAllocation.unit
+            || ''
+          );
+
+        const sourceDate =
+          String(
+            sourceAllocation.date
+            || ''
+          ).slice(0, 10);
+
+        const cascadeHtml =
+          cascadeAllocations
+            .map(allocation => {
+              const materialName =
+                String(
+                  allocation?.materialName
+                  || allocation?.materialCode
+                  || allocation?.materialId
+                  || 'Material'
+                );
+
+              const machineName =
+                String(
+                  allocation?.machineName
+                  || allocation?.machineId
+                  || ''
+                );
+
+              const date =
+                String(
+                  allocation?.date
+                  || ''
+                ).slice(0, 10);
+
+              const quantity =
+                Number(
+                  allocation?.quantity
+                  || 0
+                );
+
+              const unit =
+                String(
+                  allocation?.unit
+                  || ''
+                );
+
+              return `
+                <li>
+                  <strong>${escapeHtml(materialName)}</strong>
+                  <span>
+                    ${escapeHtml(
+                      `${formatPtBrDecimal(quantity)} ${unit}`.trim()
+                    )}
+                  </span>
+                  <span>
+                    ${escapeHtml(
+                      machineName
+                      || 'Máquina não informada'
+                    )}
+                  </span>
+                  <span>
+                    ${escapeHtml(
+                      isValidDateOnly(date)
+                        ? formatDateOnly(date)
+                        : date
+                    )}
+                  </span>
+                </li>
+              `;
+            })
+            .join('');
+
+        const choice =
+          await openProductionCalendarChoiceModal({
+            title:
+              'Desalocar produção e sucessoras',
+
+            bodyHtml: `
+              <p>
+                Ao desalocar
+                <strong>
+                  ${escapeHtml(sourceLabel)}
+                </strong>
+
+                ${
+                  sourceQuantity > 0
+                    ? `(${escapeHtml(
+                        `${formatPtBrDecimal(sourceQuantity)} ${sourceUnit}`.trim()
+                      )})`
+                    : ''
+                }
+
+                ${
+                  isValidDateOnly(sourceDate)
+                    ? `de ${escapeHtml(
+                        formatDateOnly(sourceDate)
+                      )}`
+                    : ''
+                },
+
+                as programações abaixo também deixarão de ter material suficiente
+                e voltarão para "Materiais a programar".
+              </p>
+
+              <ul class="manual-draft-choice-list">
+                ${cascadeHtml}
+              </ul>
+
+              <p>
+                <strong>
+                  Esta ação será aplicada de uma só vez.
+                </strong>
+              </p>
+            `,
+
+            actions: [
+              {
+                value:
+                  'cancel',
+
+                label:
+                  'Cancelar',
+
+                className:
+                  'secondary-button'
+              },
+
+              {
+                value:
+                  'confirm',
+
+                label:
+                  'Desalocar todas',
+
+                className:
+                  'primary-button'
+              }
+            ]
+          });
+
+        /*
+         * CANCELAR:
+         * nenhum estado foi modificado.
+         */
+        if (choice !== 'confirm') {
+          return;
+        }
+      }
+
+      /*
+       * Só chegamos aqui se:
+       *
+       * 1. não havia cascata
+       *
+       * OU
+       *
+       * 2. o usuário confirmou o modal.
+       */
+
+      const previousManualState =
+        cloneDraftPlanningState();
+
+      /*
+       * Uma única troca atômica do draft.
+       */
+      manualScheduleDraft =
+        plan.draft;
+
+      draft.manualScheduleDraft =
+        manualScheduleDraft;
+
+      /*
+       * A barra que acabou de desaparecer
+       * não deve continuar selecionada.
+       */
+      productionCalendarVisualState = {
+        ...productionCalendarVisualState,
+
+        selectedAllocationId:
+          null
+      };
+
+      /*
+       * Uma única entrada no histórico.
+       *
+       * Portanto:
+       *
+       * Desfazer
+       * = restaura origem + toda a cascata.
+       */
+      recordAcceptedManualState(
+        previousManualState
+      );
+
+      saveDraftNow();
+
+      /*
+       * Isso redesenha:
+       *
+       * Gantt
+       * +
+       * Materiais a programar
+       * +
+       * Programado
+       * +
+       * Restante
+       * +
+       * Permitido
+       */
+      refreshTimelineOnly();
+
+      if (cascadeAllocations.length) {
+        toast(
+          `${
+            plan.removedAllocationIds.length
+          } programação(ões) devolvida(s) para Materiais a programar.`
+        );
+      } else {
+        toast(
+          'Produção devolvida para Materiais a programar.'
+        );
+      }
     } catch (error) {
       toast(error);
     }
@@ -3530,13 +18139,26 @@ export function PlanningPage() {
     const minimumDays = readStockMinimumDays();
     const idealDays = minimumDays ? readPcpIdealDays(minimumDays) : null;
     if (!minimumDays || !idealDays) return [];
-    const [overview, plannedBalance] = await Promise.all([
-      api('/stock/materials-overview'),
-      api('/planning/analysis/planned-balance').catch(() => ({ rows: [] }))
-    ]);
+    const [
+  overviewRows,
+  plannedBalance
+] =
+  await Promise.all([
+
+    loadStockOverviewRows(),
+
+    api(
+      '/planning/analysis/planned-balance'
+    )
+      .catch(
+        () => ({
+          rows: []
+        })
+      )
+  ]);
     const plannedByMaterial = new Map((plannedBalance.rows || []).map(row => [String(row.material_id ?? row.materialId ?? ''), row]));
     const existingMaterialIds = new Set((draft.productions || []).map(production => String(production.materialId || '')));
-    return (overview.rows || [])
+    return (overviewRows || [])
       .filter(row => row.salesBlocked !== true && row.material?.permitsSales !== false)
       .map(row => {
         const materialId = String(row.material?.id || '');
@@ -3654,7 +18276,7 @@ export function PlanningPage() {
           draft.lastPayload = lastPayload;
           manualScheduleDraft = null;
           draft.manualScheduleDraft = null;
-          renderSimulation(expandedBest.result, currentForm || { elements: {} }, { captureAutomaticBaseline: true });
+          renderSimulation(expandedBest.result, currentForm || { elements: {} }, { captureAutomaticBaseline: true, manualFoundation: true });
           toast(`Simulação expandida aplicada com ${expandedBest.pcpCount} material(is) do Assistente PCP.`);
           return { accepted: true };
         }
@@ -3703,22 +18325,317 @@ export function PlanningPage() {
     return mergeDraftAllocationDays(days, allocations, { isValidDateOnly, formatDateOnly });
   }
 
-  function buildProductionCalendarSnapshot(result, options = {}) {
-    const adapted = adaptPlanningResultToProductionCalendar({
+  function manualScheduleTransportCalendarAllocations(
+  transports = []
+) {
+  return (
+    Array.isArray(transports)
+      ? transports
+      : []
+  )
+    .map((transport, index) => {
+      const startDate =
+        String(
+          transport?.startDate
+          ?? transport?.date
+          ?? ''
+        ).slice(0, 10);
+
+      const endDate =
+        String(
+          transport?.endDate
+          ?? startDate
+        ).slice(0, 10);
+
+      const quantity =
+        Number(
+          transport?.quantity
+          || 0
+        );
+
+      if (
+        !isValidDateOnly(startDate)
+        ||
+        !isValidDateOnly(endDate)
+        ||
+        !(quantity > 0)
+      ) {
+        return null;
+      }
+
+      const transportId =
+        String(
+          transport?.transportId
+          || transport?.id
+          || `transport-${index + 1}`
+        );
+
+      const sourceName =
+        String(
+          transport?.sourceLocationName
+          || planningLocationLabel(
+            transport?.sourceLocation
+          )
+          || transport?.sourceLocation
+          || ''
+        );
+
+      const targetName =
+        String(
+          transport?.targetLocationName
+          || planningLocationLabel(
+            transport?.targetLocation
+          )
+          || transport?.targetLocation
+          || ''
+        );
+
+      return {
+        ...transport,
+
+        /*
+         * readonly:
+         * não deixa o renderer tratar
+         * transporte como allocation de máquina.
+         */
+        allocationId:
+          `readonly:transport:${transportId}`,
+
+        operationId:
+          `transport:${transportId}`,
+
+        parentOperationId:
+          `transport:${transportId}`,
+
+        calendarParentOperationId:
+          `transport:${transportId}`,
+
+        machineId:
+          'Transporte',
+
+        machineName:
+          'Transporte',
+
+        date:
+          startDate,
+
+        startDate,
+
+        startTime:
+          String(
+            transport?.startTime
+            || '00:00'
+          ).slice(0, 5),
+
+        endDate,
+
+        endTime:
+          String(
+            transport?.endTime
+            || '23:59'
+          ).slice(0, 5),
+
+        quantity,
+
+        unit:
+          String(
+            transport?.unit
+            || ''
+          ),
+
+        durationMinutes:
+          Number(
+            transport?.durationMinutes
+            || 0
+          ),
+
+        capacityPercent:
+          null,
+
+        peopleCount:
+          null,
+
+        scheduleType:
+  'transport',
+
+transportId,
+
+transportTotalQuantity:
+  planningTransportDisplayTargetQuantity(
+    transport?.totalQuantity
+    ??
+    transport?.requiredQuantity
+    ??
+    transport?.quantity
+    ??
+    0
+  ),
+
+        productionTitle:
+          'Transporte',
+
+        productionColor:
+  String(
+    transport?.productionColor
+    || '#2563eb'
+  ),
+
+        productionStageLabel:
+          'Logística',
+
+        presentation: {
+          ...(transport?.presentation || {}),
+
+          productionTitle:
+            'Transporte',
+
+          productionColor:
+  String(
+    transport?.productionColor
+    || '#2563eb'
+  ),
+
+          stageLabel:
+            'Logística',
+
+          materialName:
+            String(
+              transport?.materialName
+              || transport?.materialCode
+              || transport?.materialId
+              || ''
+            ),
+
+          materialCode:
+            String(
+              transport?.materialCode
+              || ''
+            ),
+
+          routeLabel:
+            `${sourceName} → ${targetName}`,
+
+          sourceLocationName:
+            sourceName,
+
+          targetLocationName:
+            targetName
+        }
+      };
+    })
+    .filter(Boolean);
+}
+
+    function buildProductionCalendarSnapshot(
+    result,
+    options = {}
+  ) {
+    const manualFoundation =
+      result?.manualPlanningMode
+      === MANUAL_PLANNING_MODE;
+
+    /*
+     * Guardamos as máquinas completas antes
+     * do adapter, porque o cadastro possui
+     * o local físico.
+     */
+    const rawCalendarMachines =
+      productionCalendarMachines(
+        result
+      );
+
+    const adapted =
+      adaptPlanningResultToProductionCalendar({
       planningId: productionCalendarPlanningId(result),
-      calendarOperations: Array.isArray(result?.calendarOperations) ? result.calendarOperations : [],
+      calendarOperations: manualFoundation ? [] : (Array.isArray(result?.calendarOperations) ? result.calendarOperations : []),
       operations: Array.isArray(result?.operations) ? result.operations : [],
       tree: result?.tree || result?.scheduleTree || result?.schedule_tree || null,
       days: Array.isArray(result?.days) ? result.days : [],
-      machines: productionCalendarMachines(result),
-      status: result?.summary?.status || result?.status
+            machines:
+        rawCalendarMachines,
+      status: result?.summary?.status || result?.status,
+      diagnostics: result?.diagnostics || null
     });
-    const activeManualDraft = !options.ignoreManualDraft && manualScheduleDraft
-      ? manualScheduleDraft
-      : null;
-    const allocations = activeManualDraft ? activeManualDraft.allocations : adapted.allocations;
-    const baseDays = daysWithDraftAllocations(adapted.days, allocations);
+
+         /*
+     * Recolocamos o local físico caso
+     * o adapter tenha descartado campos
+     * extras do cadastro.
+     */
+    const adaptedMachinesWithLocations =
+      (adapted.machines || [])
+        .map(machine => {
+          const machineKeys =
+            new Set(
+              planningMachineIdentityKeys(
+                machine
+              )
+            );
+
+          const raw =
+            rawCalendarMachines
+              .find(candidate => (
+                planningMachineIdentityKeys(
+                  candidate
+                )
+                  .some(key =>
+                    machineKeys.has(key)
+                  )
+              ));
+
+          const locationId =
+            planningMachineLocationId(
+              raw
+            )
+            || planningMachineLocationId(
+              machine
+            );
+
+          return {
+            ...(raw || {}),
+
+            ...machine,
+
+            ...(locationId
+              ? {
+                  locationId
+                }
+              : {})
+          };
+        }); 
+
+    const activeManualDraft =
+  !options.ignoreManualDraft
+  && manualScheduleDraft
+    ? manualScheduleDraft
+    : null;
+
+const allocations =
+  activeManualDraft
+    ? activeManualDraft.allocations
+    : (
+        manualFoundation
+          ? []
+          : adapted.allocations
+      );
+
+const transportCalendarAllocations =
+  manualScheduleTransportCalendarAllocations(
+    activeManualDraft?.transports
+    || []
+  );
+
+const baseDays =
+  daysWithDraftAllocations(
+    adapted.days,
+    [
+      ...allocations,
+      ...transportCalendarAllocations
+    ]
+  );
     const validationSnapshot = buildProductionCalendarValidationSnapshot(activeManualDraft?.validation, allocations, baseDays);
+    const validationDaysByDate = new Map((validationSnapshot?.days || [])
+      .map(day => [String(day?.date || ''), day]));
     const summary = result?.summary || {};
     const shifts = Array.isArray(summary.shifts) && summary.shifts.length ? summary.shifts : draft.shifts;
     const manualWorkDates = activeManualDraft?.manualWorkDates ?? summary.manualWorkDates ?? result?.manualWorkDates ?? [];
@@ -3731,28 +18648,63 @@ export function PlanningPage() {
       manualWorkDates,
       holidays: result?.holidays
     });
-    const productionLimitDate = (validationSnapshot?.allocations || allocations)
-      .map(allocation => String(allocation?.date || ''))
-      .filter(isValidDateOnly)
-      .sort()
-      .at(-1) || null;
-    const requestedVisibleEndDate = isValidDateOnly(productionCalendarVisualState.visibleEndDate)
-      ? productionCalendarVisualState.visibleEndDate
-      : null;
-    const visibleEndDate = requestedVisibleEndDate && requestedVisibleEndDate >= String(productionLimitDate || '')
-      ? requestedVisibleEndDate
-      : productionLimitDate;
+    const productionLimitDate = [
+  ...(validationSnapshot?.allocations || allocations),
+  ...transportCalendarAllocations
+]
+  .map(allocation =>
+    String(
+      allocation?.endDate
+      || allocation?.date
+      || ''
+    )
+  )
+  .filter(isValidDateOnly)
+  .sort()
+  .at(-1) || null;
+
+    const filledBaseDays = fillProductionCalendarDayRange(baseDays);
+
+const baseEndDate = filledBaseDays.at(-1)?.date || null;
+
+const requestedVisibleEndDate = isValidDateOnly(productionCalendarVisualState.visibleEndDate)
+  ? productionCalendarVisualState.visibleEndDate
+  : null;
+
+const visibleEndDate = [
+  baseEndDate,
+  requestedVisibleEndDate,
+  productionLimitDate
+]
+  .filter(isValidDateOnly)
+  .sort()
+  .at(-1) || null;
+      
     const configuredHolidayDates = new Set((Array.isArray(result?.holidays) ? result.holidays : [])
       .map(holiday => String(holiday?.date ?? holiday ?? '').slice(0, 10))
       .filter(isValidDateOnly));
     const calendarDays = extendProductionCalendarDayRange(
-      fillProductionCalendarDayRange(validationSnapshot?.days || baseDays),
+      filledBaseDays.map(day => ({
+        ...day,
+        ...(validationDaysByDate.get(String(day.date || '')) || {})
+      })),
       visibleEndDate
     ).map(day => configuredHolidayDates.has(day.date)
       ? { ...day, isWorkingDay: false, holiday: day.holiday || { date: day.date } }
       : day);
-    const snapshotAllocations = withManualTransportPresentation(validationSnapshot?.allocations || allocations, manualScheduleDraft);
-    const presentedDays = calendarDays.map(day => ({
+    const snapshotAllocations =
+  withManualTransportPresentation(
+    validationSnapshot?.allocations
+    || allocations,
+    manualScheduleDraft
+  );
+
+const ganttAllocations = [
+  ...snapshotAllocations,
+  ...transportCalendarAllocations
+];
+
+const presentedDays = calendarDays.map(day => ({
       ...day,
       ...buildProductionCalendarDayPresentation({
         day,
@@ -3769,14 +18721,18 @@ export function PlanningPage() {
     }));
     const snapshot = {
       days: presentedDays,
-      machines: adapted.machines,
-      allocations: snapshotAllocations,
+            machines:
+        adaptedMachinesWithLocations,
+
+      allocations:
+  ganttAllocations,
       validation: validationSnapshot?.validation || null,
       permissions: { readOnly: true, canEditDaySettings: canWritePlanning, canEditAllocations: canWritePlanning },
       errors: adapted.errors,
       warnings: [],
       visualState: {
         ...productionCalendarVisualState,
+        groupsCollapsedByDefault: manualFoundation || productionCalendarVisualState.groupsCollapsedByDefault === true,
         hasManualChanges: canWritePlanning && hasManualChangesAgainstAutomaticBaseline({
           baseline: currentAutomaticBaseline,
           manualScheduleDraft,
@@ -3829,6 +18785,8 @@ export function PlanningPage() {
         factories: {
           'gantt-aps': () => createGanttApsRenderer({
             onRequestMove: handleProductionCalendarMoveRequest,
+              onRequestUnallocate:
+    handleProductionCalendarUnallocationRequest,
             onRequestEdit: allocation => openProductionCalendarAllocationEditor(allocation),
             onRequestSplit: allocation => openProductionCalendarAllocationEditor(allocation, { startSplit: true }),
             onRequestTransportAllocation: allocation => openProductionCalendarTransportModal(allocation),
@@ -3839,7 +18797,8 @@ export function PlanningPage() {
             onRequestDiscardAllChanges: () => discardAllProductionCalendarChanges(),
             onRequestOptimizeUtilization: () => handleProductionCalendarUtilizationOptimization(),
             onRequestUndoManualChange: () => undoLastProductionCalendarChange(),
-            onRequestRedoManualChange: () => redoProductionCalendarChange()
+            onRequestRedoManualChange: () => redoProductionCalendarChange(),
+            onRequestPlanningMaterialDrop: handlePlanningMaterialDropPreview
           })
         },
         onLifecycleError: ({ error, rendererId, phase }) => {
@@ -3898,11 +18857,60 @@ export function PlanningPage() {
         </div>
         <div class="planning-stock-modal-body">
           <div class="planning-stock-summary">
-            <article><span>Materiais</span><strong>${day.salesSummary.materialCount}</strong></article>
-            <article><span>Críticos</span><strong>${day.salesSummary.criticalCount}</strong></article>
-            <article><span>Alerta produção</span><strong>${day.salesSummary.productionAlertCount}</strong></article>
-            <article><span>Abaixo da meta</span><strong>${day.salesSummary.belowTargetCount}</strong></article>
-          </div>
+
+  <article>
+    <span>Materiais</span>
+    <strong>
+      ${day.salesSummary.materialCount}
+    </strong>
+  </article>
+
+  <article
+    class="planning-stock-summary-card zeroed"
+  >
+    <span>Zerados</span>
+    <strong>
+      ${day.salesSummary.zeroedCount}
+    </strong>
+  </article>
+
+  <article
+    class="planning-stock-summary-card critical"
+  >
+    <span>Críticos</span>
+    <strong>
+      ${day.salesSummary.criticalCount}
+    </strong>
+  </article>
+
+  <article
+    class="planning-stock-summary-card attention"
+  >
+    <span>Atenção</span>
+    <strong>
+      ${day.salesSummary.attentionCount}
+    </strong>
+  </article>
+
+  <article
+    class="planning-stock-summary-card below-target"
+  >
+    <span>Abaixo da meta</span>
+    <strong>
+      ${day.salesSummary.belowTargetCount}
+    </strong>
+  </article>
+
+  <article
+    class="planning-stock-summary-card ok"
+  >
+    <span>OK</span>
+    <strong>
+      ${day.salesSummary.okCount}
+    </strong>
+  </article>
+
+</div>
           <div class="planning-stock-groups">
             <section class="planning-stock-group planning-stock-sales-group">
               <h3>Estoque de venda</h3>
@@ -3936,7 +18944,22 @@ export function PlanningPage() {
   }
 
   function refreshPlanningStockProjection() {
-    if (!currentSimulation) return;
+
+  if (!currentSimulation) {
+    return;
+  }
+
+
+  if (
+    draft.planningMode
+    === 'theoretical'
+  ) {
+
+    currentPlanningStockProjection =
+      null;
+
+    return;
+  }
     const snapshot = currentProductionCalendarSnapshot();
     const validationContext = currentManualScheduleValidationContext(snapshot);
     currentPlanningStockProjection = buildPlanningStockProjection({
@@ -4021,6 +19044,16 @@ export function PlanningPage() {
   }
 
   function schedulePlanningStockAlerts(result) {
+    if (
+  draft.planningMode
+  === 'theoretical'
+) {
+
+  currentPlanningStockAlerts =
+    new Map();
+
+  return;
+}
     const requestId = ++planningStockAlertRequestId;
     currentPlanningStockAlerts = new Map();
     loadPlanningStockAlerts(result)
@@ -4035,27 +19068,70 @@ export function PlanningPage() {
       });
   }
 
-  function renderSimulation(result, form, { restoreManualDraft = false, captureAutomaticBaseline = false } = {}) {
-    const coloredResult = withProductionColors(result);
+  function renderSimulation(result, form, { restoreManualDraft = false, captureAutomaticBaseline = false, manualFoundation = result?.manualPlanningMode === MANUAL_PLANNING_MODE } = {}) {
+    const coloredResult = manualFoundation
+      ? buildManualPlanningSchedulingResult(withProductionColors(result))
+      : withProductionColors(result);
     currentSimulation = coloredResult;
     const automaticSnapshot = buildProductionCalendarSnapshot(coloredResult, { ignoreManualDraft: true });
     if (captureAutomaticBaseline) {
       currentAutomaticBaseline = createAutomaticSimulationBaseline({
-        simulation: result,
+        simulation: coloredResult,
         allocations: automaticSnapshot.allocations
       });
       draft.automaticBaseline = cloneAutomaticBaselineValue(currentAutomaticBaseline);
     }
-    const restoredDraft = restoreManualDraft && manualScheduleDraft?.allocations?.length
-      ? JSON.parse(JSON.stringify(manualScheduleDraft))
-      : null;
+       const restoredDraft =
+      restoreManualDraft
+      &&
+      manualScheduleDraft?.allocations?.length
+
+        ? {
+            ...JSON.parse(
+              JSON.stringify(
+                manualScheduleDraft
+              )
+            ),
+
+            plannedReceipts:
+              JSON.parse(
+                JSON.stringify(
+                  draft.plannedReceipts
+                  ||
+                  manualScheduleDraft
+                    ?.plannedReceipts
+                  ||
+                  []
+                )
+              )
+          }
+
+        : null;
     const candidateDraft = restoredDraft || createManualScheduleDraft({
         planningId: productionCalendarPlanningId(coloredResult),
         baseSimulationId: coloredResult?.code || lastPayload?.planningCode || Date.now(),
-        allocations: automaticSnapshot.allocations,
-        machines: automaticSnapshot.machines,
-        manualWorkDates: coloredResult?.summary?.manualWorkDates || coloredResult?.manualWorkDates || lastPayload?.manualWorkDates || [],
-        dailyTeamOverrides: draft.dailyTeamOverrides || coloredResult?.summary?.dailyTeamOverrides || {}
+                allocations:
+          manualFoundation
+            ? []
+            : automaticSnapshot.allocations,
+
+        plannedReceipts:
+          draft.plannedReceipts
+          || [],
+
+        machines:
+          automaticSnapshot.machines,
+
+        manualWorkDates:
+          coloredResult?.summary?.manualWorkDates
+          ||
+          coloredResult?.manualWorkDates
+          ||
+          lastPayload?.manualWorkDates
+          ||
+          [],
+        dailyTeamOverrides: draft.dailyTeamOverrides || coloredResult?.summary?.dailyTeamOverrides || {},
+        preserveAllocationRows: true
       });
     if (isManualScheduleValidationCompatible(restoredDraft)) {
       manualScheduleDraft = restoredDraft;
@@ -4071,9 +19147,29 @@ export function PlanningPage() {
         ? validationTransaction.draft
         : { ...candidateDraft, validation: validationTransaction.validation };
     }
-    draft.currentSimulation = coloredResult;
-    draft.lastPayload = lastPayload;
-    draft.manualScheduleDraft = manualScheduleDraft;
+        draft.currentSimulation =
+      coloredResult;
+
+    draft.lastPayload =
+      lastPayload;
+
+    draft.manualScheduleDraft =
+      manualScheduleDraft;
+
+
+    draft.plannedReceipts =
+      JSON.parse(
+        JSON.stringify(
+          manualScheduleDraft
+            ?.plannedReceipts
+          ||
+          draft.plannedReceipts
+          ||
+          []
+        )
+      );
+
+
     draft.automaticBaseline = currentAutomaticBaseline
       ? cloneAutomaticBaselineValue(currentAutomaticBaseline)
       : null;
@@ -4087,6 +19183,7 @@ export function PlanningPage() {
     const resultsTarget = target.querySelector('.planning-results');
     const timelineTarget = target.querySelector('.timeline-target');
     const flowsTarget = target.querySelector('.production-flows-target');
+    const materialsTarget = target.querySelector('.planning-materials-program-target');
     const notice = target.querySelector('.unsimulated-notice');
     const oldSummaryPanel = target.querySelector('.final-summary-panel');
     if (oldSummaryPanel) oldSummaryPanel.hidden = true;
@@ -4099,13 +19196,42 @@ export function PlanningPage() {
       requestAnimationFrame,
       productionTheme
     });
+    if (materialsTarget) {
+      materialsTarget.innerHTML = renderPlanningMaterialsToSchedule(coloredResult);
+      bindPlanningMaterialsToScheduleDrag(materialsTarget);
+    }
     if (notice) notice.hidden = true;
     target.querySelector('.recalculate-planning')?.toggleAttribute('hidden', true);
     target.querySelector('.planning-flow-shell')?.toggleAttribute('hidden', false);
     resultsTarget.hidden = false;
-    const saveButton = target.querySelector('[name="save"]');
-    if (saveButton) saveButton.disabled = !canWritePlanning;
-  }
+    const saveButton =
+  target.querySelector(
+    '[name="save"]'
+  );
+
+
+if (saveButton) {
+
+  const theoretical =
+    draft.planningMode
+    === 'theoretical';
+
+
+  saveButton.disabled =
+    !canWritePlanning
+    ||
+    theoretical;
+
+
+  saveButton.title =
+    theoretical
+
+      ? 'O salvamento de cenários teóricos será habilitado na próxima etapa.'
+
+      : '';
+}
+
+}
 
   function refreshTimelineOnly() {
     if (!currentSimulation) return;
@@ -4119,6 +19245,7 @@ export function PlanningPage() {
     draft.manualScheduleDraft = manualScheduleDraft;
     refreshPlanningStockProjection();
     renderProductionCalendar(timelineTarget, currentSimulation, { stockAlerts: currentPlanningStockAlerts });
+    refreshPlanningMaterialsToSchedule();
   }
 
   function markPlanningInconsistent() {
@@ -4129,14 +19256,60 @@ export function PlanningPage() {
   }
 
   function restoreSimulation(form) {
-    if (!currentSimulation) return;
-    const wasPending = hasPendingSimulationChanges;
-    renderSimulation(currentSimulation, form, { restoreManualDraft: true });
-    hasPendingSimulationChanges = wasPending;
-    const notice = target.querySelector('.unsimulated-notice');
-    if (notice) notice.hidden = !hasPendingSimulationChanges;
-    target.querySelector('.recalculate-planning')?.toggleAttribute('hidden', !hasPendingSimulationChanges);
+  if (!currentSimulation) return;
+
+  const wasPending =
+    hasPendingSimulationChanges;
+
+  renderSimulation(
+    currentSimulation,
+    form,
+    {
+      restoreManualDraft: true
+    }
+  );
+
+  hasPendingSimulationChanges =
+    wasPending;
+
+  const allProductionsReady =
+    draft.productions.every(
+      production => (
+        findMaterialById(
+          materials,
+          production.materialId
+        )
+        &&
+        Number(
+          production.plannedQty
+        ) > 0
+      )
+    );
+
+  const showPendingNotice =
+    hasPendingSimulationChanges
+    &&
+    allProductionsReady;
+
+  const notice =
+    target.querySelector(
+      '.unsimulated-notice'
+    );
+
+  if (notice) {
+    notice.hidden =
+      !showPendingNotice;
   }
+
+  target
+    .querySelector(
+      '.recalculate-planning'
+    )
+    ?.toggleAttribute(
+      'hidden',
+      !showPendingNotice
+    );
+}
 
   function summaryCards(result, planningCode) {
     const firstOperation = result.operations[0];
@@ -4472,10 +19645,33 @@ export function PlanningPage() {
       allocations: automaticSnapshot.allocations
     });
     manualScheduleDraft = loaded.manualScheduleDraft;
-    draft.lastPayload = lastPayload;
-    draft.currentSimulation = currentSimulation;
-    draft.manualScheduleDraft = manualScheduleDraft;
-    draft.automaticBaseline = cloneAutomaticBaselineValue(currentAutomaticBaseline);
+        draft.lastPayload =
+      lastPayload;
+
+    draft.currentSimulation =
+      currentSimulation;
+
+    draft.manualScheduleDraft =
+      manualScheduleDraft;
+
+
+    draft.plannedReceipts =
+      JSON.parse(
+        JSON.stringify(
+          manualScheduleDraft
+            ?.plannedReceipts
+          ||
+          draft.plannedReceipts
+          ||
+          []
+        )
+      );
+
+
+    draft.automaticBaseline =
+      cloneAutomaticBaselineValue(
+        currentAutomaticBaseline
+      );
     manualScheduleHistory.resetFromCurrent();
     saveDraftNow();
     activeTab = 'simulation';
@@ -4501,7 +19697,8 @@ export function PlanningPage() {
       <div class="planning-builder-panel">
         <form class="planning-form">
           <div class="planning-builder-layout">
-            <article class="planning-subcard planning-date-card">
+
+  <article class="planning-subcard planning-date-card">
               <div class="planning-subcard-header">
                 <h2>Data inicial do planejamento</h2>
               </div>
@@ -4541,6 +19738,15 @@ export function PlanningPage() {
         </form>
       </div>
       <div class="planning-results" hidden>
+        <div
+  class="panel planning-materials-program-panel"
+  data-planning-unallocation-target="true"
+>
+          <div class="section-heading">
+            <h2>Materiais a programar</h2>
+          </div>
+          <div class="planning-materials-program-target"></div>
+        </div>
         <div class="panel calendar-panel">
           <div class="section-heading">
             <h2>Calend&aacute;rio de produ&ccedil;&atilde;o</h2>
@@ -4558,6 +19764,13 @@ export function PlanningPage() {
     const form = target.querySelector('form');
     const shiftsTarget = target.querySelector('.shifts-target');
     const productionsTarget = target.querySelector('.productions-target');
+    const modePillsTarget =
+  page.querySelector(
+    '[data-planning-mode-pills]'
+  );
+
+
+renderPlanningModePills();
     renderProductionCalendar(target.querySelector('.timeline-target'), { days: [], operations: [], calendarOperations: [] });
     restoreSimulation(form);
 
@@ -4594,9 +19807,617 @@ export function PlanningPage() {
       target.querySelector('.planning-flow-shell')?.toggleAttribute('hidden', true);
       const flowsTarget = target.querySelector('.production-flows-target');
       if (flowsTarget) flowsTarget.innerHTML = '';
+      const materialsTarget = target.querySelector('.planning-materials-program-target');
+      if (materialsTarget) materialsTarget.innerHTML = '';
       renderProductionCalendar(target.querySelector('.timeline-target'), { days: [], operations: [], calendarOperations: [] });
       saveDraftNow();
     }
+
+        const materialsTarget =
+      target.querySelector(
+        '.planning-materials-program-target'
+      );
+
+    const timelineTarget =
+      target.querySelector(
+        '.timeline-target'
+      );
+
+
+    let planningProgramSelection =
+      null;
+
+
+    function planningProgramSelectionForCard(
+      card
+    ) {
+      if (!card) {
+        return null;
+      }
+
+
+      /*
+       * TRANSPORTE
+       */
+      const transportCard =
+        card.classList.contains(
+          'planning-transport-program-card'
+        )
+          ? card
+          : null;
+
+
+      if (transportCard) {
+
+        const transport =
+          planningTransportCardByKey(
+            transportCard
+              .dataset
+              .transportKey
+          );
+
+
+        if (!transport) {
+          return null;
+        }
+
+
+        return {
+          material:
+            transport,
+
+          compatibleMachineIds: [
+            'Transporte'
+          ],
+
+          compatibleMachines: [
+            {
+              machineId:
+                'Transporte',
+
+              machineName:
+                'Transporte'
+            }
+          ]
+        };
+      }
+
+
+      /*
+       * MATERIAL PRODUTIVO NORMAL
+       */
+      if (
+        card.classList.contains(
+          'is-blocked'
+        )
+
+        ||
+
+        card.classList.contains(
+          'is-completed'
+        )
+      ) {
+        return null;
+      }
+
+
+      const material =
+        planningMaterialToScheduleByOperationId(
+          card.dataset.operationId
+        );
+
+
+      if (
+        !material
+        || material.blocked
+        || material.completed
+      ) {
+        return null;
+      }
+
+
+      const compatibleMachines =
+        compatiblePlanningMachinesForMaterial(
+          material
+        );
+
+
+      return {
+        material,
+
+        compatibleMachineIds:
+          compatibleMachines.map(
+            machine =>
+              String(
+                machine.machineId
+              )
+          ),
+
+        compatibleMachines
+      };
+    }
+
+
+    function clearPlanningProgramSelection() {
+
+      planningProgramSelection =
+        null;
+
+
+      materialsTarget
+        ?.querySelectorAll?.(
+          '[data-planning-gantt-select]'
+        )
+        .forEach(input => {
+          input.checked = false;
+        });
+
+
+      materialsTarget
+        ?.querySelectorAll?.(
+          '[data-selected-for-gantt="true"]'
+        )
+        .forEach(card => {
+          delete card
+            .dataset
+            .selectedForGantt;
+        });
+
+
+      const calendar =
+        planningScheduleRendererHost
+          ?.getRootElement?.()
+
+        ||
+
+        target.querySelector(
+          '.gantt-aps'
+        );
+
+
+      calendar?.removeAttribute?.(
+        'data-planning-material-click-mode'
+      );
+
+
+      /*
+       * Usa o mesmo encerramento usado
+       * pelo drag tradicional.
+       */
+      dispatchPlanningMaterialDragToGantt(
+        'end'
+      );
+    }
+
+
+    function selectPlanningProgramCard(
+      card
+    ) {
+      const selection =
+        planningProgramSelectionForCard(
+          card
+        );
+
+
+      if (!selection) {
+        return false;
+      }
+
+
+      /*
+       * Só pode existir UM card selecionado.
+       */
+      clearPlanningProgramSelection();
+
+
+      planningProgramSelection =
+        selection;
+
+
+      card.dataset.selectedForGantt =
+        'true';
+
+
+      const checkbox =
+        card.querySelector(
+          '[data-planning-gantt-select]'
+        );
+
+
+      if (checkbox) {
+        checkbox.checked = true;
+      }
+
+
+      /*
+       * ESTE É O MESMO EVENTO DO DRAG.
+       *
+       * Portanto o Gantt continua decidindo:
+       *
+       * verde  = máquina compatível
+       * vermelho = máquina incompatível
+       */
+      dispatchPlanningMaterialDragToGantt(
+        'start',
+        selection
+      );
+
+
+      const calendar =
+        planningScheduleRendererHost
+          ?.getRootElement?.()
+
+        ||
+
+        target.querySelector(
+          '.gantt-aps'
+        );
+
+
+      /*
+       * Só serve para habilitar clique
+       * nas células enquanto há um card
+       * selecionado.
+       */
+      calendar?.setAttribute?.(
+        'data-planning-material-click-mode',
+        'true'
+      );
+
+
+      return true;
+    }
+
+
+    /*
+     * CHECKBOX DO CARD
+     */
+    materialsTarget?.addEventListener(
+      'change',
+      event => {
+
+        const checkbox =
+          event.target?.closest?.(
+            '[data-planning-gantt-select]'
+          );
+
+
+        if (!checkbox) {
+          return;
+        }
+
+
+        const card =
+          checkbox.closest(
+            '.planning-material-program-card'
+          );
+
+
+        /*
+         * Desmarcou o mesmo card.
+         */
+        if (!checkbox.checked) {
+
+          if (
+            card
+              ?.dataset
+              ?.selectedForGantt
+            === 'true'
+          ) {
+            clearPlanningProgramSelection();
+          }
+
+          return;
+        }
+
+
+        if (
+          !selectPlanningProgramCard(
+            card
+          )
+        ) {
+          checkbox.checked = false;
+        }
+      }
+    );
+
+
+    /*
+     * CLIQUE NO GANTT DEPOIS
+     * QUE UM CARD FOI SELECIONADO.
+     */
+    timelineTarget?.addEventListener(
+      'click',
+      async event => {
+
+        if (!planningProgramSelection) {
+          return;
+        }
+
+
+        const cell =
+          event.target?.closest?.(
+            '.gantt-aps__drop-cell[data-date][data-resource-id]'
+          );
+
+
+        /*
+         * Clique em cabeçalho, nome da máquina,
+         * barra existente etc.
+         */
+        if (!cell) {
+          return;
+        }
+
+
+        event.preventDefault?.();
+        event.stopPropagation?.();
+
+
+        const machineId =
+          String(
+            cell.dataset.resourceId
+            || ''
+          );
+
+
+        const date =
+          String(
+            cell.dataset.date
+            || ''
+          ).slice(
+            0,
+            10
+          );
+
+
+        const isCompatible =
+          planningProgramSelection
+            .compatibleMachineIds
+            .map(String)
+            .includes(
+              machineId
+            );
+
+
+        if (
+          !isCompatible
+          || !isValidDateOnly(date)
+        ) {
+
+          toast(
+            new Error(
+              'Este material não pode ser programado nesta máquina.'
+            )
+          );
+
+          return;
+        }
+
+
+        const machine =
+          planningProgramSelection
+            .compatibleMachines
+            .find(item => (
+              String(
+                item?.machineId
+                || ''
+              )
+              ===
+              machineId
+            ));
+
+
+        /*
+         * Guardamos antes de limpar,
+         * pois é o material que será
+         * enviado para o mesmo modal
+         * usado no drag.
+         */
+        const material =
+          planningProgramSelection.material;
+
+
+        clearPlanningProgramSelection();
+
+
+        await handlePlanningMaterialDropPreview({
+          material,
+
+          to: {
+            date,
+
+            machineId,
+
+            machineName:
+              machine?.machineName
+              || machineId
+          }
+        });
+      }
+    );
+
+
+    materialsTarget?.addEventListener(
+  'dragstart',
+  event => {
+
+    /*
+     * Se o usuário resolver arrastar,
+     * sai do modo checkbox e continua
+     * funcionando como antes.
+     */
+    clearPlanningProgramSelection();
+
+    /*
+     * TRANSPORTE
+     */
+    const transportCard =
+      event.target?.closest?.(
+        '.planning-transport-program-card'
+      );
+
+
+    if (transportCard) {
+
+      const transport =
+        planningTransportCardByKey(
+          transportCard
+            .dataset
+            .transportKey
+        );
+
+
+      if (!transport) {
+        event.preventDefault?.();
+        return;
+      }
+
+
+      transportCard.dataset.dragging =
+        'true';
+
+
+      event.dataTransfer?.setData?.(
+        'text/plain',
+
+        `Transporte - ${
+          transport.materialName
+        }`
+      );
+
+
+      if (
+        event.dataTransfer
+      ) {
+        event.dataTransfer.effectAllowed =
+          'copy';
+      }
+
+
+      /*
+       * ÚNICO destino permitido:
+       * resource lógico Transporte.
+       */
+      dispatchPlanningMaterialDragToGantt(
+        'start',
+        {
+          material:
+            transport,
+
+          compatibleMachineIds: [
+            'Transporte'
+          ],
+
+          compatibleMachines: [
+            {
+              machineId:
+                'Transporte',
+
+              machineName:
+                'Transporte'
+            }
+          ]
+        }
+      );
+
+
+      return;
+    }
+
+
+    /*
+     * PRODUÇÃO NORMAL
+     */
+    const card =
+      event.target?.closest?.(
+        '.planning-material-program-card'
+      );
+
+
+    if (
+      !card
+
+      ||
+
+      card.classList.contains(
+        'is-blocked'
+      )
+
+      ||
+
+      card.classList.contains(
+        'is-completed'
+      )
+    ) {
+      event.preventDefault?.();
+      return;
+    }
+
+
+    const material =
+      planningMaterialToScheduleByOperationId(
+        card.dataset.operationId
+      );
+
+
+    if (
+      !material
+      || material.blocked
+    ) {
+      event.preventDefault?.();
+      return;
+    }
+
+
+    const compatibleMachines =
+      compatiblePlanningMachinesForMaterial(
+        material
+      );
+
+
+    card.dataset.dragging =
+      'true';
+
+
+    event.dataTransfer?.setData?.(
+      'text/plain',
+
+      material.materialName
+      || material.operationId
+    );
+
+
+    if (
+      event.dataTransfer
+    ) {
+      event.dataTransfer.effectAllowed =
+        'copy';
+    }
+
+
+    dispatchPlanningMaterialDragToGantt(
+      'start',
+      {
+        material,
+
+        compatibleMachineIds:
+          compatibleMachines.map(
+            machine =>
+              String(
+                machine.machineId
+              )
+          ),
+
+        compatibleMachines
+      }
+    );
+  }
+);
+    materialsTarget?.addEventListener('dragend', event => {
+      event.target?.closest?.('.planning-material-program-card')?.removeAttribute?.('data-dragging');
+      dispatchPlanningMaterialDragToGantt('end');
+    });
 
     function moveProductionPriority(fromIndex, toIndex) {
       if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return false;
@@ -4630,23 +20451,196 @@ export function PlanningPage() {
       card.querySelector('.planning-subcard-header').appendChild(popover);
     }
 
-    function queueSimulationRefresh() {
-      if (!currentSimulation) return;
-      if (!draft.productions.every(production => findMaterialById(materials, production.materialId) && Number(production.plannedQty) > 0)) {
-        hasPendingSimulationChanges = true;
-        const notice = target.querySelector('.unsimulated-notice');
-        if (notice) notice.hidden = false;
-        return;
-      }
-      clearTimeout(recalculationTimer);
-      recalculationTimer = setTimeout(() => withOperationLoading('Organizando produção...', simulateCurrent).catch(toast), 250);
-    }
+    function renderPlanningModePills() {
 
-    function updateDraftFromGeneral() {
-      draft.planningStartDate = form.elements.planningStartDate.value;
-      draft.setupHours = form.elements.setupHours?.value || '';
+  if (!modePillsTarget) {
+    return;
+  }
+
+
+  modePillsTarget.innerHTML = `
+    <button
+      type="button"
+      class="planning-mode-pill ${
+        draft.planningMode
+        !== 'theoretical'
+          ? 'is-active'
+          : ''
+      }"
+      data-planning-mode="real"
+    >
+      Real
+    </button>
+
+    <button
+      type="button"
+      class="planning-mode-pill ${
+        draft.planningMode
+        === 'theoretical'
+          ? 'is-active'
+          : ''
+      }"
+      data-planning-mode="theoretical"
+      title="Ignora estoque e calcula toda a cadeia produtiva."
+    >
+      Te&oacute;rico
+    </button>
+  `;
+
+
+  modePillsTarget
+    .querySelectorAll(
+      '[data-planning-mode]'
+    )
+    .forEach(button => {
+
+      button.addEventListener(
+        'click',
+        () => {
+
+          const nextMode =
+            button.dataset
+              .planningMode
+            === 'theoretical'
+
+              ? 'theoretical'
+
+              : 'real';
+
+
+          if (
+            draft.planningMode
+            === nextMode
+          ) {
+            return;
+          }
+
+
+          draft.planningMode =
+            nextMode;
+
+
+          /*
+           * A simulação anterior pertence
+           * ao outro modo.
+           */
+          closeCalendarAfterProductionPriorityChange();
+
+
+          saveDraftNow();
+
+
+          renderPlanningModePills();
+
+
+          /*
+           * Não precisa mais apertar Simular.
+           */
+          queueSimulationRefresh({
+            immediate: true
+          });
+        }
+      );
+
+    });
+}
+
+    function queueSimulationRefresh(
+  {
+    immediate = false
+  } = {}
+) {
+
+  clearTimeout(
+    recalculationTimer
+  );
+
+
+  const ready =
+    draft.productions
+      .every(production => (
+        findMaterialById(
+          materials,
+          production.materialId
+        )
+
+        &&
+
+        Number(
+          production.plannedQty
+        ) > 0
+      ));
+
+
+  if (!ready) {
+
+  hasPendingSimulationChanges =
+    true;
+
+
+  const notice =
+    target.querySelector(
+      '.unsimulated-notice'
+    );
+
+
+  if (notice) {
+    notice.hidden =
+      true;
+  }
+
+
+  target
+    .querySelector(
+      '.recalculate-planning'
+    )
+    ?.toggleAttribute(
+      'hidden',
+      true
+    );
+
+
+  return;
+}
+
+
+  hasPendingSimulationChanges =
+    true;
+
+
+  recalculationTimer =
+    setTimeout(
+      () => {
+
+        withOperationLoading(
+          'Atualizando simulação...',
+
+          () =>
+            simulateCurrent({
+              captureAutomaticBaseline:
+                true
+            })
+        )
+          .catch(toast);
+
+      },
+
+      immediate
+        ? 0
+        : 500
+    );
+}
+
+        function updateDraftFromGeneral() {
+      draft.planningStartDate =
+        form.elements.planningStartDate.value;
+
+      draft.setupHours =
+        form.elements.setupHours?.value || '';
+
       queueAutosave();
     }
+
 
     function handleProductionInput(event, scope = productionsTarget) {
       const card = event.target.closest('[data-production-id]');
@@ -4683,7 +20677,12 @@ export function PlanningPage() {
         production.peopleCount = '';
         production.transports = [];
         renderMaterialSuggestions(event.target.closest('.material-autocomplete') || scope, production);
-        if (material) rerenderProductionsBuilder();
+        if (material) {
+
+  rerenderProductionsBuilder();
+
+  queueSimulationRefresh();
+}
       }
       queueAutosave();
       if (event.target.name !== 'materialSearch') queueSimulationRefresh();
@@ -4762,8 +20761,9 @@ export function PlanningPage() {
           current.peopleCount = '';
           current.transports = [];
           renderMaterialSuggestions(event.target.closest('.material-autocomplete') || dialog, current);
-          if (material) {
+                    if (material) {
             backdrop.querySelector('.production-details-target').innerHTML = renderProductionDetailsFields(current, draft.productions.indexOf(current));
+            queueSimulationRefresh();
           }
         } else {
           queueSimulationRefresh();
@@ -4811,8 +20811,9 @@ export function PlanningPage() {
         production.transports = [];
         hasPendingSimulationChanges = true;
         saveDraftNow();
-        backdrop.querySelector('.production-details-target').innerHTML = renderProductionDetailsFields(production, index);
+                backdrop.querySelector('.production-details-target').innerHTML = renderProductionDetailsFields(production, index);
         rerenderProductionsBuilder();
+        queueSimulationRefresh();
       });
       page.appendChild(backdrop);
       dialog.querySelector('input, select, button')?.focus();
@@ -5004,7 +21005,7 @@ export function PlanningPage() {
         saveDraftNow();
         closeColorPalette();
         if (currentSimulation) {
-          renderSimulation(currentSimulation, form);
+          renderSimulation(currentSimulation, form, { restoreManualDraft: true });
         } else {
           rerenderProductionsBuilder();
         }
@@ -5071,38 +21072,550 @@ export function PlanningPage() {
     });
 
     async function simulateCurrent({ captureAutomaticBaseline = true } = {}) {
-      const preservedDailyTeamOverrides = JSON.parse(JSON.stringify(manualScheduleDraft?.dailyTeamOverrides || draft.dailyTeamOverrides || {}));
-      const preservedManualWorkDates = [...(manualScheduleDraft?.manualWorkDates || draft.manualWorkDates || lastPayload?.manualWorkDates || [])];
-      if (manualScheduleDraft?.dirty) {
-        const discard = confirm('Existem alteracoes manuais no calendario. Recalcular automaticamente descartara essas alteracoes.');
-        if (!discard) return null;
-        manualScheduleDraft = null;
-        draft.manualScheduleDraft = null;
-      }
-      draft.dailyTeamOverrides = preservedDailyTeamOverrides;
-      draft.manualWorkDates = preservedManualWorkDates;
-      updateDraftFromGeneral();
-      if (!validateDraft(form)) return null;
-      lastPayload = payload();
-      draft.lastPayload = lastPayload;
-      let result = applySkippedProductionCascade(await simulatePlanningRequest(lastPayload));
+      const previousPayload =
+  lastPayload
+    ? JSON.parse(
+        JSON.stringify(
+          lastPayload
+        )
+      )
+    : null;
+
+
+const preservedManualDraft =
+  manualScheduleDraft?.dirty
+
+    ? JSON.parse(
+        JSON.stringify(
+          manualScheduleDraft
+        )
+      )
+
+    : null;
+
+
+const preservedDailyTeamOverrides =
+  JSON.parse(
+    JSON.stringify(
+      manualScheduleDraft
+        ?.dailyTeamOverrides
+
+      ||
+
+      draft.dailyTeamOverrides
+
+      ||
+
+      {}
+    )
+  );
+
+
+const preservedManualWorkDates = [
+  ...(
+    manualScheduleDraft
+      ?.manualWorkDates
+
+    ||
+
+    draft.manualWorkDates
+
+    ||
+
+    lastPayload
+      ?.manualWorkDates
+
+    ||
+
+    []
+  )
+];
+
+
+draft.dailyTeamOverrides =
+  preservedDailyTeamOverrides;
+
+
+draft.manualWorkDates =
+  preservedManualWorkDates;
+
+
+updateDraftFromGeneral();
+
+
+if (!validateDraft(form)) {
+  return null;
+}
+
+
+const nextPayload =
+  payload();
+
+
+const previousProductions =
+  Array.isArray(
+    previousPayload
+      ?.productions
+  )
+    ? previousPayload.productions
+    : [];
+
+
+const nextProductions =
+  Array.isArray(
+    nextPayload
+      ?.productions
+  )
+    ? nextPayload.productions
+    : [];
+
+
+const productionSignature =
+  production =>
+    JSON.stringify({
+      materialId:
+        String(
+          production
+            ?.materialId
+          ?? ''
+        ),
+
+      plannedQty:
+        Number(
+          production
+            ?.plannedQty
+          || 0
+        ),
+
+      plannedUnit:
+        String(
+          production
+            ?.plannedUnit
+          || ''
+        ),
+
+      machineName:
+        String(
+          production
+            ?.machineName
+          || ''
+        ),
+
+      peopleCount:
+        Number(
+          production
+            ?.peopleCount
+          || 0
+        ),
+
+      productionModelName:
+        String(
+          production
+            ?.productionModelName
+          || ''
+        )
+    });
+
+
+const samePlanningBase =
+  Boolean(
+    previousPayload
+  )
+
+  &&
+
+  String(
+    previousPayload
+      ?.planningMode
+    || 'real'
+  )
+  ===
+  String(
+    nextPayload
+      ?.planningMode
+    || 'real'
+  )
+
+  &&
+
+  String(
+    previousPayload
+      ?.planningStartDate
+    || ''
+  )
+  ===
+  String(
+    nextPayload
+      ?.planningStartDate
+    || ''
+  )
+
+  &&
+
+  Number(
+    previousPayload
+      ?.setupHours
+    || 0
+  )
+  ===
+  Number(
+    nextPayload
+      ?.setupHours
+    || 0
+  )
+
+  &&
+
+  JSON.stringify(
+    previousPayload
+      ?.shifts
+    || []
+  )
+  ===
+  JSON.stringify(
+    nextPayload
+      ?.shifts
+    || []
+  );
+
+
+const canPreserveManualSchedule =
+  Boolean(
+    preservedManualDraft
+  )
+
+  &&
+
+  samePlanningBase
+
+  &&
+
+  nextProductions.length
+  >=
+  previousProductions.length
+
+  &&
+
+  previousProductions.every(
+    (production, index) =>
+      productionSignature(
+        production
+      )
+      ===
+      productionSignature(
+        nextProductions[
+          index
+        ]
+      )
+  );
+
+
+if (
+  manualScheduleDraft?.dirty
+  &&
+  !canPreserveManualSchedule
+) {
+
+  const discard =
+    confirm(
+      'Existem alteracoes manuais no calendario. Recalcular automaticamente descartara essas alteracoes.'
+    );
+
+
+  if (!discard) {
+    return null;
+  }
+
+
+  manualScheduleDraft =
+    null;
+
+
+  draft.manualScheduleDraft =
+    null;
+
+} else if (
+  canPreserveManualSchedule
+) {
+
+  /*
+   * Adicionou uma produção nova:
+   * mantém intacto tudo que já estava
+   * alocado manualmente no Gantt.
+   */
+  manualScheduleDraft =
+    preservedManualDraft;
+
+
+  draft.manualScheduleDraft =
+    preservedManualDraft;
+}
+
+
+lastPayload =
+  nextPayload;
+
+
+draft.lastPayload =
+  lastPayload;
+
+
+let result =
+  applySkippedProductionCascade(
+    await simulatePlanningRequest(
+      lastPayload
+    )
+  );
       if (syncStockOnlyMaterialsFromSimulation(result)) {
         lastPayload = payload();
         draft.lastPayload = lastPayload;
         result = applySkippedProductionCascade(await simulatePlanningRequest(lastPayload));
       }
-      for (let shortageAttempt = 0; shortageAttempt < 3; shortageAttempt += 1) {
-        const shortageDecision = await requestProductionShortageDecisions(result);
-        if (shortageDecision.action === 'cancel') return null;
-        if (shortageDecision.action !== 'apply') break;
-        const shortageChanged = applyProductionShortageDecisions(shortageDecision.decisions);
-        if (!shortageChanged) break;
-        rerenderProductionsBuilder();
-        lastPayload = payload();
-        draft.lastPayload = lastPayload;
-        result = applySkippedProductionCascade(await simulatePlanningRequest(lastPayload));
-      }
-      if (!Array.isArray(result?.operations) || !result.operations.length) {
+         if (
+  draft.planningMode
+  === 'theoretical'
+) {
+
+  for (
+    let modelAttempt = 0;
+    modelAttempt < 5;
+    modelAttempt += 1
+  ) {
+
+    const theoreticalDecision =
+      await requestTheoreticalMaterialChoices(
+        result
+      );
+
+
+    if (
+      theoreticalDecision.action
+      === 'cancel'
+    ) {
+      return null;
+    }
+
+
+    if (
+      theoreticalDecision.action
+      !== 'apply'
+    ) {
+      break;
+    }
+
+
+    const changed =
+      applyProductionShortageDecisions(
+        theoreticalDecision.decisions
+      );
+
+
+    if (!changed) {
+      break;
+    }
+
+
+    rerenderProductionsBuilder();
+
+
+    lastPayload =
+      payload();
+
+
+    draft.lastPayload =
+      lastPayload;
+
+
+    result =
+      applySkippedProductionCascade(
+        await simulatePlanningRequest(
+          lastPayload
+        )
+      );
+  }
+
+} else {
+
+  for (
+    let shortageAttempt = 0;
+    shortageAttempt < 3;
+    shortageAttempt += 1
+  ) {
+
+    const shortageDecision =
+      await requestProductionShortageDecisions(
+        result
+      );
+
+
+    if (
+      shortageDecision.action
+      === 'cancel'
+    ) {
+      return null;
+    }
+
+
+    if (
+      shortageDecision.action
+      !== 'apply'
+    ) {
+      break;
+    }
+
+
+        const shortageChanged =
+      applyProductionShortageDecisions(
+        shortageDecision.decisions,
+        shortageDecision.plannedReceipts
+      );
+
+
+    if (!shortageChanged) {
+      break;
+    }
+
+
+    rerenderProductionsBuilder();
+
+
+    lastPayload =
+      payload();
+
+
+    draft.lastPayload =
+      lastPayload;
+
+
+    result =
+      applySkippedProductionCascade(
+        await simulatePlanningRequest(
+          lastPayload
+        )
+      );
+  }
+
+  /*
+ * Depois de resolver falta de matéria-prima,
+ * verificamos mínimo/máximo dos materiais.
+ */
+if (
+  draft.planningMode
+  ===
+  'real'
+) {
+
+  for (
+    let stockLimitAttempt = 0;
+    stockLimitAttempt < 5;
+    stockLimitAttempt += 1
+  ) {
+
+    const stockLimitDecision =
+      await requestPlanningStockLimitDecision(
+        result
+      );
+
+
+    /*
+     * Nenhum limite foi violado.
+     */
+    if (
+      stockLimitDecision.action
+      ===
+      'none'
+    ) {
+      break;
+    }
+
+
+    /*
+     * Usuário decidiu cancelar tudo.
+     */
+    if (
+      stockLimitDecision.action
+      ===
+      'cancel'
+    ) {
+      return null;
+    }
+
+
+    /*
+     * Usuário sabe do risco
+     * e quer continuar mesmo assim.
+     */
+    if (
+      stockLimitDecision.action
+      ===
+      'override'
+    ) {
+      break;
+    }
+
+
+    /*
+     * Usuário aceitou a sugestão
+     * ou informou outra quantidade.
+     */
+    if (
+      stockLimitDecision.action
+      !==
+      'apply'
+    ) {
+      break;
+    }
+
+
+    const changed =
+      applyPlanningStockLimitQuantities(
+        stockLimitDecision.quantities
+      );
+
+
+    if (
+      !changed
+    ) {
+      break;
+    }
+
+
+    /*
+     * Atualiza os cards lá em cima.
+     */
+    rerenderProductionsBuilder();
+
+
+    /*
+     * Simula tudo novamente.
+     *
+     * Isso é importante:
+     * não confiamos apenas na conta sugerida.
+     * O planejador inteiro confirma
+     * se a nova quantidade realmente funciona.
+     */
+    lastPayload =
+      payload();
+
+
+    draft.lastPayload =
+      lastPayload;
+
+
+    result =
+      applySkippedProductionCascade(
+
+        await simulatePlanningRequest(
+          lastPayload
+        )
+
+      );
+
+  }
+
+}
+}
+            if (!Array.isArray(result?.operations) || !result.operations.length) {
         await requestEmptyProductionSimulationNotice();
         currentSimulation = null;
         manualScheduleDraft = null;
@@ -5111,7 +21624,63 @@ export function PlanningPage() {
         saveDraftNow();
         return null;
       }
-      renderSimulation(result, form, { captureAutomaticBaseline });
+
+      /*
+       * REAL:
+       * a simulação decide se precisa produzir
+       * olhando o saldo agregado.
+       *
+       * O planejamento manual precisa de outra
+       * informação: ONDE esse saldo está.
+       *
+       * Portanto congelamos no resultado o
+       * snapshot atual material + local.
+       */
+      if (
+        draft.planningMode
+        === 'real'
+      ) {
+        try {
+          /*
+           * Não reaproveita estoque antigo de
+           * outra simulação da mesma tela.
+           */
+          stockOverviewCache =
+            null;
+
+          const currentStockRows =
+            await loadStockOverviewRows();
+
+          result = {
+            ...result,
+
+            manualPlanningLocalStockSnapshot:
+              manualPlanningLocalStockSnapshotFromOverviewRows(
+                currentStockRows
+              )
+          };
+
+        } catch (error) {
+          console.warn(
+            'Nao foi possivel carregar o estoque por local para o transporte manual.',
+            error
+          );
+        }
+      }
+
+      renderSimulation(
+  result,
+  form,
+  {
+    captureAutomaticBaseline,
+
+    manualFoundation:
+      true,
+
+    restoreManualDraft:
+      canPreserveManualSchedule
+  }
+);
       return result;
     }
 
@@ -5971,37 +22540,136 @@ export function PlanningPage() {
       }
     });
 
-    target.querySelector('[name="save"]')?.addEventListener('click', async () => {
+        target.querySelector('[name="save"]')?.addEventListener('click', async () => {
       if (!canWritePlanning) return;
+
       try {
-        let simulation = currentSimulation;
-        if (manualScheduleDraft?.allocations?.length && currentSimulation) {
-          const snapshot = buildProductionCalendarSnapshot(currentSimulation, { ignoreManualDraft: true });
-          const validationTransaction = applyManualScheduleTransaction({
-            currentDraft: manualScheduleDraft,
-            intent: { type: 'VALIDATE_DRAFT' },
-            draftContext: { validatedAt: new Date().toISOString() },
-            validationContext: currentManualScheduleValidationContext(snapshot)
-          });
-          manualScheduleDraft = validationTransaction.draft;
-          draft.manualScheduleDraft = manualScheduleDraft;
-          if (!validationTransaction.accepted) {
-            throw new Error(validationTransaction.blockingIssues?.[0]?.message || 'O calendário manual possui erros bloqueantes.');
+        let simulation =
+          currentSimulation;
+
+        if (
+          manualScheduleDraft?.allocations?.length
+          && currentSimulation
+        ) {
+          const snapshot =
+            buildProductionCalendarSnapshot(
+              currentSimulation,
+              {
+                ignoreManualDraft: true
+              }
+            );
+
+          const validationTransaction =
+            applyManualScheduleTransaction({
+              currentDraft:
+                manualScheduleDraft,
+
+              intent: {
+                type:
+                  'VALIDATE_DRAFT'
+              },
+
+              draftContext: {
+                validatedAt:
+                  new Date()
+                    .toISOString()
+              },
+
+              validationContext:
+                currentManualScheduleValidationContext(
+                  snapshot
+                )
+            });
+
+          manualScheduleDraft =
+            validationTransaction.draft;
+
+          draft.manualScheduleDraft =
+            manualScheduleDraft;
+
+          if (
+            !validationTransaction.accepted
+          ) {
+            throw new Error(
+              validationTransaction
+                .blockingIssues?.[0]
+                ?.message
+              ||
+              'O calendário manual possui erros bloqueantes.'
+            );
           }
+
           refreshTimelineOnly();
         } else {
-          simulation = await withOperationLoading('Recalculando produção...', simulateCurrent);
+          simulation =
+            await withOperationLoading(
+              'Recalculando produção...',
+              simulateCurrent
+            );
         }
-        if (!simulation) return;
-        draft.planningCode = draft.planningCode || generatePlanningCode(draft.productions.length);
-        lastPayload = normalizePlanningPayload(lastPayload || payload(), draft.planningCode);
+
+        if (!simulation) {
+          return;
+        }
+
+        draft.planningCode =
+          draft.planningCode
+          ||
+          generatePlanningCode(
+            draft.productions.length
+          );
+
+        lastPayload =
+          normalizePlanningPayload(
+            lastPayload
+            ||
+            payload(),
+
+            draft.planningCode
+          );
+
         saveDraftNow();
-        openFinalSummaryModal(currentSimulation, draft.planningCode);
-        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `Resumo do planejamento ${draft.planningCode} pronto para lançamento.` }));
+
+        openFinalSummaryModal(
+          currentSimulation,
+          draft.planningCode
+        );
+
+        window.dispatchEvent(
+          new CustomEvent(
+            'planejamento:toast',
+            {
+              detail:
+                `Resumo do planejamento ${draft.planningCode} pronto para lançamento.`
+            }
+          )
+        );
       } catch (error) {
         toast(error);
       }
     });
+
+    const shouldAutoSimulateFromPcp =
+      sessionStorage.getItem(
+        'planejamento_pcp_auto_simulate'
+      ) === '1';
+
+    if (
+      shouldAutoSimulateFromPcp
+    ) {
+      sessionStorage.removeItem(
+        'planejamento_pcp_auto_simulate'
+      );
+
+      try {
+        await withOperationLoading(
+          'Simulando planejamento...',
+          simulateCurrent
+        );
+      } catch (error) {
+        toast(error);
+      }
+    }
   }
 
   async function renderHistoryTab() {

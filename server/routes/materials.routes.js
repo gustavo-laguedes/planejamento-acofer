@@ -65,8 +65,9 @@ async function materialHasLinks(db, row) {
     countIfTableExists(db, 'stock_import_material_balances', 'material_id = $1', [id]),
     countIfTableExists(db, 'stock_location_adjustments', 'material_id = $1', [id]),
     countIfTableExists(db, 'inventory_count_items', 'material_id = $1', [id]),
-    countIfTableExists(db, 'stock_transport_records', 'material_id = $1', [id]),
-    countIfTableExists(db, 'material_purchase_records', 'material_id = $1', [id])
+        countIfTableExists(db, 'stock_transport_records', 'material_id = $1', [id]),
+    countIfTableExists(db, 'material_purchase_records', 'material_id = $1', [id]),
+    countIfTableExists(db, 'purchase_items', 'material_id = $1', [id])
   ];
 
   const counts = await Promise.all(checks);
@@ -98,18 +99,130 @@ function normalizeProductionModels(value, legacyInputs, materialId = null) {
   })).filter(model => model.inputMaterials.length);
 }
 
+function optionalStockLimit(value) {
+  if (
+    value === null
+    || value === undefined
+    || value === ''
+  ) {
+    return null;
+  }
+
+  const parsed =
+    Number(value);
+
+  return Number.isFinite(parsed)
+    ? parsed
+    : NaN;
+}
+
+
 function validateMaterial(body) {
-  const name = String(body.name || '').trim();
-  const primaryUnit = String(body.primaryUnit || '').trim();
-  const secondaryUnit = String(body.secondaryUnit || '').trim();
-  const factor = Number(body.primaryToSecondaryFactor);
+  const name =
+    String(body.name || '').trim();
 
-  if (!name) return { error: 'Nome do material e obrigatorio.' };
-  if (!units.has(primaryUnit)) return { error: 'Unidade principal invalida.' };
-  if (!units.has(secondaryUnit)) return { error: 'Unidade secundaria invalida.' };
-  if (!factor || factor <= 0) return { error: 'Fator entre unidades e obrigatorio.' };
+  const primaryUnit =
+    String(body.primaryUnit || '').trim();
 
-  return { name, primaryUnit, secondaryUnit, factor };
+  const secondaryUnit =
+    String(body.secondaryUnit || '').trim();
+
+  const factor =
+    Number(body.primaryToSecondaryFactor);
+
+  const minimumQuantity =
+    optionalStockLimit(
+      body.minimumQuantity
+    );
+
+  const maximumQuantity =
+    optionalStockLimit(
+      body.maximumQuantity
+    );
+
+
+  if (!name) {
+    return {
+      error:
+        'Nome do material e obrigatorio.'
+    };
+  }
+
+
+  if (!units.has(primaryUnit)) {
+    return {
+      error:
+        'Unidade principal invalida.'
+    };
+  }
+
+
+  if (!units.has(secondaryUnit)) {
+    return {
+      error:
+        'Unidade secundaria invalida.'
+    };
+  }
+
+
+  if (!factor || factor <= 0) {
+    return {
+      error:
+        'Fator entre unidades e obrigatorio.'
+    };
+  }
+
+
+  if (
+    Number.isNaN(
+      minimumQuantity
+    )
+    ||
+    minimumQuantity < 0
+  ) {
+    return {
+      error:
+        'Estoque minimo deve ser vazio ou maior/igual a zero.'
+    };
+  }
+
+
+  if (
+    Number.isNaN(
+      maximumQuantity
+    )
+    ||
+    maximumQuantity < 0
+  ) {
+    return {
+      error:
+        'Estoque maximo deve ser vazio ou maior/igual a zero.'
+    };
+  }
+
+
+  if (
+    minimumQuantity !== null
+    &&
+    maximumQuantity !== null
+    &&
+    maximumQuantity <= minimumQuantity
+  ) {
+    return {
+      error:
+        'Estoque maximo deve ser maior que o estoque minimo.'
+    };
+  }
+
+
+  return {
+    name,
+    primaryUnit,
+    secondaryUnit,
+    factor,
+    minimumQuantity,
+    maximumQuantity
+  };
 }
 
 function materialResponse(row) {
@@ -171,8 +284,30 @@ router.post('/', requirePermission('registrations:write'), async (req, res, next
     const models = normalizeProductionModels(req.body.productionModels, req.body.inputMaterials || req.body.inputMaterialIds);
     const row = await db.begin(async tx => {
       const [created] = await tx`
-        INSERT INTO materials (name, codes, primary_unit, secondary_unit, primary_to_secondary_factor, is_initial_raw_material, permits_sales, active)
-        VALUES (${valid.name}, ${codes}, ${valid.primaryUnit}, ${valid.secondaryUnit}, ${valid.factor}, ${req.body.isInitialRawMaterial === true}, ${req.body.permitsSales !== false}, ${req.body.active !== false})
+        INSERT INTO materials (
+  name,
+  codes,
+  primary_unit,
+  secondary_unit,
+  primary_to_secondary_factor,
+  minimum_quantity,
+  maximum_quantity,
+  is_initial_raw_material,
+  permits_sales,
+  active
+)
+VALUES (
+  ${valid.name},
+  ${codes},
+  ${valid.primaryUnit},
+  ${valid.secondaryUnit},
+  ${valid.factor},
+  ${valid.minimumQuantity},
+  ${valid.maximumQuantity},
+  ${req.body.isInitialRawMaterial === true},
+  ${req.body.permitsSales !== false},
+  ${req.body.active !== false}
+)
         RETURNING *
       `;
       for (const model of models) {
@@ -216,7 +351,9 @@ router.put('/:id', requirePermission('registrations:write'), async (req, res, ne
             primary_unit = ${valid.primaryUnit},
             secondary_unit = ${valid.secondaryUnit},
             primary_to_secondary_factor = ${valid.factor},
-            is_initial_raw_material = ${req.body.isInitialRawMaterial === true},
+minimum_quantity = ${valid.minimumQuantity},
+maximum_quantity = ${valid.maximumQuantity},
+is_initial_raw_material = ${req.body.isInitialRawMaterial === true},
             permits_sales = ${req.body.permitsSales !== false},
             active = ${req.body.active !== false},
             updated_at = now()

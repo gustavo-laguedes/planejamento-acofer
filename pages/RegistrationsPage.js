@@ -88,9 +88,10 @@ export function RegistrationsPage() {
             ${row ? '<button class="danger-button delete-registration" type="button">Excluir</button>' : '<span></span>'}
             <button class="primary-button" type="submit">Salvar</button>
             <button class="secondary-button close-modal" type="button">Cancelar</button>
-          </div>
+                   </div>
         </form>
       `);
+
       const form = modal.querySelector('form');
       form.elements.code.value = row?.code || '';
       form.elements.name.value = row?.name || '';
@@ -210,7 +211,34 @@ export function RegistrationsPage() {
           { label: 'Unidade principal', key: 'primary_unit' },
           { label: 'Unidade secundária', key: 'secondary_unit' },
           { label: 'Fator', key: 'primary_to_secondary_factor' },
-          { label: 'Matéria-prima inicial', render: row => row.is_initial_raw_material ? 'Sim' : 'Não' },
+
+{
+  label: 'Estoque mínimo',
+
+  render: row =>
+    row.minimum_quantity === null
+    ||
+    row.minimum_quantity === undefined
+
+      ? '-'
+
+      : `${row.minimum_quantity} ${row.primary_unit || ''}`
+},
+
+{
+  label: 'Estoque máximo',
+
+  render: row =>
+    row.maximum_quantity === null
+    ||
+    row.maximum_quantity === undefined
+
+      ? '-'
+
+      : `${row.maximum_quantity} ${row.primary_unit || ''}`
+},
+
+{ label: 'Matéria-prima inicial', render: row => row.is_initial_raw_material ? 'Sim' : 'Não' },
           { label: 'Permite vendas', render: row => row.permits_sales === false ? 'Não' : 'Sim' },
           { label: 'Modelos de produção', render: row => formatProductionModels(row.production_models || row.input_materials) },
           { label: 'Status', render: row => row.active ? 'Ativo' : 'Inativo' },
@@ -228,8 +256,147 @@ export function RegistrationsPage() {
           <label>Nome do material<input name="name" required /></label>
           <label>Unidade principal<select name="primaryUnit" required><option value="un">un</option><option value="kg">kg</option></select></label>
           <label>Unidade secundária<select name="secondaryUnit" required><option value="un">un</option><option value="kg">kg</option></select></label>
-          <label>Fator fixo<input name="primaryToSecondaryFactor" type="number" step="0.001" min="0.001" required /></label>
-          <label class="checkbox-line wide-field"><input name="isInitialRawMaterial" type="checkbox" /> Matéria-prima inicial</label>
+          <label>
+  Fator fixo
+  <input
+    name="primaryToSecondaryFactor"
+    type="number"
+    step="0.001"
+    min="0.001"
+    required
+  />
+</label>
+
+<div class="material-stock-limits wide-field">
+
+  <div class="material-stock-limit-card">
+    <div class="material-stock-limit-heading">
+      <strong>Estoque mínimo</strong>
+      <span>Limite inferior desejado</span>
+    </div>
+
+    <div class="material-stock-limit-values">
+
+      <label class="material-stock-limit-control">
+        <span>Quantidade</span>
+
+        <div class="material-stock-limit-input">
+          <input
+            name="minimumQuantity"
+            type="number"
+            step="0.001"
+            min="0"
+            placeholder="Sem limite"
+          />
+
+          <span
+            class="material-stock-limit-unit"
+            data-stock-limit-unit
+          >
+            un
+          </span>
+        </div>
+      </label>
+
+
+      <span
+        class="material-stock-limit-conversion"
+        aria-hidden="true"
+      >
+        ↔
+      </span>
+
+
+      <label class="material-stock-limit-control">
+        <span>Peso equivalente</span>
+
+        <div class="material-stock-limit-input">
+          <input
+            name="minimumWeightKg"
+            type="number"
+            step="0.001"
+            min="0"
+            placeholder="Peso"
+          />
+
+          <span class="material-stock-limit-unit">
+            kg
+          </span>
+        </div>
+      </label>
+
+    </div>
+  </div>
+
+
+  <div class="material-stock-limit-card">
+    <div class="material-stock-limit-heading">
+      <strong>Estoque máximo</strong>
+      <span>Limite superior desejado</span>
+    </div>
+
+    <div class="material-stock-limit-values">
+
+      <label class="material-stock-limit-control">
+        <span>Quantidade</span>
+
+        <div class="material-stock-limit-input">
+          <input
+            name="maximumQuantity"
+            type="number"
+            step="0.001"
+            min="0"
+            placeholder="Sem limite"
+          />
+
+          <span
+            class="material-stock-limit-unit"
+            data-stock-limit-unit
+          >
+            un
+          </span>
+        </div>
+      </label>
+
+
+      <span
+        class="material-stock-limit-conversion"
+        aria-hidden="true"
+      >
+        ↔
+      </span>
+
+
+      <label class="material-stock-limit-control">
+        <span>Peso equivalente</span>
+
+        <div class="material-stock-limit-input">
+          <input
+            name="maximumWeightKg"
+            type="number"
+            step="0.001"
+            min="0"
+            placeholder="Peso"
+          />
+
+          <span class="material-stock-limit-unit">
+            kg
+          </span>
+        </div>
+      </label>
+
+    </div>
+  </div>
+
+</div>
+
+<label class="checkbox-line wide-field">
+  <input
+    name="isInitialRawMaterial"
+    type="checkbox"
+  />
+  Matéria-prima inicial
+</label>
           <label class="checkbox-line wide-field"><input name="permitsSales" type="checkbox" /> Permite vendas</label>
           <label class="wide-field">Códigos atrelados<div class="codes-target"></div></label>
           <div class="wide-field consumed-selector-block">
@@ -244,16 +411,479 @@ export function RegistrationsPage() {
             <button class="primary-button" type="submit">Salvar</button>
             <button class="secondary-button close-modal" type="button">Cancelar</button>
           </div>
-        </form>
+                </form>
       `);
+
+      modal
+        .querySelector('.modal')
+        ?.classList.add('material-registration-modal');
+
       const form = modal.querySelector('form');
       modal.querySelector('.codes-target').appendChild(codeInput.element);
       renderProductionModels(modal, selectedModels, row?.id || null);
       form.elements.name.value = row?.name || '';
       form.elements.primaryUnit.value = row?.primary_unit || 'un';
       form.elements.secondaryUnit.value = row?.secondary_unit || 'kg';
-      form.elements.primaryToSecondaryFactor.value = row?.primary_to_secondary_factor || '';
-      form.elements.isInitialRawMaterial.checked = row?.is_initial_raw_material === true;
+      form.elements.primaryToSecondaryFactor.value =
+  row?.primary_to_secondary_factor
+  || '';
+
+form.elements.minimumQuantity.value =
+  row?.minimum_quantity
+  ?? '';
+
+form.elements.maximumQuantity.value =
+  row?.maximum_quantity
+  ?? '';
+
+form.elements.isInitialRawMaterial.checked =
+  row?.is_initial_raw_material
+  === true;
+
+
+const stockLimitFieldValue =
+  value => {
+
+    const number =
+      Number(value);
+
+    if (
+      !Number.isFinite(number)
+    ) {
+      return '';
+    }
+
+    return String(
+      Number(
+        number.toFixed(3)
+      )
+    );
+  };
+
+
+const stockLimitCanConvertToKg =
+  () => {
+
+    const primaryUnit =
+      form.elements
+        .primaryUnit
+        .value;
+
+    const secondaryUnit =
+      form.elements
+        .secondaryUnit
+        .value;
+
+    const factor =
+      Number(
+        form.elements
+          .primaryToSecondaryFactor
+          .value
+      );
+
+
+    /*
+     * Se a própria unidade principal
+     * já for kg, a conversão é direta.
+     */
+    if (
+      primaryUnit === 'kg'
+    ) {
+      return true;
+    }
+
+
+    /*
+     * Exemplo:
+     *
+     * unidade principal = un
+     * unidade secundária = kg
+     * fator = 0,212
+     */
+    return (
+      secondaryUnit === 'kg'
+      &&
+      Number.isFinite(factor)
+      &&
+      factor > 0
+    );
+  };
+
+
+const stockLimitPrimaryToKg =
+  value => {
+
+    if (
+      value === ''
+      ||
+      value === null
+      ||
+      value === undefined
+    ) {
+      return '';
+    }
+
+
+    const quantity =
+      Number(value);
+
+
+    if (
+      !Number.isFinite(quantity)
+    ) {
+      return '';
+    }
+
+
+    const primaryUnit =
+      form.elements
+        .primaryUnit
+        .value;
+
+
+    if (
+      primaryUnit === 'kg'
+    ) {
+      return quantity;
+    }
+
+
+    const secondaryUnit =
+      form.elements
+        .secondaryUnit
+        .value;
+
+    const factor =
+      Number(
+        form.elements
+          .primaryToSecondaryFactor
+          .value
+      );
+
+
+    if (
+      secondaryUnit !== 'kg'
+      ||
+      !Number.isFinite(factor)
+      ||
+      !(factor > 0)
+    ) {
+      return '';
+    }
+
+
+    return quantity * factor;
+  };
+
+
+const stockLimitKgToPrimary =
+  value => {
+
+    if (
+      value === ''
+      ||
+      value === null
+      ||
+      value === undefined
+    ) {
+      return '';
+    }
+
+
+    const weight =
+      Number(value);
+
+
+    if (
+      !Number.isFinite(weight)
+    ) {
+      return '';
+    }
+
+
+    const primaryUnit =
+      form.elements
+        .primaryUnit
+        .value;
+
+
+    if (
+      primaryUnit === 'kg'
+    ) {
+      return weight;
+    }
+
+
+    const secondaryUnit =
+      form.elements
+        .secondaryUnit
+        .value;
+
+    const factor =
+      Number(
+        form.elements
+          .primaryToSecondaryFactor
+          .value
+      );
+
+
+    if (
+      secondaryUnit !== 'kg'
+      ||
+      !Number.isFinite(factor)
+      ||
+      !(factor > 0)
+    ) {
+      return '';
+    }
+
+
+    return weight / factor;
+  };
+
+
+const syncStockLimitUnits =
+  () => {
+
+    const primaryUnit =
+      form.elements
+        .primaryUnit
+        .value
+      || '';
+
+
+    modal
+      .querySelectorAll(
+        '[data-stock-limit-unit]'
+      )
+      .forEach(
+        target => {
+
+          target.textContent =
+            primaryUnit;
+
+        }
+      );
+
+  };
+
+
+const syncStockLimitWeightAvailability =
+  () => {
+
+    const available =
+      stockLimitCanConvertToKg();
+
+
+    [
+      form.elements.minimumWeightKg,
+      form.elements.maximumWeightKg
+    ]
+      .forEach(
+        input => {
+
+          input.disabled =
+            !available;
+
+
+          input.placeholder =
+            available
+              ? 'Peso'
+              : 'Sem conversão';
+
+        }
+      );
+
+  };
+
+
+const syncMinimumWeightFromQuantity =
+  () => {
+
+    const weight =
+      stockLimitPrimaryToKg(
+        form.elements
+          .minimumQuantity
+          .value
+      );
+
+
+    form.elements
+      .minimumWeightKg
+      .value =
+        weight === ''
+          ? ''
+          : stockLimitFieldValue(
+              weight
+            );
+
+  };
+
+
+const syncMaximumWeightFromQuantity =
+  () => {
+
+    const weight =
+      stockLimitPrimaryToKg(
+        form.elements
+          .maximumQuantity
+          .value
+      );
+
+
+    form.elements
+      .maximumWeightKg
+      .value =
+        weight === ''
+          ? ''
+          : stockLimitFieldValue(
+              weight
+            );
+
+  };
+
+
+const syncMinimumQuantityFromWeight =
+  () => {
+
+    const quantity =
+      stockLimitKgToPrimary(
+        form.elements
+          .minimumWeightKg
+          .value
+      );
+
+
+    form.elements
+      .minimumQuantity
+      .value =
+        quantity === ''
+          ? ''
+          : stockLimitFieldValue(
+              quantity
+            );
+
+  };
+
+
+const syncMaximumQuantityFromWeight =
+  () => {
+
+    const quantity =
+      stockLimitKgToPrimary(
+        form.elements
+          .maximumWeightKg
+          .value
+      );
+
+
+    form.elements
+      .maximumQuantity
+      .value =
+        quantity === ''
+          ? ''
+          : stockLimitFieldValue(
+              quantity
+            );
+
+  };
+
+
+const syncAllStockLimitWeights =
+  () => {
+
+    syncStockLimitUnits();
+
+    syncStockLimitWeightAvailability();
+
+    syncMinimumWeightFromQuantity();
+
+    syncMaximumWeightFromQuantity();
+
+  };
+
+
+/*
+ * Abriu o modal:
+ * já mostra imediatamente os pesos.
+ */
+syncAllStockLimitWeights();
+
+
+/*
+ * Mudou quantidade mínima →
+ * recalcula peso mínimo.
+ */
+form.elements
+  .minimumQuantity
+  .addEventListener(
+    'input',
+    syncMinimumWeightFromQuantity
+  );
+
+
+/*
+ * Mudou peso mínimo →
+ * recalcula quantidade mínima.
+ */
+form.elements
+  .minimumWeightKg
+  .addEventListener(
+    'input',
+    syncMinimumQuantityFromWeight
+  );
+
+
+/*
+ * Mudou quantidade máxima →
+ * recalcula peso máximo.
+ */
+form.elements
+  .maximumQuantity
+  .addEventListener(
+    'input',
+    syncMaximumWeightFromQuantity
+  );
+
+
+/*
+ * Mudou peso máximo →
+ * recalcula quantidade máxima.
+ */
+form.elements
+  .maximumWeightKg
+  .addEventListener(
+    'input',
+    syncMaximumQuantityFromWeight
+  );
+
+
+/*
+ * Se mudar unidade ou fator,
+ * recalcula os pesos automaticamente.
+ */
+form.elements
+  .primaryUnit
+  .addEventListener(
+    'change',
+    syncAllStockLimitWeights
+  );
+
+
+form.elements
+  .secondaryUnit
+  .addEventListener(
+    'change',
+    syncAllStockLimitWeights
+  );
+
+
+form.elements
+  .primaryToSecondaryFactor
+  .addEventListener(
+    'input',
+    syncAllStockLimitWeights
+  );
       form.elements.permitsSales.checked = row?.permits_sales !== false;
       form.addEventListener('submit', async event => {
         event.preventDefault();
@@ -262,8 +892,43 @@ export function RegistrationsPage() {
           codes: codeInput.getCodes(),
           primaryUnit: form.elements.primaryUnit.value,
           secondaryUnit: form.elements.secondaryUnit.value,
-          primaryToSecondaryFactor: Number(form.elements.primaryToSecondaryFactor.value),
-          isInitialRawMaterial: form.elements.isInitialRawMaterial.checked,
+          primaryToSecondaryFactor:
+  Number(
+    form.elements
+      .primaryToSecondaryFactor
+      .value
+  ),
+
+minimumQuantity:
+  form.elements
+    .minimumQuantity
+    .value === ''
+
+    ? null
+
+    : Number(
+        form.elements
+          .minimumQuantity
+          .value
+      ),
+
+maximumQuantity:
+  form.elements
+    .maximumQuantity
+    .value === ''
+
+    ? null
+
+    : Number(
+        form.elements
+          .maximumQuantity
+          .value
+      ),
+
+isInitialRawMaterial:
+  form.elements
+    .isInitialRawMaterial
+    .checked,
           permitsSales: form.elements.permitsSales.checked,
           productionModels: getProductionModels(modal),
           active: true

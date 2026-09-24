@@ -1,5 +1,6 @@
-import {
+﻿import {
   buildGanttApsWindow,
+  civilDayNumber,
   ganttApsProductionIdentity,
   GANTT_APS_DEFAULT_PIXELS_PER_HOUR,
   orderGanttApsResources,
@@ -121,6 +122,7 @@ function quantityLabel(task) {
 
 function dailyCapacityValue(task) {
   const candidates = [
+    task?.nominalDailyCapacity,
     task?.maxDailyCapacity,
     task?.capacityMaxPerDay,
     task?.dailyMaxCapacity,
@@ -135,6 +137,41 @@ function dailyCapacityValue(task) {
 }
 
 function quantityCapacityLabel(task) {
+  if (
+  task?.scheduleType === 'transport'
+  ||
+  task?.transportId
+) {
+  const quantity =
+    formatNumber(
+      task?.quantity
+    );
+
+  const total =
+    formatNumber(
+      task?.transportTotalQuantity
+      ??
+      task?.totalQuantity
+      ??
+      task?.requiredQuantity
+      ??
+      task?.quantity
+    );
+
+  const unit =
+    String(
+      task?.unit
+      || ''
+    );
+
+  return `${
+    quantity
+  } / ${
+    total
+  } ${
+    unit
+  }`.trim();
+}
   const quantity = quantityLabel(task);
   if (quantity === '—' || quantity === 'Não atribuída') return quantity;
   const capacity = dailyCapacityValue(task);
@@ -245,11 +282,244 @@ function dayProductivityLabel(day = {}) {
   return `Prod.: ${formatNumber(productivity.productivePeople)} / ${formatNumber(productivity.availablePeople)} (${formatPercent(productivity.percent)})`;
 }
 
-function dayStockAlertLabel(day = {}) {
-  const alert = day.stockAlert || {};
-  const count = Number(alert.count);
-  if (!Number.isFinite(count) || count <= 0) return 'Estoque: OK';
-  return `Estoque: ${count} alerta(s)`;
+/*
+ * Resumo textual dos alertas de estoque do dia.
+ *
+ * Essa função é usada:
+ * - no tooltip do cabeçalho;
+ * - no painel lateral do dia;
+ * - no resumo das bolinhas de estoque.
+ */
+function dayStockAlertLabel(
+  day = {}
+) {
+  const alert =
+    day?.stockAlert || {};
+
+  const items = [
+    [
+      'Zerado',
+      Number(
+        alert.zeroedCount || 0
+      )
+    ],
+
+    [
+      'Crítico',
+      Number(
+        alert.criticalCount || 0
+      )
+    ],
+
+    [
+      'Atenção',
+      Number(
+        alert.attentionCount || 0
+      )
+    ],
+
+    [
+      'Abaixo da meta',
+      Number(
+        alert.belowTargetCount || 0
+      )
+    ]
+  ].filter(
+    (
+      [
+        ,
+        count
+      ]
+    ) =>
+      Number.isFinite(count)
+      &&
+      count > 0
+  );
+
+  if (!items.length) {
+    return 'Estoque: OK';
+  }
+
+  return `Estoque: ${
+    items
+      .map(
+        (
+          [
+            label,
+            count
+          ]
+        ) =>
+          `${label} ${formatNumber(
+            count,
+            0
+          )}`
+      )
+      .join(' · ')
+  }`;
+}
+
+
+function dayHasCapacityWarning(
+  day = {}
+) {
+  const peakPeople =
+    Number(
+      day?.team?.peakPeople
+    );
+
+  const availablePeople =
+    Number(
+      day?.team?.availablePeople
+    );
+
+  const productivityPercent =
+    Number(
+      day?.productivity?.percent
+    );
+
+  return (
+    (
+      Number.isFinite(
+        peakPeople
+      )
+      &&
+      Number.isFinite(
+        availablePeople
+      )
+      &&
+      peakPeople
+        > availablePeople
+    )
+    ||
+    (
+      Number.isFinite(
+        productivityPercent
+      )
+      &&
+      productivityPercent > 100
+    )
+  );
+}
+
+function buildDayStockSummary(
+  day = {}
+) {
+  const alert =
+    day?.stockAlert || {};
+
+  const summary =
+    element(
+      'span',
+      'gantt-aps__day-stock-summary'
+    );
+
+  const items = [
+    [
+      'zeroed',
+      Number(
+        alert.zeroedCount || 0
+      ),
+      'Zerado'
+    ],
+
+    [
+      'critical',
+      Number(
+        alert.criticalCount || 0
+      ),
+      'Crítico'
+    ],
+
+    [
+      'attention',
+      Number(
+        alert.attentionCount || 0
+      ),
+      'Atenção'
+    ],
+
+    [
+      'below-target',
+      Number(
+        alert.belowTargetCount || 0
+      ),
+      'Abaixo da meta'
+    ]
+  ].filter(
+    (
+      [
+        ,
+        count
+      ]
+    ) =>
+      Number.isFinite(count)
+      &&
+      count > 0
+  );
+
+  summary.setAttribute(
+    'aria-label',
+    dayStockAlertLabel(day)
+  );
+
+  summary.title =
+    dayStockAlertLabel(day);
+
+  if (!items.length) {
+    summary.append(
+      element(
+        'span',
+        'gantt-aps__day-stock-ok',
+        'Est. OK'
+      )
+    );
+
+    return summary;
+  }
+
+  items.forEach(
+    (
+      [
+        key,
+        count,
+        label
+      ]
+    ) => {
+      const item =
+        element(
+          'span',
+          `gantt-aps__day-stock-item gantt-aps__day-stock-item--${key}`
+        );
+
+      item.title =
+        `${label}: ${formatNumber(
+          count,
+          0
+        )}`;
+
+      item.append(
+        element(
+          'span',
+          'gantt-aps__day-stock-dot'
+        ),
+
+        element(
+          'strong',
+          '',
+          formatNumber(
+            count,
+            0
+          )
+        )
+      );
+
+      summary.append(
+        item
+      );
+    }
+  );
+
+  return summary;
 }
 
 function dayStatusLabel(day = {}) {
@@ -319,7 +589,7 @@ function ganttApsApplyBarHorizontalInset(left, width) {
   };
 }
 
-function ganttApsVisualBarGeometry(geometry, window, pixelsPerHour, dayWidth, capacityPercent, startCapacityPercent = 0) {
+function ganttApsVisualBarGeometry(geometry, window, pixelsPerHour, dayWidth, capacityPercent) {
   const rangeStart = window.startDay * 1440;
   const rangeEnd = (window.endDay + 1) * 1440;
   const clippedStart = Math.max(geometry.start, rangeStart);
@@ -348,8 +618,7 @@ function ganttApsVisualBarGeometry(geometry, window, pixelsPerHour, dayWidth, ca
   }
 
   const startDay = Math.floor(geometry.start / 1440);
-  const startOffsetPercent = ganttApsVisualCapacityPercent(startCapacityPercent) ?? 0;
-  const visualLeft = ((startDay - window.startDay) * dayWidth) + (dayWidth * startOffsetPercent / 100);
+  const visualLeft = (startDay - window.startDay) * dayWidth;
   const visibleTimelineWidth = (window.endDay - window.startDay + 1) * dayWidth;
   if (visualLeft < 0 || visualLeft >= visibleTimelineWidth) {
     const insetGeometry = ganttApsApplyBarHorizontalInset(clippedLeft, clippedWidth);
@@ -368,6 +637,124 @@ function ganttApsVisualBarGeometry(geometry, window, pixelsPerHour, dayWidth, ca
     left: insetGeometry.left,
     width: insetGeometry.width,
     clipped: clippedStart !== geometry.start || clippedEnd !== geometry.end
+  };
+}
+
+function ganttApsTransportVisualBarGeometry(
+  task = {},
+  window = {},
+  dayWidth = 0
+) {
+  const startDay =
+    civilDayNumber(
+      task?.start?.date
+      ?? task?.date
+    );
+
+  const endDay =
+    civilDayNumber(
+      task?.end?.date
+      ?? task?.endDate
+      ?? task?.start?.date
+      ?? task?.date
+    );
+
+
+  if (
+    startDay === null
+    ||
+    endDay === null
+    ||
+    window?.startDay == null
+    ||
+    window?.endDay == null
+  ) {
+    return null;
+  }
+
+
+  /*
+   * Para o transporte, o horário
+   * 23:58 -> 23:59 existe somente
+   * para a REGRA DE ESTOQUE.
+   *
+   * Visualmente o Gantt trabalha
+   * pelas DATAS do transporte.
+   */
+  const firstDay =
+    Math.max(
+      startDay,
+      window.startDay
+    );
+
+
+  const actualLastDay =
+    Math.max(
+      endDay,
+      startDay
+    );
+
+
+  const lastDay =
+    Math.min(
+      actualLastDay,
+      window.endDay
+    );
+
+
+  if (
+    lastDay < firstDay
+  ) {
+    return null;
+  }
+
+
+  const left =
+    (
+      firstDay
+      - window.startDay
+    )
+    * dayWidth;
+
+
+  /*
+   * Mesmo dia:
+   *
+   * 23 -> 23
+   * = 1 coluna inteira.
+   *
+   * Dias diferentes:
+   *
+   * 23 -> 24
+   * = 2 colunas.
+   */
+  const width =
+    (
+      lastDay
+      - firstDay
+      + 1
+    )
+    * dayWidth;
+
+
+  const insetGeometry =
+    ganttApsApplyBarHorizontalInset(
+      left,
+      width
+    );
+
+
+  return {
+    left:
+      insetGeometry.left,
+
+    width:
+      insetGeometry.width,
+
+    clipped:
+      firstDay !== startDay
+      ||
+      lastDay !== actualLastDay
   };
 }
 
@@ -518,67 +905,193 @@ function isNonWorkingDay(day) {
   return weekDay === 0 || weekDay === 6;
 }
 
-function buildInspectPanel(task, machineName, { canEdit = false, canSplit = false, canTransport = false } = {}) {
-  const panel = element('aside', 'gantt-aps__inspect');
-  panel.style.setProperty('--gantt-aps-production-background', ganttApsProductionBackground(task));
-  panel.setAttribute('aria-live', 'polite');
-  const heading = element('h3', '', productionColumnLabel(task));
-  const close = element('button', 'gantt-aps__inspect-close', '×');
-  close.type = 'button';
-  close.dataset.action = 'close-inspect';
-  close.setAttribute('aria-label', 'Fechar inspeção');
-  const header = element('div', 'gantt-aps__inspect-header');
-  header.append(heading, close);
-  panel.append(header);
+function buildInspectPanel(
+  task,
+  machineName
+) {
+  const panel =
+    element(
+      'aside',
+      'gantt-aps__inspect'
+    );
 
-  const productions = associatedProductionsLabel(task);
+  panel.style.setProperty(
+    '--gantt-aps-production-background',
+    ganttApsProductionBackground(
+      task
+    )
+  );
+
+  panel.setAttribute(
+    'aria-live',
+    'polite'
+  );
+
+  const heading =
+    element(
+      'h3',
+      '',
+      productionColumnLabel(
+        task
+      )
+    );
+
+  const close =
+    element(
+      'button',
+      'gantt-aps__inspect-close',
+      '×'
+    );
+
+  close.type =
+    'button';
+
+  close.dataset.action =
+    'close-inspect';
+
+  close.setAttribute(
+    'aria-label',
+    'Fechar inspeção'
+  );
+
+  const header =
+    element(
+      'div',
+      'gantt-aps__inspect-header'
+    );
+
+  header.append(
+    heading,
+    close
+  );
+
+  panel.append(
+    header
+  );
+
+  const productions =
+    associatedProductionsLabel(
+      task
+    );
+
   const fields = [
-    ...(productions ? [['Produções', productions]] : []),
-    ['Etapa', stageLabel(task)],
-    ['Material', materialLabel(task)],
-    ['Máquina', machineName],
-    ['Quantidade / Capacidade', quantityCapacityLabel(task)],
-    ['Pessoas', formatNumber(task.peopleCount, 0)],
-    ['Início', `${formatDate(task.start?.date)} ${task.start?.time || '—'}`],
-    ['Término', `${formatDate(task.end?.date)} ${task.end?.time || '—'}`],
-    ['Duração', formatMinutes(task.durationMinutes)],
-    ['Capacidade utilizada', formatPercent(task.capacityPercent)],
-    ['Posicao intradiaria', `${formatPercent(task.startCapacityPercent)} -> ${formatPercent(task.endCapacityPercent)}`],
-    ['Allocation ID', task.id]
+    ...(
+      productions
+        ? [
+            [
+              'Produções',
+              productions
+            ]
+          ]
+        : []
+    ),
+
+    [
+      'Etapa',
+      stageLabel(task)
+    ],
+
+    [
+      'Material',
+      materialLabel(task)
+    ],
+
+    [
+      'Máquina',
+      machineName
+    ],
+
+    [
+      'Quantidade / Capacidade',
+      quantityCapacityLabel(
+        task
+      )
+    ],
+
+    [
+      'Pessoas',
+      formatNumber(
+        task.peopleCount,
+        0
+      )
+    ],
+
+    [
+      'Início',
+      formatDate(
+        task.start?.date
+      )
+    ],
+
+    [
+      'Término',
+      formatDate(
+        task.end?.date
+      )
+    ],
+
+    [
+      'Duração',
+      formatMinutes(
+        task.durationMinutes
+      )
+    ],
+
+    [
+      'Capacidade utilizada',
+      formatPercent(
+        task.capacityPercent
+      )
+    ],
+
+    [
+      'Posição intradiária',
+      `${formatPercent(
+        task.startCapacityPercent
+      )} → ${formatPercent(
+        task.endCapacityPercent
+      )}`
+    ],
+
+    [
+      'Allocation ID',
+      task.id
+    ]
   ];
-  const list = element('dl', 'gantt-aps__inspect-fields');
-  fields.forEach(([label, value]) => {
-    list.append(element('dt', '', label), element('dd', '', value || '—'));
-  });
-  panel.append(list);
-  if (canEdit || canSplit || canTransport) {
-    const actions = element('div', 'gantt-aps__inspect-actions');
-    if (canEdit) {
-      const edit = element('button', 'gantt-aps__inspect-close', 'Editar');
-      edit.type = 'button';
-      edit.dataset.action = 'edit-allocation';
-      edit.dataset.allocationId = String(task.id);
-      edit.setAttribute('aria-label', `Editar alocação ${task.id}`);
-      actions.append(edit);
+
+  const list =
+    element(
+      'dl',
+      'gantt-aps__inspect-fields'
+    );
+
+  fields.forEach(
+    (
+      [
+        label,
+        value
+      ]
+    ) => {
+      list.append(
+        element(
+          'dt',
+          '',
+          label
+        ),
+
+        element(
+          'dd',
+          '',
+          value || '—'
+        )
+      );
     }
-    if (canSplit) {
-      const split = element('button', 'gantt-aps__inspect-close', 'Dividir');
-      split.type = 'button';
-      split.dataset.action = 'split-allocation';
-      split.dataset.allocationId = String(task.id);
-      split.setAttribute('aria-label', `Dividir alocação ${task.id}`);
-      actions.append(split);
-    }
-    if (canTransport) {
-      const transport = element('button', 'gantt-aps__inspect-close', 'Transporte');
-      transport.type = 'button';
-      transport.dataset.action = 'transport-allocation';
-      transport.dataset.allocationId = String(task.id);
-      transport.setAttribute('aria-label', `Configurar transporte da alocacao ${task.id}`);
-      actions.append(transport);
-    }
-    panel.append(actions);
-  }
+  );
+
+  panel.append(
+    list
+  );
+
   return panel;
 }
 
@@ -607,13 +1120,117 @@ function buildDayDetailsPanel(day, { canEditDaySettings = false } = {}) {
   });
   panel.append(list);
 
-  if (day?.stockAlert?.count > 0 && Array.isArray(day.stockAlert.items)) {
-    const alerts = element('ul', 'gantt-aps__day-alerts');
-    day.stockAlert.items.forEach(item => {
-      alerts.append(element('li', '', `${item.label || item.key || 'Alerta'}: ${formatNumber(item.count, 0)}`));
-    });
-    panel.append(alerts);
-  }
+  if (
+  day?.stockAlert?.count > 0
+  &&
+  Array.isArray(
+    day.stockAlert.items
+  )
+) {
+  const alerts =
+    element(
+      'div',
+      'gantt-aps__day-alerts'
+    );
+
+  day.stockAlert.items.forEach(
+    item => {
+      const key =
+        String(
+          item?.key
+          || 'alert'
+        )
+          .replace(
+            /[^a-z0-9-]/gi,
+            '-'
+          )
+          .toLowerCase();
+
+      const group =
+        element(
+          'section',
+          `gantt-aps__day-alert-group gantt-aps__day-alert-group--${key}`
+        );
+
+      const groupHeader =
+        element(
+          'div',
+          'gantt-aps__day-alert-group-header'
+        );
+
+      groupHeader.append(
+        element(
+          'span',
+          'gantt-aps__day-alert-dot'
+        ),
+
+        element(
+          'strong',
+          '',
+          item.label
+          || item.key
+          || 'Alerta'
+        ),
+
+        element(
+          'span',
+          'gantt-aps__day-alert-count',
+          formatNumber(
+            item.count,
+            0
+          )
+        )
+      );
+
+      group.append(
+        groupHeader
+      );
+
+      const materials =
+        Array.isArray(
+          item?.materials
+        )
+          ? item.materials.filter(
+              Boolean
+            )
+          : [];
+
+      if (
+        materials.length
+      ) {
+        const materialList =
+          element(
+            'ul',
+            'gantt-aps__day-alert-materials'
+          );
+
+        materials.forEach(
+          materialName => {
+            materialList.append(
+              element(
+                'li',
+                '',
+                materialName
+              )
+            );
+          }
+        );
+
+        group.append(
+          materialList
+        );
+      }
+
+      alerts.append(
+        group
+      );
+    }
+  );
+
+  panel.append(
+    alerts
+  );
+}
 
   const actions = element('div', 'gantt-aps__inspect-actions');
   const stock = element('button', 'gantt-aps__inspect-close', 'Estoque');
@@ -692,6 +1309,7 @@ function taskMoveIntent(task, targetDate, resourceId) {
 
 export function createGanttApsRenderer({
   onRequestMove,
+  onRequestUnallocate,
   onRequestEdit,
   onRequestSplit,
   onRequestTransportAllocation,
@@ -702,7 +1320,8 @@ export function createGanttApsRenderer({
   onRequestDiscardAllChanges,
   onRequestOptimizeUtilization,
   onRequestUndoManualChange,
-  onRequestRedoManualChange
+  onRequestRedoManualChange,
+  onRequestPlanningMaterialDrop
 } = {}) {
   let container = null;
   let root = null;
@@ -715,8 +1334,11 @@ export function createGanttApsRenderer({
   let fullscreenListener = null;
   let rowPage = 0;
   let unplacedPage = 0;
+  let renderedResourceKey = null;
   let dragState = null;
+  let planningMaterialDragState = null;
   const collapsedResources = new Set();
+  let collapsedResourcesInitialKey = null;
 
   const clearFocusTimer = () => {
     if (focusTimer === null) return;
@@ -726,6 +1348,7 @@ export function createGanttApsRenderer({
 
   const removeEffects = () => {
     clearFocusTimer();
+    planningMaterialDragState = null;
     if (fullscreenListener) {
       document.removeEventListener?.('fullscreenchange', fullscreenListener);
       fullscreenListener = null;
@@ -735,6 +1358,11 @@ export function createGanttApsRenderer({
     root?.removeEventListener?.('pointermove', onPointerMove);
     root?.removeEventListener?.('pointerup', onPointerUp);
     root?.removeEventListener?.('pointercancel', onPointerCancel);
+    root?.removeEventListener?.('dragover', onPlanningMaterialDragOver);
+    root?.removeEventListener?.('drop', onPlanningMaterialDrop);
+    root?.removeEventListener?.('dragleave', onPlanningMaterialDragLeave);
+    root?.removeEventListener?.('gantt-aps:planning-material-start', onPlanningMaterialDragStart);
+    root?.removeEventListener?.('gantt-aps:planning-material-end', onPlanningMaterialDragEnd);
     root?.remove?.();
     root = null;
   };
@@ -767,7 +1395,7 @@ export function createGanttApsRenderer({
     root.dataset.manualTransport = String(nextModel.capabilities?.manualMove === true && typeof onRequestTransportAllocation === 'function');
     root.dataset.daySettings = String(nextModel.capabilities?.daySettings === true);
     root.dataset.manualDiscard = String(nextModel.capabilities?.manualMove === true && typeof onRequestDiscardAllChanges === 'function');
-    root.dataset.optimizeUtilization = String(nextModel.capabilities?.manualMove === true && typeof onRequestOptimizeUtilization === 'function');
+    root.dataset.optimizeUtilization = 'false';
     root.dataset.manualUndo = String(nextModel.capabilities?.manualMove === true && typeof onRequestUndoManualChange === 'function');
     root.dataset.manualRedo = String(nextModel.capabilities?.manualMove === true && typeof onRequestRedoManualChange === 'function');
     root.setAttribute('aria-label', 'Gantt APS');
@@ -776,6 +1404,11 @@ export function createGanttApsRenderer({
     root.addEventListener('pointermove', onPointerMove);
     root.addEventListener('pointerup', onPointerUp);
     root.addEventListener('pointercancel', onPointerCancel);
+    root.addEventListener('dragover', onPlanningMaterialDragOver);
+    root.addEventListener('drop', onPlanningMaterialDrop);
+    root.addEventListener('dragleave', onPlanningMaterialDragLeave);
+    root.addEventListener('gantt-aps:planning-material-start', onPlanningMaterialDragStart);
+    root.addEventListener('gantt-aps:planning-material-end', onPlanningMaterialDragEnd);
     const stylesheet = element('link');
     stylesheet.rel = 'stylesheet';
     stylesheet.href = new URL('./gantt-aps.css', import.meta.url).href;
@@ -786,8 +1419,7 @@ export function createGanttApsRenderer({
     toolbar.setAttribute('aria-label', 'Controles de visualização do Gantt');
     const titleGroup = element('div', 'gantt-aps__title');
     titleGroup.append(
-      element('strong', '', 'Gantt APS'),
-      element('span', '', 'Somente leitura · agrupado por máquina')
+      element('strong', '', 'Gantt APS')
     );
     const controls = element('div', 'gantt-aps__controls');
     if (nextModel.capabilities?.manualMove === true && typeof onRequestUndoManualChange === 'function') {
@@ -817,14 +1449,6 @@ export function createGanttApsRenderer({
       discard.title = 'Remover todas as edições manuais e restaurar a simulação automática';
       controls.append(discard);
     }
-    if (nextModel.capabilities?.manualMove === true && typeof onRequestOptimizeUtilization === 'function') {
-      const optimize = element('button', 'gantt-aps__optimize', 'Otimizar');
-      optimize.type = 'button';
-      optimize.dataset.action = 'optimize-utilization';
-      optimize.setAttribute('aria-label', 'Otimizar utilizacao do calendario');
-      optimize.title = 'Reorganizar producoes para maximizar pessoas, produtividade e menor tempo';
-      controls.append(optimize);
-    }
     [7, 15, 30].forEach(dayCount => {
       const expand = element('button', 'gantt-aps__horizon-action', `+${dayCount}d`);
       expand.type = 'button';
@@ -851,28 +1475,153 @@ export function createGanttApsRenderer({
     toolbar.append(titleGroup, controls);
     root.append(toolbar);
 
-    const metadataErrors = Array.isArray(nextModel.metadata?.errors)
-      ? nextModel.metadata.errors
-      : [];
-    const metadataWarnings = Array.isArray(nextModel.metadata?.warnings)
-      ? nextModel.metadata.warnings
-      : [];
-    const validationIssues = Array.isArray(nextModel.metadata?.validationIssues)
-      ? nextModel.metadata.validationIssues
-      : [];
-    const diagnosticCount = metadataErrors.length + metadataWarnings.length + validationIssues.length;
-    if (diagnosticCount) {
-      const errorSummary = element(
-        'div',
-        'gantt-aps__error',
-        `${diagnosticCount} diagnostico(s) recebido(s) no snapshot. Dados validos continuam visiveis.`
+    const tasks = Array.isArray(nextModel.tasks) ? nextModel.tasks : [];
+const resources = orderGanttApsResources(nextModel);
+
+const normalizeResourceName = value => String(value ?? '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .replace(/[\s-]+/g, '');
+
+const extractResourceByName =
+  normalizedName => {
+
+    const index =
+      resources.findIndex(
+        resource => [
+          resource?.name,
+          resource?.machineName,
+          resource?.machine_name,
+          resource?.id,
+          resource?.machineId,
+          resource?.machine_id
+        ].some(
+          value =>
+            normalizeResourceName(value)
+            === normalizedName
+        )
       );
-      errorSummary.setAttribute('role', 'status');
-      root.append(errorSummary);
+
+    if (index < 0) {
+      return null;
     }
 
-    const tasks = Array.isArray(nextModel.tasks) ? nextModel.tasks : [];
-    const resources = orderGanttApsResources(nextModel);
+    const [resource] =
+      resources.splice(
+        index,
+        1
+      );
+
+    return resource;
+  };
+
+
+const trefila =
+  extractResourceByName(
+    'trefila'
+  )
+  || {
+    id: 'Trefila',
+    name: 'Trefila',
+    order: -2
+  };
+
+
+const transporte =
+  extractResourceByName(
+    'transporte'
+  )
+  || {
+    id: 'Transporte',
+    name: 'Transporte',
+    order: -1
+  };
+
+
+resources.unshift(
+  {
+    ...transporte,
+    id:
+      transporte.id
+      || 'Transporte',
+    name:
+      'Transporte'
+  }
+);
+
+
+resources.unshift(
+  {
+    ...trefila,
+    id:
+      trefila.id
+      || 'Trefila',
+    name:
+      'Trefila'
+  }
+);
+
+const resourceKey = resources.map(resource => String(resource.id)).join('\u0000');
+    if (renderedResourceKey !== null && renderedResourceKey !== resourceKey) {
+      scrollTop = 0;
+    }
+    renderedResourceKey = resourceKey;
+    if (
+  nextModel.metadata?.visualState
+    ?.groupsCollapsedByDefault === true
+  &&
+  collapsedResourcesInitialKey
+    !== resourceKey
+) {
+  collapsedResources.clear();
+
+  resources.forEach(
+    resource =>
+      collapsedResources.add(
+        String(resource.id)
+      )
+  );
+
+  collapsedResourcesInitialKey =
+    resourceKey;
+
+} else if (
+  nextModel.metadata?.visualState
+    ?.groupsCollapsedByDefault !== true
+) {
+  collapsedResourcesInitialKey =
+    null;
+}
+
+
+/*
+ * Máquinas que possuem produção alocada
+ * devem permanecer abertas.
+ *
+ * Máquinas sem produção continuam
+ * recolhidas.
+ */
+const resourcesWithAllocatedProduction =
+  new Set(
+    tasks
+      .map(
+        task =>
+          String(
+            task?.resourceId ?? ''
+          )
+      )
+      .filter(Boolean)
+  );
+
+
+resourcesWithAllocatedProduction.forEach(
+  resourceId => {
+    collapsedResources.delete(
+      resourceId
+    );
+  }
+);
     if (!resources.length && !tasks.length) {
       const empty = element('div', 'gantt-aps__empty');
       empty.setAttribute('role', 'status');
@@ -948,12 +1697,17 @@ export function createGanttApsRenderer({
     const header = element('div', 'gantt-aps__row gantt-aps__row--header');
     header.setAttribute('role', 'row');
     const tableHeader = element('div', 'gantt-aps__table gantt-aps__table--header');
-    ['Máquina / total', 'Produção', 'Etapa', 'Material', 'Quantidade / Capacidade', 'Pessoas', 'Capacidade utilizada']
+    ['M\u00c1QUINA', 'Produção', 'Material', 'Quantidade / Capacidade', 'Pessoas', 'Capacidade utilizada']
       .forEach((label, index) => {
         const cell = element('div', 'gantt-aps__cell', label);
         cell.setAttribute('role', 'columnheader');
-        if (index === 6) {
-          cell.innerHTML = '<span>CAPACIDADE</span><span>UTILIZADA</span>';
+        if (index === 5) {
+          cell.classList.add('gantt-aps__cell--capacity-used');
+          cell.textContent = '';
+          cell.append(
+            element('span', '', 'CAPACIDADE'),
+            element('span', '', 'UTILIZADA')
+          );
           cell.setAttribute('aria-label', 'Capacidade utilizada');
         }
         tableHeader.append(cell);
@@ -973,17 +1727,92 @@ export function createGanttApsRenderer({
       dayHeader.setAttribute('role', 'button');
       dayHeader.title = dayPanelTitle(day);
       dayHeader.setAttribute('aria-label', dayPanelTitle(day));
-      dayHeader.append(
-        element('strong', '', presentation.dateLabel),
-        element('span', '', presentation.secondaryLabel)
-      );
-      const metrics = element('span', 'gantt-aps__day-metrics');
-      metrics.append(
-        element('span', 'gantt-aps__day-team', dayTeamLabel(day).replace(/^Equipe:\s*/, 'Eq. ')),
-        element('span', 'gantt-aps__day-productivity', dayProductivityLabel(day).replace(/^Prod\.\:\s*/, 'Prod. ')),
-        element('span', 'gantt-aps__day-stock', dayStockAlertLabel(day).replace(/^Estoque:\s*/, 'Est. '))
-      );
-      dayHeader.append(metrics);
+      const titleLine =
+  element(
+    'span',
+    'gantt-aps__day-title-line'
+  );
+
+titleLine.append(
+  element(
+    'strong',
+    '',
+    presentation.dateLabel
+  )
+);
+
+if (
+  dayHasCapacityWarning(
+    day
+  )
+) {
+  const warning =
+    element(
+      'span',
+      'gantt-aps__capacity-warning',
+      '!'
+    );
+
+  warning.title =
+    'Equipe acima do disponível ou produtividade acima de 100%';
+
+  warning.setAttribute(
+    'aria-label',
+    warning.title
+  );
+
+  titleLine.append(
+    warning
+  );
+}
+
+dayHeader.append(
+  titleLine,
+
+  element(
+    'span',
+    '',
+    presentation.secondaryLabel
+  )
+);
+
+const metrics =
+  element(
+    'span',
+    'gantt-aps__day-metrics'
+  );
+
+metrics.append(
+  element(
+    'span',
+    'gantt-aps__day-team',
+    dayTeamLabel(
+      day
+    ).replace(
+      /^Equipe:\s*/,
+      'Eq. '
+    )
+  ),
+
+  element(
+    'span',
+    'gantt-aps__day-productivity',
+    dayProductivityLabel(
+      day
+    ).replace(
+      /^Prod\.\:\s*/,
+      'Prod. '
+    )
+  ),
+
+  buildDayStockSummary(
+    day
+  )
+);
+
+dayHeader.append(
+  metrics
+);
       timelineHeader.append(dayHeader);
     });
     header.append(tableHeader, timelineHeader);
@@ -993,8 +1822,28 @@ export function createGanttApsRenderer({
       const { resource, continuation } = segment;
       const resourceId = String(resource.id);
       const totalResourceTasks = tasks.filter(task => String(task.resourceId ?? '') === resourceId).length;
-      const groupRow = element('div', 'gantt-aps__row gantt-aps__row--group');
-      groupRow.dataset.resourceId = resourceId;
+      const groupRow =
+  element(
+    'div',
+    'gantt-aps__row gantt-aps__row--group'
+  );
+
+groupRow.dataset.resourceId =
+  resourceId;
+
+const isTransportResource =
+  normalizeResourceName(
+    resource?.name
+    || resource?.machineName
+    || resource?.machine_name
+    || resourceId
+  )
+  === 'transporte';
+
+if (isTransportResource) {
+  groupRow.dataset.transportResource =
+    'true';
+}
       groupRow.setAttribute('role', 'row');
       groupRow.setAttribute('aria-level', '1');
       const groupTable = element('div', 'gantt-aps__table gantt-aps__group');
@@ -1006,32 +1855,128 @@ export function createGanttApsRenderer({
       toggle.append(
         element('span', 'gantt-aps__chevron', collapsedResources.has(resourceId) ? '›' : '⌄'),
         element('strong', '', `${resource.name || resource.id}${continuation ? ' (continuação)' : ''}`),
-        element('span', '', totalResourceTasks ? `${totalResourceTasks} alocação(ões)` : 'Sem produção')
+        element(
+  'span',
+  '',
+  isTransportResource
+
+    ? (
+        totalResourceTasks
+          ? `${totalResourceTasks} transporte(s)`
+          : 'Sem transporte'
+      )
+
+    : (
+        totalResourceTasks
+          ? `${totalResourceTasks} alocação(ões)`
+          : 'Sem produção'
+      )
+)
       );
       groupTable.append(toggle);
       const groupTimeline = element('div', 'gantt-aps__timeline gantt-aps__group-timeline');
+      groupTimeline.dataset.resourceId = resourceId;
+      window.days.forEach((day, dayIndex) => {
+        const dropCell = element('span', 'gantt-aps__drop-cell');
+        dropCell.dataset.date = day.date;
+        dropCell.dataset.resourceId = resourceId;
+        dropCell.style.left = `${dayIndex * dayWidth}px`;
+        dropCell.style.width = `${dayWidth}px`;
+        groupTimeline.append(dropCell);
+      });
       groupRow.append(groupTable, groupTimeline);
       viewport.append(groupRow);
 
       if (collapsedResources.has(resourceId)) return;
-      buildGanttApsProductionTotalBlocks(segment.tasks).forEach(totalRow => {
+            buildGanttApsProductionTotalBlocks(segment.tasks).forEach(totalRow => {
         const { task } = totalRow;
-        const geometry = taskGeometry(task, window, pixelsPerHour);
-        if (!geometry) return;
-        const visualBar = ganttApsVisualBarGeometry(geometry, window, pixelsPerHour, dayWidth, task.capacityPercent, task.startCapacityPercent);
-        const row = element('div', 'gantt-aps__row gantt-aps__row--allocation');
-        row.dataset.allocationId = String(task.id);
-        row.dataset.resourceId = resourceId;
+
+
+        /*
+         * Precisamos saber se é transporte
+         * ANTES de calcular a geometria visual.
+         */
+        const isTransportAllocation =
+          task?.scheduleType === 'transport'
+          ||
+          Boolean(
+            task?.transportId
+          );
+
+
+        /*
+         * A geometria REAL continua existindo.
+         *
+         * Ela continua usando 23:58 -> 23:59
+         * e serve para todas as regras normais.
+         */
+        const geometry =
+          taskGeometry(
+            task,
+            window,
+            pixelsPerHour
+          );
+
+
+        if (!geometry) {
+          return;
+        }
+
+
+        /*
+         * TRANSPORTE:
+         * visual baseado nas DATAS.
+         *
+         * PRODUÇÃO:
+         * continua exatamente como antes,
+         * baseada em hora/capacidade.
+         */
+        const visualBar =
+          isTransportAllocation
+
+            ? ganttApsTransportVisualBarGeometry(
+                task,
+                window,
+                dayWidth
+              )
+
+            : ganttApsVisualBarGeometry(
+                geometry,
+                window,
+                pixelsPerHour,
+                dayWidth,
+                task.capacityPercent
+              );
+
+
+        if (!visualBar) {
+          return;
+        }
+
+
+        const row =
+  element(
+    'div',
+    'gantt-aps__row gantt-aps__row--allocation'
+  );
+
+row.dataset.allocationId =
+  String(task.id);
+
+row.dataset.resourceId =
+  resourceId;
+
+
+if (isTransportAllocation) {
+  row.dataset.transportAllocation =
+    'true';
+}
         row.setAttribute('role', 'row');
         row.setAttribute('aria-level', '2');
         const table = element('div', 'gantt-aps__table gantt-aps__allocation-table');
-        const totalLabel = totalRow.total === null
-          ? '—'
-          : `${formatDecimalNumber(totalRow.total)} ${totalRow.unit}`.trim();
         const values = [
-          totalRow.blockStart ? totalLabel : '',
+          '',
           productionColumnLabel(task),
-          stageLabel(task),
           materialLabel(task),
           quantityCapacityLabel(task),
           formatPeople(task.peopleCount),
@@ -1041,22 +1986,12 @@ export function createGanttApsRenderer({
           const cell = element('div', `gantt-aps__cell gantt-aps__cell--${index + 1}`, index === 1 ? undefined : value);
           cell.setAttribute('role', 'gridcell');
           cell.title = value;
-          if (index === 3 || index === 4) cell.setAttribute('aria-label', value);
+          if (index === 2 || index === 3) cell.setAttribute('aria-label', value);
           if (index === 1) {
             const productions = ganttApsProductionVisuals(task);
             cell.dataset.productionCount = String(Math.max(1, productions.length));
             cell.style.setProperty('--gantt-aps-production-background', ganttApsProductionBackground(task));
             cell.append(element('span', 'gantt-aps__production-label', value));
-          }
-          if (index === 0) {
-            cell.dataset.productionTotal = totalRow.blockStart ? 'start' : 'continuation';
-            cell.dataset.productionIdentity = totalRow.identity;
-            if (totalRow.blockStart) {
-              cell.textContent = '';
-              cell.style.setProperty('--gantt-aps-production-total-rows', String(totalRow.rowSpan));
-              cell.append(element('span', 'gantt-aps__production-total', totalLabel));
-              table.dataset.productionTotalStart = 'true';
-            }
           }
           table.append(cell);
         });
@@ -1082,7 +2017,19 @@ export function createGanttApsRenderer({
         bar.type = 'button';
         bar.dataset.allocationId = String(task.id);
         bar.dataset.persistable = String(task.persistable !== false);
-        bar.dataset.draggable = String(nextModel.capabilities?.manualMove === true && task.persistable !== false);
+        const canDragTask =
+  nextModel.capabilities?.manualMove === true
+  &&
+  (
+    task.persistable !== false
+    ||
+    task?.scheduleType === 'transport'
+    ||
+    Boolean(task?.transportId)
+  );
+
+bar.dataset.draggable =
+  String(canDragTask);
         bar.dataset.selected = String(String(task.id) === String(selectedAllocationId));
         bar.dataset.labelDetail = visualBar.width >= 132 ? 'full' : visualBar.width >= 58 ? 'production' : 'none';
         if (visualBar.clipped) bar.dataset.clipped = 'true';
@@ -1156,67 +2103,390 @@ export function createGanttApsRenderer({
     return root;
   };
 
-  const clearDragPresentation = () => {
-    root?.querySelectorAll?.('.gantt-aps__drop-cell[data-drag-target], .gantt-aps__drop-cell[data-drag-invalid]')
+    const clearDragPresentation = () => {
+    root
+      ?.querySelectorAll?.(
+        '.gantt-aps__drop-cell[data-drag-target], .gantt-aps__drop-cell[data-drag-invalid]'
+      )
       .forEach(cell => {
         delete cell.dataset.dragTarget;
         delete cell.dataset.dragInvalid;
       });
-    root?.querySelectorAll?.('.gantt-aps__bar[data-dragging="true"]')
-      .forEach(bar => { delete bar.dataset.dragging; });
+
+    root
+      ?.querySelectorAll?.(
+        '.gantt-aps__bar[data-dragging="true"]'
+      )
+      .forEach(bar => {
+        delete bar.dataset.dragging;
+      });
+
+    /*
+     * Limpa o destaque visual da área
+     * "Materiais a programar".
+     */
+    document
+      .querySelectorAll?.(
+        '[data-planning-unallocation-target="true"][data-gantt-unallocation-active]'
+      )
+      .forEach(target => {
+        delete target.dataset
+          .ganttUnallocationActive;
+
+        target.style.removeProperty(
+          'outline'
+        );
+
+        target.style.removeProperty(
+          'outline-offset'
+        );
+
+        target.style.removeProperty(
+          'box-shadow'
+        );
+      });
   };
 
-  const dragDestinationFromEvent = event => {
-    if (!dragState) return null;
+  const clearPlanningMaterialDragPresentation = () => {
+    root?.querySelectorAll?.('.gantt-aps__drop-cell[data-planning-material-compatible], .gantt-aps__drop-cell[data-planning-material-invalid], .gantt-aps__drop-cell[data-planning-material-target], .gantt-aps__row[data-planning-material-compatible], .gantt-aps__row[data-planning-material-invalid]')
+      .forEach(node => {
+        delete node.dataset.planningMaterialCompatible;
+        delete node.dataset.planningMaterialInvalid;
+        delete node.dataset.planningMaterialTarget;
+      });
+    if (root) delete root.dataset.planningMaterialDrag;
+  };
+
+  const rowDestinationFromEvent = (event, fallbackRow = null) => {
     const pointed = document.elementFromPoint?.(event.clientX, event.clientY) || event.target;
-    const row = pointed?.closest?.('.gantt-aps__row--allocation') || dragState.row;
+    const row = pointed?.closest?.('.gantt-aps__row--allocation')
+      || pointed?.closest?.('.gantt-aps__row--group')
+      || fallbackRow;
     const resourceId = String(row?.dataset?.resourceId ?? '');
-    if (resourceId !== dragState.resourceId) {
-      return { valid: false, resourceId, date: null };
-    }
-    const lane = row?.querySelector?.('.gantt-aps__lane') || dragState.lane;
-    const rect = lane?.getBoundingClientRect?.() || { left: 0 };
+    const lane = row?.querySelector?.('.gantt-aps__lane')
+      || row?.querySelector?.('.gantt-aps__group-timeline');
+    const window = buildGanttApsWindow(model);
+    if (!resourceId || !lane || !window.days.length) return { valid: false, resourceId, date: null };
+    const rect = lane.getBoundingClientRect?.() || { left: 0 };
     const viewport = root?.querySelector?.('.gantt-aps__viewport');
     const offsetX = Number(event.clientX || 0) - Number(rect.left || 0) + Number(viewport?.scrollLeft || 0);
-    const dayIndex = Math.floor(offsetX / dragState.dayWidth);
-    const day = dragState.window.days[dayIndex];
+    const dayIndex = Math.floor(offsetX / (24 * pixelsPerHour));
+    const day = window.days[dayIndex];
     if (!day?.date) return { valid: false, resourceId, date: null };
     return { valid: true, resourceId, date: day.date };
   };
 
-  const updateDragPresentation = destination => {
-    clearDragPresentation();
-    dragState?.bar?.setAttribute?.('data-dragging', 'true');
-    if (!destination?.date && destination?.valid !== false) return;
-    if (destination?.valid === false) {
-      dragState?.row?.querySelectorAll?.('.gantt-aps__drop-cell')
-        .forEach(cell => { cell.dataset.dragInvalid = 'true'; });
+    const unallocationTargetFromEvent =
+    event => {
+      if (
+        typeof onRequestUnallocate
+        !== 'function'
+      ) {
+        return null;
+      }
+
+      /*
+       * Mesmo com pointer capture,
+       * elementFromPoint informa o elemento
+       * visual que está realmente sob o mouse.
+       */
+      const pointed =
+        document.elementFromPoint?.(
+          event.clientX,
+          event.clientY
+        )
+        || event.target;
+
+      return pointed
+        ?.closest?.(
+          '[data-planning-unallocation-target="true"]'
+        )
+        || null;
+    };
+
+
+  const dragDestinationFromEvent =
+    event => {
+      if (!dragState) {
+        return null;
+      }
+
+      /*
+       * Primeiro testamos o destino externo:
+       * Materiais a programar.
+       */
+      const unallocationTarget =
+        unallocationTargetFromEvent(
+          event
+        );
+
+      if (unallocationTarget) {
+        return {
+          valid: true,
+
+          kind:
+            'unallocate',
+
+          target:
+            unallocationTarget,
+
+          resourceId:
+            dragState.resourceId,
+
+          date:
+            null
+        };
+      }
+
+      /*
+ * Transporte manual pode voltar para
+ * "Materiais a programar", mas NÃO
+ * pode ser movimentado como produção.
+ */
+if (
+  dragState?.task?.scheduleType === 'transport'
+  ||
+  dragState?.task?.transportId
+) {
+  return {
+    valid: false,
+
+    kind:
+      'move',
+
+    resourceId:
+      dragState.resourceId,
+
+    date:
+      null
+  };
+}
+
+
+/*
+ * Não está nos cards:
+ * continua sendo o MOVE normal.
+ */
+const destination =
+  rowDestinationFromEvent(
+    event,
+    dragState.row
+  );
+
+      const resourceId =
+        String(
+          destination?.resourceId
+          ?? ''
+        );
+
+      if (
+        resourceId
+        !== dragState.resourceId
+      ) {
+        return {
+          valid: false,
+
+          kind:
+            'move',
+
+          resourceId,
+
+          date:
+            null
+        };
+      }
+
+      return {
+        ...destination,
+
+        kind:
+          'move'
+      };
+    };
+
+    const updateDragPresentation =
+    destination => {
+      clearDragPresentation();
+
+      dragState
+        ?.bar
+        ?.setAttribute?.(
+          'data-dragging',
+          'true'
+        );
+
+      /*
+       * Estamos sobre
+       * "Materiais a programar".
+       */
+      if (
+        destination?.kind
+          === 'unallocate'
+        && destination?.target
+      ) {
+        destination.target.dataset
+          .ganttUnallocationActive =
+            'true';
+
+        destination.target.style.outline =
+          '2px dashed var(--primary-color, #2563eb)';
+
+        destination.target.style
+          .outlineOffset =
+            '4px';
+
+        destination.target.style
+          .boxShadow =
+            '0 0 0 4px rgba(37, 99, 235, 0.08)';
+
+        return;
+      }
+
+      /*
+       * Daqui para baixo é o MOVE
+       * tradicional dentro do Gantt.
+       */
+      if (
+        !destination?.date
+        && destination?.valid !== false
+      ) {
+        return;
+      }
+
+      if (
+        destination?.valid === false
+      ) {
+        dragState
+          ?.row
+          ?.querySelectorAll?.(
+            '.gantt-aps__drop-cell'
+          )
+          .forEach(cell => {
+            cell.dataset.dragInvalid =
+              'true';
+          });
+
+        return;
+      }
+
+      const selector =
+        `.gantt-aps__drop-cell[data-resource-id="${
+          String(
+            destination.resourceId
+          ).replaceAll('"', '\\"')
+        }"][data-date="${
+          String(
+            destination.date
+          ).replaceAll('"', '\\"')
+        }"]`;
+
+      root
+        ?.querySelector?.(
+          selector
+        )
+        ?.setAttribute(
+          'data-drag-target',
+          'true'
+        );
+    };
+
+   const finishDrag = (
+    event,
+    { cancelled = false } = {}
+  ) => {
+    if (!dragState) {
       return;
     }
-    const selector = `.gantt-aps__drop-cell[data-resource-id="${String(destination.resourceId).replaceAll('"', '\\"')}"][data-date="${String(destination.date).replaceAll('"', '\\"')}"]`;
-    root?.querySelector?.(selector)?.setAttribute('data-drag-target', 'true');
-  };
 
-  const finishDrag = (event, { cancelled = false } = {}) => {
-    if (!dragState) return;
-    const state = dragState;
-    const destination = !cancelled ? dragDestinationFromEvent(event) : null;
-    clearDragPresentation();
-    dragState = null;
-    state.bar?.releasePointerCapture?.(state.pointerId);
-    if (
+    const state =
+      dragState;
+
+    const destination =
       !cancelled
-      && destination?.valid
-      && destination.date
-      && destination.date !== state.sourceDate
-      && typeof onRequestMove === 'function'
+        ? dragDestinationFromEvent(
+            event
+          )
+        : null;
+
+    clearDragPresentation();
+
+    dragState =
+      null;
+
+    state.bar
+      ?.releasePointerCapture?.(
+        state.pointerId
+      );
+
+    if (
+      cancelled
+      || !destination?.valid
     ) {
-      onRequestMove(taskMoveIntent(state.task, destination.date, state.resourceId));
+      return;
+    }
+
+    /*
+     * NOVO:
+     *
+     * Gantt → Materiais a programar
+     */
+    if (
+      destination.kind
+        === 'unallocate'
+      && typeof onRequestUnallocate
+        === 'function'
+    ) {
+      onRequestUnallocate({
+        allocationId:
+          state.task.id,
+
+        task:
+          state.task,
+
+        source:
+          'gantt-drag'
+      });
+
+      return;
+    }
+
+    /*
+     * EXISTENTE:
+     *
+     * Gantt → outro dia
+     */
+    if (
+      destination.date
+      && destination.date
+        !== state.sourceDate
+      && typeof onRequestMove
+        === 'function'
+    ) {
+      onRequestMove(
+        taskMoveIntent(
+          state.task,
+          destination.date,
+          state.resourceId
+        )
+      );
     }
   };
 
-  const onPointerDown = event => {
-    if (model?.capabilities?.manualMove !== true || typeof onRequestMove !== 'function') return;
+    const onPointerDown = event => {
+    if (
+      model?.capabilities
+        ?.manualMove !== true
+
+      || (
+        typeof onRequestMove
+          !== 'function'
+
+        && typeof onRequestUnallocate
+          !== 'function'
+      )
+    ) {
+      return;
+    }
     if (event.button !== undefined && event.button !== 0) return;
     const bar = event.target?.closest?.('.gantt-aps__bar');
     if (!bar || bar.dataset.draggable !== 'true') return;
@@ -1256,12 +2526,94 @@ export function createGanttApsRenderer({
     finishDrag(event, { cancelled: true });
   };
 
+  const planningMaterialDestinationFromEvent = event => {
+    if (!planningMaterialDragState) return null;
+    const destination = rowDestinationFromEvent(event);
+    const compatible = planningMaterialDragState.compatibleMachineIds.has(String(destination?.resourceId ?? ''));
+    return {
+      ...destination,
+      valid: destination?.valid === true && compatible,
+      compatible
+    };
+  };
+
+  const updatePlanningMaterialDragPresentation = destination => {
+    clearPlanningMaterialDragPresentation();
+    if (!planningMaterialDragState || !root) return;
+    root.dataset.planningMaterialDrag = 'true';
+    root.querySelectorAll?.('.gantt-aps__row[data-resource-id]').forEach(row => {
+      const compatible = planningMaterialDragState.compatibleMachineIds.has(String(row.dataset.resourceId ?? ''));
+      row.dataset[compatible ? 'planningMaterialCompatible' : 'planningMaterialInvalid'] = 'true';
+    });
+    root.querySelectorAll?.('.gantt-aps__drop-cell[data-resource-id]').forEach(cell => {
+      const compatible = planningMaterialDragState.compatibleMachineIds.has(String(cell.dataset.resourceId ?? ''));
+      cell.dataset[compatible ? 'planningMaterialCompatible' : 'planningMaterialInvalid'] = 'true';
+    });
+    if (!destination?.date) return;
+    const selector = `.gantt-aps__drop-cell[data-resource-id="${String(destination.resourceId).replaceAll('"', '\\"')}"][data-date="${String(destination.date).replaceAll('"', '\\"')}"]`;
+    const targetCell = root.querySelector?.(selector);
+    if (targetCell) {
+      targetCell.dataset.planningMaterialTarget = destination.valid ? 'true' : 'invalid';
+    }
+  };
+
+  const onPlanningMaterialDragStart = event => {
+    const compatibleMachineIds = new Set((event.detail?.compatibleMachineIds || []).map(String));
+    planningMaterialDragState = {
+      material: event.detail?.material || null,
+      compatibleMachineIds
+    };
+    updatePlanningMaterialDragPresentation(null);
+  };
+
+  const onPlanningMaterialDragEnd = () => {
+    planningMaterialDragState = null;
+    clearPlanningMaterialDragPresentation();
+  };
+
+  const onPlanningMaterialDragOver = event => {
+    if (!planningMaterialDragState) return;
+    const destination = planningMaterialDestinationFromEvent(event);
+    updatePlanningMaterialDragPresentation(destination);
+    if (event.dataTransfer) event.dataTransfer.dropEffect = destination?.valid ? 'copy' : 'none';
+    if (destination?.valid) event.preventDefault?.();
+  };
+
+  const onPlanningMaterialDrop = event => {
+    if (!planningMaterialDragState) return;
+    const state = planningMaterialDragState;
+    const destination = planningMaterialDestinationFromEvent(event);
+    event.preventDefault?.();
+    planningMaterialDragState = null;
+    clearPlanningMaterialDragPresentation();
+    if (!destination?.valid || !destination.date || typeof onRequestPlanningMaterialDrop !== 'function') return;
+    const resource = (model?.resources || []).find(item => String(item.id) === String(destination.resourceId));
+    onRequestPlanningMaterialDrop({
+      type: 'PLANNING_MATERIAL_DROP_PREVIEW',
+      material: state.material,
+      to: {
+        date: destination.date,
+        machineId: destination.resourceId,
+        machineName: resource?.name || destination.resourceId
+      },
+      source: 'materials-to-schedule-drag'
+    });
+  };
+
+  const onPlanningMaterialDragLeave = event => {
+    if (!planningMaterialDragState || event.target !== root) return;
+    updatePlanningMaterialDragPresentation(null);
+  };
+
   const inspect = allocationId => {
     if (!root) return false;
     const task = getTaskById(model, allocationId);
     if (!task) return false;
     const resource = (model.resources || []).find(item => String(item.id) === String(task.resourceId));
     root.querySelector?.('.gantt-aps__inspect')?.remove();
+    root.querySelector
+  ?.('.gantt-aps__day-details')
+  ?.remove();
     root.querySelectorAll?.('.gantt-aps__bar').forEach(bar => {
       bar.dataset.selected = String(bar.dataset.allocationId === String(task.id));
     });
@@ -1275,7 +2627,28 @@ export function createGanttApsRenderer({
     const canTransport = model?.capabilities?.manualMove === true
       && task.persistable !== false
       && typeof onRequestTransportAllocation === 'function';
-    root.append(buildInspectPanel(task, resource?.name || task.machineName || task.resourceId || '—', { canEdit, canSplit, canTransport }));
+        const panel =
+      buildInspectPanel(
+        task,
+        resource?.name
+        || task.machineName
+        || task.resourceId
+        || '—'
+      );
+
+    root.append(
+      panel
+    );
+
+    requestAnimationFrame(
+      () => {
+        panel.scrollIntoView?.({
+          behavior: 'smooth',
+          block: 'nearest'
+        });
+      }
+    );
+
     return true;
   };
 
@@ -1283,9 +2656,33 @@ export function createGanttApsRenderer({
     const day = (model?.calendar?.days || []).find(item => String(item.date) === String(date));
     if (!day) return false;
     root?.querySelector?.('.gantt-aps__day-details')?.remove();
-    root?.append(buildDayDetailsPanel(day, {
-      canEditDaySettings: model?.capabilities?.daySettings === true
-    }));
+    root
+  ?.querySelector
+  ?.('.gantt-aps__inspect')
+  ?.remove();
+        const panel =
+      buildDayDetailsPanel(
+        day,
+        {
+          canEditDaySettings:
+            model?.capabilities
+              ?.daySettings === true
+        }
+      );
+
+    root?.append(
+      panel
+    );
+
+    requestAnimationFrame(
+      () => {
+        panel.scrollIntoView?.({
+          behavior: 'smooth',
+          block: 'nearest'
+        });
+      }
+    );
+
     return true;
   };
 
@@ -1478,7 +2875,10 @@ export function createGanttApsRenderer({
       return render(nextModel);
     },
 
-    focusAllocation(allocationId) {
+    focusAllocation(allocationId, {
+  inspectPanel = true,
+  scrollToAllocation = true
+} = {}) {
       clearFocusTimer();
       const task = getTaskById(model, allocationId);
       if (!task) return false;
@@ -1497,8 +2897,12 @@ export function createGanttApsRenderer({
         unplacedPage = Math.max(0, Math.floor(taskIndex / GANTT_APS_UNPLACED_TASKS_PER_PAGE));
       }
       render(model);
-      if (!inspect(allocationId)) return false;
-      const candidates = [...(root?.querySelectorAll?.('[data-allocation-id]') || [])];
+
+if (inspectPanel && !inspect(allocationId)) return false;
+
+if (!scrollToAllocation) return true;
+
+const candidates = [...(root?.querySelectorAll?.('[data-allocation-id]') || [])];
       const target = candidates.find(item => (
         item.dataset.allocationId === String(allocationId)
         && String(item.className || '').split(/\s+/).includes('gantt-aps__bar')
@@ -1540,7 +2944,9 @@ export function createGanttApsRenderer({
       scrollTop = 0;
       rowPage = 0;
       unplacedPage = 0;
+      renderedResourceKey = null;
       collapsedResources.clear();
+      collapsedResourcesInitialKey = null;
     }
   };
 }

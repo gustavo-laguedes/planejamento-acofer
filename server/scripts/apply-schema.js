@@ -2,7 +2,7 @@ import 'dotenv/config';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import postgres from 'postgres';
+import { sql } from '../db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,7 +27,11 @@ const files = [
   '019_productivity_people_zero.sql',
   '020_manual_schedule_persistence.sql',
   '021_manual_transport_status.sql',
-  '002_indexes.sql',
+'022_stock_sales_history.sql',
+'023_production_location_consumption.sql',
+    '024_purchase_module.sql',
+  '025_material_stock_limits.sql',
+'002_indexes.sql',
   '003_seed_optional.sql'
 ];
 
@@ -35,13 +39,6 @@ if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL nao configurada. Preencha .env ou defina a variavel no ambiente.');
   process.exit(1);
 }
-
-const sql = postgres(process.env.DATABASE_URL, {
-  ssl: 'require',
-  max: 1,
-  idle_timeout: 5,
-  connect_timeout: 10
-});
 
 try {
   for (const file of files) {

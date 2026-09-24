@@ -96,44 +96,328 @@ function materialMetadata(source = []) {
   return result;
 }
 
-/** Canonical opening balance shown as "Qtd. total locais" on the Stock page. */
-export function buildPlanningOpeningStock({ materials = [], locations = [], stockRows = [], correctionRows = [] } = {}) {
-  const correctionsByMaterial = new Map();
-  correctionRows.forEach(row => correctionsByMaterial.set(materialId(row), [row]));
-  return materials.map(material => {
-    const id = materialId(material);
-    const resolved = resolveMaterialTotalLocalStock({
-      material,
-      locations,
-      stockRows,
-      correctionRows: correctionsByMaterial.get(id) || []
-    });
-    return {
-      materialId: id,
-      materialCode: text(material.codes?.[0] ?? material.materialCode),
-      materialName: text(material.name ?? material.materialName) || `Material ${id}`,
-      unit: materialUnit(material),
-      quantity: resolved.totalLocationsQty,
-      hasInitialStock: true,
-      permitsSales: material.permits_sales !== false,
-      minimumStock: Number.isFinite(Number(material.minimum_quantity ?? material.minimumQuantity))
-        ? Number(material.minimum_quantity ?? material.minimumQuantity)
-        : null
-    };
-  });
+export function buildPlanningOpeningStock({
+  materials = [],
+  locations = [],
+  stockRows = [],
+  correctionRows = []
+} = {}) {
+
+  const usesCurrentStock =
+    (stockRows || [])
+      .some(
+        row =>
+          row &&
+          (
+            'currentQty' in row
+            ||
+            'current_qty' in row
+          )
+      );
+
+  /*
+   * FORMATO NOVO
+   */
+  if (usesCurrentStock) {
+    const totals =
+      new Map();
+
+    for (
+      const row
+      of stockRows || []
+    ) {
+      const id =
+        materialId(row);
+
+      if (!id) {
+        continue;
+      }
+
+      totals.set(
+        id,
+
+        number(
+          totals.get(id)
+        )
+        +
+        number(
+          row.currentQty ??
+          row.current_qty
+        )
+      );
+    }
+
+    return materials.map(
+      material => {
+
+        const id =
+          materialId(material);
+
+        return {
+          materialId:
+            id,
+
+          materialCode:
+            text(
+              material.codes?.[0] ??
+              material.materialCode
+            ),
+
+          materialName:
+            text(
+              material.name ??
+              material.materialName
+            )
+            ||
+            `Material ${id}`,
+
+          unit:
+            materialUnit(material),
+
+          quantity:
+            rounded(
+              totals.get(id),
+              PLANNING_STOCK_PROJECTION_POLICY
+                .quantityPrecision
+            ),
+
+          hasInitialStock:
+            true,
+
+          permitsSales:
+            material.permits_sales
+            !== false,
+
+          minimumStock:
+            Number.isFinite(
+              Number(
+                material.minimum_quantity ??
+                material.minimumQuantity
+              )
+            )
+              ? Number(
+                  material.minimum_quantity ??
+                  material.minimumQuantity
+                )
+              : null
+        };
+      }
+    );
+  }
+
+  /*
+   * FALLBACK ANTIGO
+   */
+  const correctionsByMaterial =
+    new Map();
+
+  correctionRows.forEach(
+    row =>
+      correctionsByMaterial.set(
+        materialId(row),
+        [row]
+      )
+  );
+
+  return materials.map(
+    material => {
+
+      const id =
+        materialId(material);
+
+      const resolved =
+        resolveMaterialTotalLocalStock({
+          material,
+          locations,
+          stockRows,
+
+          correctionRows:
+            correctionsByMaterial
+              .get(id)
+            || []
+        });
+
+      return {
+        materialId:
+          id,
+
+        materialCode:
+          text(
+            material.codes?.[0] ??
+            material.materialCode
+          ),
+
+        materialName:
+          text(
+            material.name ??
+            material.materialName
+          )
+          ||
+          `Material ${id}`,
+
+        unit:
+          materialUnit(material),
+
+        quantity:
+          resolved.totalLocationsQty,
+
+        hasInitialStock:
+          true,
+
+        permitsSales:
+          material.permits_sales
+          !== false,
+
+        minimumStock:
+          Number.isFinite(
+            Number(
+              material.minimum_quantity ??
+              material.minimumQuantity
+            )
+          )
+            ? Number(
+                material.minimum_quantity ??
+                material.minimumQuantity
+              )
+            : null
+      };
+    }
+  );
 }
 
-export function buildPlanningDemandContext({ materials = [], stockRows = [], businessDays = 0 } = {}) {
+
+export function buildPlanningDemandContext({
+  materials = [],
+  stockRows = [],
+  businessDays = 0
+} = {}) {
+
+  const usesCurrentStock =
+    (stockRows || [])
+      .some(
+        row =>
+          row &&
+          (
+            'currentQty' in row
+            ||
+            'current_qty' in row
+          )
+      );
+
+  /*
+   * VENDAS DO ESTOQUE NOVO
+   */
+  if (usesCurrentStock) {
+
+    const salesByMaterial =
+      new Map();
+
+    for (
+      const row
+      of stockRows || []
+    ) {
+
+      const id =
+        materialId(row);
+
+      if (!id) {
+        continue;
+      }
+
+      const salesQty =
+        number(
+          row.movementTotals
+            ?.salesQty
+          ??
+          row.salesQty
+          ??
+          row.sales_qty
+        );
+
+      salesByMaterial.set(
+        id,
+
+        number(
+          salesByMaterial.get(id)
+        )
+        +
+        salesQty
+      );
+    }
+
+    return {
+      source:
+        'stock.current.salesPerDayQty',
+
+      materials:
+        materials.map(
+          material => {
+
+            const id =
+              materialId(material);
+
+            const permitsSales =
+              material.permits_sales
+              !== false;
+
+            const averageDailyDemand =
+              permitsSales &&
+              businessDays > 0
+                ? number(
+                    salesByMaterial
+                      .get(id)
+                  )
+                  /
+                  businessDays
+                : null;
+
+            return {
+              materialId:
+                id,
+
+              permitsSales,
+
+              averageDailyDemand:
+                averageDailyDemand > 0
+                  ? averageDailyDemand
+                  : null
+            };
+          }
+        )
+    };
+  }
+
+  /*
+   * FALLBACK ANTIGO
+   */
   return {
-    source: 'stock.materials-overview.salesPerDayQty',
-    materials: materials.map(material => {
-      const resolved = resolveMaterialDailySales({ material, stockRows, businessDays });
-      return {
-        materialId: materialId(material),
-        permitsSales: material.permits_sales !== false,
-        averageDailyDemand: resolved.salesPerDayQty
-      };
-    })
+    source:
+      'stock.materials-overview.salesPerDayQty',
+
+    materials:
+      materials.map(
+        material => {
+
+          const resolved =
+            resolveMaterialDailySales({
+              material,
+              stockRows,
+              businessDays
+            });
+
+          return {
+            materialId:
+              materialId(material),
+
+            permitsSales:
+              material.permits_sales
+              !== false,
+
+            averageDailyDemand:
+              resolved.salesPerDayQty
+          };
+        }
+      )
   };
 }
 

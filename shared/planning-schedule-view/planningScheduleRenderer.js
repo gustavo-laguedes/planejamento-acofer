@@ -92,9 +92,9 @@ export function createPlanningScheduleRendererHost({
       }
     },
 
-    focusAllocation(allocationId) {
-      return activeRenderer?.focusAllocation?.(allocationId) === true;
-    },
+    focusAllocation(allocationId, options) {
+  return activeRenderer?.focusAllocation?.(allocationId, options) === true;
+},
 
     getViewportState() {
       return activeRenderer?.getViewportState?.() || null;

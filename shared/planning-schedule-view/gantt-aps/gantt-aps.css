@@ -1,6 +1,6 @@
 .gantt-aps {
-  --gantt-aps-table-width: 782px;
-  --gantt-aps-table-columns: 116px 92px 68px 160px 154px 76px 116px;
+  --gantt-aps-table-width: 714px;
+  --gantt-aps-table-columns: 116px 92px 160px 154px 76px 116px;
   background: #f8fafc;
   border: 1px solid #dbe3ef;
   border-radius: 10px;
@@ -33,9 +33,9 @@
   border-bottom: 1px solid #dbe3ef;
   display: flex;
   flex: 0 0 auto;
-  gap: 16px;
+  gap: 10px;
   justify-content: space-between;
-  padding: 12px 14px;
+  padding: 10px 12px;
   z-index: 6;
 }
 
@@ -57,7 +57,9 @@
 .gantt-aps__controls {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  justify-content: flex-end;
 }
 
 .gantt-aps__pager {
@@ -95,12 +97,15 @@
 .gantt-aps__inspect-close {
   background: #fff;
   border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  border-radius: 999px;
   color: #334155;
   cursor: pointer;
   font: inherit;
-  min-height: 30px;
-  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  min-height: 28px;
+  line-height: 1;
+  padding: 5px 10px;
 }
 
 .gantt-aps__controls .gantt-aps__discard {
@@ -158,9 +163,8 @@
 }
 
 .gantt-aps__row--header {
-  height: 46px;
-  position: sticky;
-  top: 0;
+  min-height: 46px;
+  position: relative;
   z-index: 5;
 }
 
@@ -225,6 +229,16 @@
 
 .gantt-aps__table--header .gantt-aps__cell span {
   display: block;
+}
+
+.gantt-aps__table--header .gantt-aps__cell--capacity-used {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.05;
+  text-align: center;
+  white-space: normal;
 }
 
 .gantt-aps__allocation-table .gantt-aps__cell:first-child {
@@ -463,6 +477,36 @@
   background: rgba(220, 38, 38, .08);
 }
 
+.gantt-aps__row[data-planning-material-compatible="true"] .gantt-aps__group-toggle {
+  background: rgba(22, 163, 74, .08);
+  box-shadow: inset 3px 0 0 #16a34a;
+}
+
+.gantt-aps__row[data-planning-material-invalid="true"] .gantt-aps__group-toggle {
+  background: rgba(220, 38, 38, .07);
+  box-shadow: inset 3px 0 0 #dc2626;
+}
+
+.gantt-aps__drop-cell[data-planning-material-compatible="true"] {
+  background: rgba(22, 163, 74, .1);
+}
+
+.gantt-aps__drop-cell[data-planning-material-invalid="true"] {
+  background: rgba(220, 38, 38, .08);
+}
+
+.gantt-aps__drop-cell[data-planning-material-target="true"] {
+  background: rgba(22, 163, 74, .22);
+  box-shadow: inset 0 0 0 2px rgba(22, 163, 74, .82);
+  z-index: 3;
+}
+
+.gantt-aps__drop-cell[data-planning-material-target="invalid"] {
+  background: rgba(220, 38, 38, .18);
+  box-shadow: inset 0 0 0 2px rgba(220, 38, 38, .74);
+  z-index: 3;
+}
+
 .gantt-aps__bar {
   --gantt-aps-bar-color: #2563eb;
   background: var(--gantt-aps-production-background, var(--gantt-aps-bar-color));
@@ -536,25 +580,71 @@
 
 .gantt-aps__inspect,
 .gantt-aps__day-details {
-  background: #fff;
-  border-left: 1px solid #cbd5e1;
-  bottom: 0;
-  box-shadow: -12px 0 32px rgba(15, 23, 42, .14);
-  max-width: min(360px, 90vw);
-  overflow-y: auto;
-  padding: 16px;
-  position: absolute;
-  right: 0;
-  top: 55px;
-  width: 340px;
-  z-index: 9;
+  background: #ffffff;
+
+  border:
+    1px solid #dbe3ef;
+
+  border-radius:
+    14px;
+
+  box-shadow:
+    0 22px 60px
+    rgba(15, 23, 42, .24);
+
+  max-height:
+    calc(100vh - 150px);
+
+  max-width:
+    calc(100vw - 32px);
+
+  overflow-y:
+    auto;
+
+  padding:
+    18px;
+
+  position:
+    fixed;
+
+  right:
+    24px;
+
+  top:
+    112px;
+
+  width:
+    390px;
+
+  z-index:
+    1200;
+}
+
+.gantt-aps__inspect::-webkit-scrollbar,
+.gantt-aps__day-details::-webkit-scrollbar {
+  width:
+    6px;
+}
+
+.gantt-aps__inspect::-webkit-scrollbar-thumb,
+.gantt-aps__day-details::-webkit-scrollbar-thumb {
+  background:
+    #cbd5e1;
+
+  border-radius:
+    999px;
 }
 
 .gantt-aps__day-alerts,
 .gantt-aps__day-team-form {
-  display: grid;
-  gap: 7px;
-  margin: 12px 0 0;
+  display:
+    grid;
+
+  gap:
+    10px;
+
+  margin:
+    14px 0 0;
 }
 
 .gantt-aps__day-team-form input {
@@ -682,8 +772,8 @@
 
 @media (max-width: 720px) {
   .gantt-aps {
-    --gantt-aps-table-width: 632px;
-    --gantt-aps-table-columns: 92px 76px 56px minmax(110px, 1fr) 130px 64px 104px;
+    --gantt-aps-table-width: 576px;
+    --gantt-aps-table-columns: 92px 76px minmax(110px, 1fr) 130px 64px 104px;
   }
 
   .gantt-aps__toolbar {
@@ -697,5 +787,974 @@
   .gantt-aps__controls button {
     font-size: 11px;
     padding-inline: 7px;
+  }
+}
+
+/* =========================================================
+   GANTT APS - ALERTAS / PAINEL FLUTUANTE
+   ========================================================= */
+
+.gantt-aps__day-details
+.gantt-aps__inspect-header {
+  background:
+    linear-gradient(
+      135deg,
+      #2563eb,
+      #1d4ed8
+    );
+}
+
+.gantt-aps__day-details
+.gantt-aps__inspect-header h3,
+.gantt-aps__inspect
+.gantt-aps__inspect-header h3 {
+  background:
+    transparent;
+
+  border-radius:
+    0;
+
+  color:
+    #ffffff;
+
+  font-size:
+    18px;
+
+  line-height:
+    1.15;
+
+  padding:
+    3px 4px;
+}
+
+.gantt-aps__day-title-line {
+  align-items:
+    center;
+
+  display:
+    flex !important;
+
+  gap:
+    4px;
+
+  justify-content:
+    center;
+}
+
+.gantt-aps__capacity-warning {
+  align-items:
+    center;
+
+  background:
+    #dc2626;
+
+  clip-path:
+    polygon(
+      50% 0,
+      100% 100%,
+      0 100%
+    );
+
+  color:
+    #ffffff !important;
+
+  display:
+    inline-flex !important;
+
+  flex:
+    0 0 auto;
+
+  font-size:
+    7px !important;
+
+  font-weight:
+    900;
+
+  height:
+    12px;
+
+  justify-content:
+    center;
+
+  line-height:
+    1 !important;
+
+  padding-top:
+    3px;
+
+  width:
+    14px;
+}
+
+.gantt-aps__day-stock-summary {
+  align-items:
+    center;
+
+  display:
+    flex !important;
+
+  gap:
+    5px;
+
+  justify-content:
+    center;
+
+  min-height:
+    10px;
+}
+
+.gantt-aps__day-stock-item {
+  align-items:
+    center;
+
+  display:
+    inline-flex !important;
+
+  gap:
+    2px;
+}
+
+.gantt-aps__day-stock-item strong {
+  color:
+    #475569;
+
+  font-size:
+    8px;
+
+  line-height:
+    1;
+}
+
+.gantt-aps__day-stock-dot,
+.gantt-aps__day-alert-dot {
+  background:
+    #94a3b8;
+
+  border-radius:
+    999px;
+
+  display:
+    inline-block;
+
+  flex:
+    0 0 auto;
+
+  height:
+    7px;
+
+  width:
+    7px;
+}
+
+
+/* ZERADO */
+
+.gantt-aps__day-stock-item--zeroed
+.gantt-aps__day-stock-dot,
+.gantt-aps__day-alert-group--zeroed
+.gantt-aps__day-alert-dot {
+  background:
+    #111827;
+}
+
+
+/* CRÍTICO */
+
+.gantt-aps__day-stock-item--critical
+.gantt-aps__day-stock-dot,
+.gantt-aps__day-alert-group--critical
+.gantt-aps__day-alert-dot {
+  background:
+    #ef4444;
+}
+
+
+/* ATENÇÃO */
+
+.gantt-aps__day-stock-item--attention
+.gantt-aps__day-stock-dot,
+.gantt-aps__day-alert-group--attention
+.gantt-aps__day-alert-dot {
+  background:
+    #f59e0b;
+}
+
+
+/* ABAIXO DA META */
+
+.gantt-aps__day-stock-item--below-target
+.gantt-aps__day-stock-dot,
+.gantt-aps__day-alert-group--below-target
+.gantt-aps__day-alert-dot {
+  background:
+    #8b5cf6;
+}
+
+
+/* OK */
+
+.gantt-aps__day-stock-ok {
+  color:
+    #166534 !important;
+
+  font-size:
+    8px !important;
+
+  font-weight:
+    800;
+}
+
+
+.gantt-aps__day-alert-group {
+  border:
+    1px solid #e2e8f0;
+
+  border-radius:
+    10px;
+
+  display:
+    grid;
+
+  gap:
+    8px;
+
+  padding:
+    10px 11px;
+}
+
+
+.gantt-aps__day-alert-group--zeroed {
+  background:
+    #f3f4f6;
+
+  border-color:
+    #9ca3af;
+}
+
+.gantt-aps__day-alert-group--critical {
+  background:
+    #fff7f7;
+
+  border-color:
+    #fecaca;
+}
+
+.gantt-aps__day-alert-group--attention {
+  background:
+    #fffbeb;
+
+  border-color:
+    #fde68a;
+}
+
+.gantt-aps__day-alert-group--below-target {
+  background:
+    #f5f3ff;
+
+  border-color:
+    #ddd6fe;
+}
+
+
+.gantt-aps__day-alert-group-header {
+  align-items:
+    center;
+
+  display:
+    grid;
+
+  gap:
+    7px;
+
+  grid-template-columns:
+    auto
+    1fr
+    auto;
+}
+
+.gantt-aps__day-alert-group-header strong {
+  color:
+    #1e293b;
+
+  font-size:
+    12px;
+}
+
+.gantt-aps__day-alert-count {
+  background:
+    #ffffff;
+
+  border:
+    1px solid #e2e8f0;
+
+  border-radius:
+    999px;
+
+  color:
+    #475569;
+
+  font-size:
+    10px;
+
+  font-weight:
+    800;
+
+  min-width:
+    22px;
+
+  padding:
+    2px 6px;
+
+  text-align:
+    center;
+}
+
+.gantt-aps__day-alert-materials {
+  display:
+    grid;
+
+  gap:
+    4px;
+
+  margin:
+    0;
+
+  padding-left:
+    18px;
+}
+
+.gantt-aps__day-alert-materials li {
+  color:
+    #475569;
+
+  font-size:
+    11px;
+
+  line-height:
+    1.3;
+}
+
+
+@media (
+  max-width:
+    720px
+) {
+  .gantt-aps__inspect,
+  .gantt-aps__day-details {
+    bottom:
+      12px;
+
+    left:
+      12px;
+
+    max-height:
+      calc(100vh - 24px);
+
+    right:
+      12px;
+
+    top:
+      auto;
+
+    width:
+      auto;
+  }
+}
+
+/* =========================================================
+   GANTT APS
+   PAINEL DE DETALHES ABAIXO DO CALENDÁRIO
+   ========================================================= */
+
+.gantt-aps__inspect,
+.gantt-aps__day-details {
+  position: relative !important;
+
+  inset: auto !important;
+
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+
+  width: calc(100% - 24px) !important;
+  max-width: none !important;
+
+  min-width: 0;
+
+  max-height: none !important;
+
+  margin:
+    12px;
+
+  padding:
+    14px 16px 16px;
+
+  overflow:
+    visible !important;
+
+  background:
+    #ffffff;
+
+  border:
+    1px solid #d8e0ea;
+
+  border-radius:
+    10px;
+
+  box-shadow:
+    0 8px 24px
+    rgba(15, 23, 42, .08);
+
+  z-index:
+    2;
+}
+
+
+/* =========================================================
+   CABEÇALHO
+   ========================================================= */
+
+.gantt-aps__inspect-header {
+  display:
+    flex;
+
+  align-items:
+    center;
+
+  justify-content:
+    space-between;
+
+  gap:
+    12px;
+
+  min-height:
+    38px;
+
+  margin:
+    -14px -16px 12px;
+
+  padding:
+    9px 14px;
+
+  background:
+    #f8fafc !important;
+
+  border-bottom:
+    1px solid #e2e8f0;
+
+  border-radius:
+    10px 10px 0 0;
+}
+
+
+/* detalhe da produção mantém um pequeno indicador azul */
+
+.gantt-aps__inspect
+.gantt-aps__inspect-header {
+  border-left:
+    4px solid
+    var(
+      --gantt-aps-production-background,
+      #2563eb
+    );
+}
+
+
+.gantt-aps__inspect-header h3 {
+  margin:
+    0 !important;
+
+  padding:
+    0 !important;
+
+  background:
+    transparent !important;
+
+  color:
+    #172033 !important;
+
+  font-size:
+    15px !important;
+
+  font-weight:
+    900;
+
+  line-height:
+    1.2;
+}
+
+
+/* X do cabeçalho */
+
+.gantt-aps__inspect-header
+.gantt-aps__inspect-close {
+  display:
+    inline-flex;
+
+  align-items:
+    center;
+
+  justify-content:
+    center;
+
+  flex:
+    0 0 auto;
+
+  width:
+    28px;
+
+  height:
+    28px;
+
+  min-width:
+    28px;
+
+  padding:
+    0;
+
+  border:
+    1px solid #d7dee8;
+
+  border-radius:
+    999px;
+
+  background:
+    #ffffff;
+
+  color:
+    #334155;
+
+  font-size:
+    16px;
+
+  font-weight:
+    900;
+
+  cursor:
+    pointer;
+}
+
+
+/* =========================================================
+   CAMPOS DO PAINEL
+   ========================================================= */
+
+.gantt-aps__inspect-fields {
+  display:
+    grid;
+
+  /*
+   * Cada campo usa:
+   * DT = nome
+   * DD = valor
+   *
+   * Portanto aqui temos
+   * 3 campos por linha.
+   */
+  grid-template-columns:
+    max-content
+    minmax(90px, 1fr)
+
+    max-content
+    minmax(90px, 1fr)
+
+    max-content
+    minmax(90px, 1fr);
+
+  align-items:
+    center;
+
+  gap:
+    8px 12px;
+
+  margin:
+    0;
+
+  padding:
+    0;
+}
+
+
+.gantt-aps__inspect-fields dt {
+  margin:
+    0;
+
+  color:
+    #64748b;
+
+  font-size:
+    10px;
+
+  font-weight:
+    900;
+
+  line-height:
+    1.15;
+
+  text-transform:
+    uppercase;
+}
+
+
+.gantt-aps__inspect-fields dd {
+  min-width:
+    0;
+
+  margin:
+    0;
+
+  color:
+    #172033;
+
+  font-size:
+    11px;
+
+  font-weight:
+    700;
+
+  line-height:
+    1.2;
+
+  overflow-wrap:
+    anywhere;
+}
+
+
+/* =========================================================
+   DIA
+   ========================================================= */
+
+.gantt-aps__day-details
+.gantt-aps__inspect-fields {
+  grid-template-columns:
+    max-content
+    minmax(80px, 1fr)
+
+    max-content
+    minmax(80px, 1fr)
+
+    max-content
+    minmax(110px, 1fr)
+
+    max-content
+    minmax(160px, 2fr);
+}
+
+
+/* =========================================================
+   ALERTAS DO ESTOQUE
+   ========================================================= */
+
+.gantt-aps__day-alerts {
+  display:
+    grid;
+
+  grid-template-columns:
+    repeat(
+      4,
+      minmax(0, 1fr)
+    );
+
+  gap:
+    10px;
+
+  margin:
+    14px 0 0;
+}
+
+
+.gantt-aps__day-alert-group {
+  min-width:
+    0;
+
+  display:
+    grid;
+
+  align-content:
+    start;
+
+  gap:
+    7px;
+
+  padding:
+    10px;
+
+  border-radius:
+    8px;
+}
+
+
+.gantt-aps__day-alert-group-header {
+  display:
+    grid;
+
+  grid-template-columns:
+    auto 1fr auto;
+
+  align-items:
+    center;
+
+  gap:
+    6px;
+}
+
+
+.gantt-aps__day-alert-group-header strong {
+  font-size:
+    11px;
+}
+
+
+.gantt-aps__day-alert-count {
+  min-width:
+    22px;
+
+  padding:
+    2px 6px;
+
+  border:
+    1px solid
+    rgba(148, 163, 184, .35);
+
+  border-radius:
+    999px;
+
+  background:
+    #ffffff;
+
+  font-size:
+    9px;
+
+  font-weight:
+    900;
+
+  text-align:
+    center;
+}
+
+
+.gantt-aps__day-alert-materials {
+  display:
+    grid;
+
+  gap:
+    3px;
+
+  margin:
+    0;
+
+  padding-left:
+    17px;
+}
+
+
+.gantt-aps__day-alert-materials li {
+  color:
+    #475569;
+
+  font-size:
+    10px;
+
+  line-height:
+    1.25;
+}
+
+
+/* =========================================================
+   ZERADO
+   ========================================================= */
+
+.gantt-aps__day-alert-group--zeroed {
+  background:
+    #f3f4f6;
+
+  border:
+    1px solid #9ca3af;
+}
+
+
+/* =========================================================
+   CRÍTICO
+   ========================================================= */
+
+.gantt-aps__day-alert-group--critical {
+  background:
+    #fff7f7;
+
+  border:
+    1px solid #fecaca;
+}
+
+
+/* =========================================================
+   ATENÇÃO
+   ========================================================= */
+
+.gantt-aps__day-alert-group--attention {
+  background:
+    #fffbeb;
+
+  border:
+    1px solid #fde68a;
+}
+
+
+/* =========================================================
+   ABAIXO DA META
+   ========================================================= */
+
+.gantt-aps__day-alert-group--below-target {
+  background:
+    #f5f3ff;
+
+  border:
+    1px solid #ddd6fe;
+}
+
+
+/* =========================================================
+   BOTÕES DO DIA
+   ========================================================= */
+
+.gantt-aps__inspect-actions {
+  display:
+    flex;
+
+  align-items:
+    center;
+
+  flex-wrap:
+    wrap;
+
+  gap:
+    8px;
+
+  margin-top:
+    12px;
+}
+
+
+/* =========================================================
+   EQUIPE / TURNOS
+   ========================================================= */
+
+.gantt-aps__day-team-form {
+  display:
+    flex;
+
+  align-items:
+    flex-end;
+
+  flex-wrap:
+    wrap;
+
+  gap:
+    10px;
+
+  margin-top:
+    12px;
+
+  padding-top:
+    12px;
+
+  border-top:
+    1px solid #e2e8f0;
+}
+
+
+.gantt-aps__day-team-form label {
+  display:
+    grid;
+
+  gap:
+    4px;
+
+  min-width:
+    110px;
+
+  color:
+    #64748b;
+
+  font-size:
+    10px;
+
+  font-weight:
+    800;
+}
+
+
+.gantt-aps__day-team-form input {
+  width:
+    100%;
+
+  min-height:
+    32px;
+}
+
+
+/* =========================================================
+   TABLET
+   ========================================================= */
+
+@media (
+  max-width: 1050px
+) {
+
+  .gantt-aps__inspect-fields,
+  .gantt-aps__day-details
+  .gantt-aps__inspect-fields {
+    grid-template-columns:
+      max-content
+      minmax(100px, 1fr)
+
+      max-content
+      minmax(100px, 1fr);
+  }
+
+
+  .gantt-aps__day-alerts {
+    grid-template-columns:
+      repeat(
+        2,
+        minmax(0, 1fr)
+      );
+  }
+}
+
+
+/* =========================================================
+   CELULAR / TELA ESTREITA
+   ========================================================= */
+
+@media (
+  max-width: 650px
+) {
+
+  .gantt-aps__inspect,
+  .gantt-aps__day-details {
+    width:
+      calc(100% - 12px) !important;
+
+    margin:
+      6px;
+
+    padding:
+      12px;
+  }
+
+
+  .gantt-aps__inspect-fields,
+  .gantt-aps__day-details
+  .gantt-aps__inspect-fields {
+    grid-template-columns:
+      max-content
+      minmax(0, 1fr);
+  }
+
+
+  .gantt-aps__day-alerts {
+    grid-template-columns:
+      1fr;
   }
 }

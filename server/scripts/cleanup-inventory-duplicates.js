@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import postgres from 'postgres';
+import { sql } from '../db.js';
 
 const KEEP_ID = Number(process.argv.find(arg => arg.startsWith('--keep='))?.split('=')[1] || 0);
 const APPLY = process.argv.includes('--apply');
@@ -10,13 +10,7 @@ if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL nao configurada.');
 }
 
-const sql = postgres(process.env.DATABASE_URL, {
-  ssl: 'require',
-  prepare: false,
-  max: 1,
-  idle_timeout: 20,
-  connect_timeout: 10
-});
+
 
 async function snapshot(tx = sql) {
   const [totals] = await tx`

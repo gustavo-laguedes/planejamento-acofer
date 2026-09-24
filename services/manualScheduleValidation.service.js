@@ -494,8 +494,30 @@ function normalizeTransports(transports) {
       quantity: Number(transport?.quantity ?? transport?.requiredQuantity ?? transport?.produceQty),
       sourceLocation: String(transport?.sourceLocation ?? transport?.originLocationId ?? transport?.originLocation ?? ''),
       targetLocation: String(transport?.targetLocation ?? transport?.destinationLocationId ?? transport?.destinationLocation ?? ''),
-      durationMinutes: Number(transport?.durationMinutes ?? (Number(transport?.hours) * 60)),
-      producerParentOperationIds: uniqueStrings(transport?.producerParentOperationIds || transport?.sourceParentOperationIds || []),
+            durationMinutes: Number(
+        transport?.durationMinutes
+        ?? (
+          Number(
+            transport?.hours
+          ) * 60
+        )
+      ),
+
+            availabilityMode:
+        transport?.availabilityMode === 'day-start'
+          ? 'day-start'
+          : transport?.availabilityMode === 'start'
+            ? 'start'
+            : 'end',
+
+      producerParentOperationIds:
+        uniqueStrings(
+          transport
+            ?.producerParentOperationIds
+          || transport
+            ?.sourceParentOperationIds
+          || []
+        ),
       consumerParentOperationIds: uniqueStrings(transport?.consumerParentOperationIds || transport?.targetParentOperationIds || []),
       unit: String(transport?.unit ?? ''),
       startDate,
@@ -506,6 +528,115 @@ function normalizeTransports(transports) {
       explicitEnd: isValidIsoDate(endDate) && endMinutes !== null ? civilPoint(endDate, endMinutes) : null
     };
   });
+}
+
+function normalizePlannedReceipts(
+  plannedReceipts
+) {
+  return (
+    Array.isArray(plannedReceipts)
+      ? plannedReceipts
+      : []
+  ).map(
+    (receipt, index) => {
+      const arrivalDate =
+        String(
+          receipt?.arrivalDate
+          ?? receipt?.date
+          ?? ''
+        ).slice(0, 10);
+
+      const availableDate =
+        String(
+          receipt?.availableDate
+          ?? (
+            isValidIsoDate(arrivalDate)
+              ? addCivilDays(
+                  arrivalDate,
+                  1
+                )
+              : ''
+          )
+        ).slice(0, 10);
+
+      return {
+        receiptId:
+          String(
+            receipt?.receiptId
+            ?? receipt?.id
+            ?? `planned-receipt-${index + 1}`
+          ),
+
+        materialId:
+          String(
+            receipt?.materialId
+            ?? receipt?.material_id
+            ?? ''
+          ),
+
+        materialCode:
+          String(
+            receipt?.materialCode
+            ?? receipt?.material_code
+            ?? ''
+          ),
+
+        materialName:
+          String(
+            receipt?.materialName
+            ?? receipt?.material_name
+            ?? ''
+          ),
+
+        locationId:
+          String(
+            receipt?.locationId
+            ?? receipt?.location_id
+            ?? receipt?.targetLocation
+            ?? receipt?.targetLocationId
+            ?? ''
+          ),
+
+        locationName:
+          String(
+            receipt?.locationName
+            ?? receipt?.location_name
+            ?? ''
+          ),
+
+        quantity:
+          Number(
+            receipt?.quantity
+          ),
+
+        unit:
+          String(
+            receipt?.unit
+            ?? ''
+          ),
+
+        arrivalDate,
+
+        availableDate,
+
+        availablePoint:
+          isValidIsoDate(
+            availableDate
+          )
+            ? civilPoint(
+                availableDate,
+                0
+              )
+            : null,
+
+        sourceShortageKey:
+          String(
+            receipt?.sourceShortageKey
+            ?? ''
+          )
+      };
+    }
+  );
 }
 
 function productiveSegments(allocation, shifts) {
@@ -848,21 +979,112 @@ function evaluateDependencyRules({
               details: { transportId: transport.transportId, durationMinutes: transport.durationMinutes, actualDurationMinutes: transport.explicitEnd - transportStart }
             }), [dependency.dependencyId]);
           }
-          if (!invalidExplicitInterval) dependencyState.transportState = 'completed';
-          supplyAt = point => point + QUANTITY_EPSILON >= transportEnd ? transport.quantity : 0;
-          supplyTime = quantity => quantity <= transport.quantity + QUANTITY_EPSILON ? transportEnd : null;
-          const earlyConsumers = consumerProfiles.filter(profile => profile.start + QUANTITY_EPSILON < transportEnd);
-          if (earlyConsumers.length) {
-            dependencyState.transportState = 'not-completed';
-            addIssue(makeDiagnostic('TRANSPORT_NOT_COMPLETED', 'transport_completion', `O transporte ${transport.transportId} ainda não terminou no início do consumo.`, {
-              allocationIds: earlyConsumers.map(profile => profile.allocationId),
-              parentOperationIds: [dependency.producerParentOperationId, dependency.consumerParentOperationId],
-              materialIds: [dependency.materialId],
-              ...pointFields(earlyConsumers[0].allocation),
-              details: { transportId: transport.transportId, transportStart, transportEnd }
-            }), [dependency.dependencyId]);
+                    if (
+            !invalidExplicitInterval
+          ) {
+            dependencyState
+              .transportState =
+                'completed';
           }
-        }
+
+          /*
+           * Transporte legado:
+           * material libera no FINAL.
+           *
+           * Transporte manual-first:
+           * availabilityMode = start,
+           * material libera no INÍCIO.
+           */
+                   const transportAvailabilityPoint =
+            transport.availabilityMode === 'day-start'
+              ? civilPoint(
+                  transport.startDate,
+                  0
+                )
+              : transport.availabilityMode === 'start'
+                ? transportStart
+                : transportEnd;
+
+          supplyAt =
+            point =>
+              point
+              + QUANTITY_EPSILON
+              >= transportAvailabilityPoint
+                ? transport.quantity
+                : 0;
+
+          supplyTime =
+            quantity =>
+              quantity
+              <= transport.quantity
+                + QUANTITY_EPSILON
+                ? transportAvailabilityPoint
+                : null;
+
+          const earlyConsumers =
+            consumerProfiles.filter(
+              profile =>
+                profile.start
+                + QUANTITY_EPSILON
+                < transportAvailabilityPoint
+            );
+
+          if (earlyConsumers.length) {
+            dependencyState
+              .transportState =
+                'not-completed';
+
+            addIssue(
+              makeDiagnostic(
+                'TRANSPORT_NOT_COMPLETED',
+                'transport_completion',
+
+                `O transporte ${transport.transportId} ainda não liberou o material no início do consumo.`,
+
+                {
+                  allocationIds:
+                    earlyConsumers.map(
+                      profile =>
+                        profile.allocationId
+                    ),
+
+                  parentOperationIds: [
+                    dependency
+                      .producerParentOperationId,
+
+                    dependency
+                      .consumerParentOperationId
+                  ],
+
+                  materialIds: [
+                    dependency.materialId
+                  ],
+
+                  ...pointFields(
+                    earlyConsumers[0]
+                      .allocation
+                  ),
+
+                  details: {
+                    transportId:
+                      transport.transportId,
+
+                    availabilityMode:
+                      transport
+                        .availabilityMode,
+
+                    transportStart,
+                    transportEnd,
+                    transportAvailabilityPoint
+                  }
+                }
+              ),
+
+              [
+                dependency.dependencyId
+              ]
+            );
+          }        }
       }
     }
     if (!groups.has(groupKey)) groups.set(groupKey, { requirements: [], supplyAt, supplyTime, profiles: supplyProfiles });
@@ -985,6 +1207,7 @@ export function validateManualScheduleTemporalRules({
   operations = [],
   dependencies = [],
   transports = [],
+  plannedReceipts = [],
   dependencyCompletionBufferMinutes = DEFAULT_DEPENDENCY_COMPLETION_BUFFER_MINUTES,
   stock,
   stockMinimums,
@@ -1185,9 +1408,20 @@ export function validateManualScheduleTemporalRules({
       if (supersededRules.has(diagnostics[index].rule)) diagnostics.splice(index, 1);
     }
     const ledgerResult = buildManualScheduleStockLedger({
-      normalizedAllocations,
+            normalizedAllocations,
+
       normalizedDependencies,
-      normalizedTransports: normalizeTransports(transports),
+
+      normalizedTransports:
+        normalizeTransports(
+          transports
+        ),
+
+      normalizedPlannedReceipts:
+        normalizePlannedReceipts(
+          plannedReceipts
+        ),
+
       productiveSegments: allocation => productiveSegments(allocation, validShifts),
       stock,
       stockMinimums,

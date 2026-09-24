@@ -28,10 +28,27 @@ assert.deepEqual(buildTimelineOperations({}), []);
 
 {
   const registered = [{ machineId: 'registered' }];
-  assert.equal(selectProductionCalendarMachines({ machines: [{ machineId: 'result' }] }, registered), registered);
+  assert.deepEqual(selectProductionCalendarMachines({ machines: [{ machineId: 'result' }] }, registered), [{ machineId: 'registered' }, { machineId: 'result' }]);
   assert.deepEqual(selectProductionCalendarMachines({ summary: { machines: [{ machineId: 'summary' }] } }, []), [{ machineId: 'summary' }]);
   assert.deepEqual(selectProductionCalendarMachines({ machineOptions: [{ machineId: 'option' }] }, []), [{ machineId: 'option' }]);
   assert.deepEqual(selectProductionCalendarMachines({}, []), []);
+  assert.deepEqual(
+    selectProductionCalendarMachines({
+      machines: [
+        { machineId: 'trefila', machineName: 'Trefila' },
+        { machineId: 'ec125-from-result', machineName: 'EC 125' }
+      ]
+    }, [
+      { machineId: 'ec125', machineName: 'EC-125' },
+      { machineId: 'mt100', machineName: 'MT-100' }
+    ]).map(machine => [machine.machineId, machine.machineName]),
+    [
+      ['ec125', 'EC-125'],
+      ['mt100', 'MT-100'],
+      ['trefila', 'Trefila']
+    ],
+    'cadastro ativo nao pode descartar maquina que veio da simulacao; duplicatas por nome normalizado continuam removidas'
+  );
 }
 
 assert.equal(resolveProductionCalendarPlanningId({ planningId: 'direct' }, { draftPlanningCode: 'draft' }), 'direct');

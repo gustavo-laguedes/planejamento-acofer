@@ -141,6 +141,15 @@ export function ImportHistoryPage() {
     endDate: ''
   };
 
+     let purchaseFilters = {
+    materialIds: [],
+    suppliers: [],
+    invoiceNumbers: [],
+    certificateNumbers: [],
+    locationId: '',
+    startDate: '',
+    endDate: ''
+  };
   function toast(error) {
     window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: error.message || error }));
   }
@@ -173,6 +182,8 @@ export function ImportHistoryPage() {
         { label: 'Hora', render: row => row.created_at ? new Date(row.created_at).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '', sortValue: row => row.created_at },
         { label: 'Usuário', render: importUser },
         { label: 'Arquivo', key: 'filename' },
+        { label: 'Periodo inicial', render: row => formatDateOnly(row.period_start), sortValue: row => row.period_start },
+        { label: 'Periodo final', render: row => formatDateOnly(row.period_end), sortValue: row => row.period_end },
         { label: 'Registros', render: row => `${formatNumber(row.total_rows)} registros`, sortValue: row => Number(row.total_rows || 0) },
         { label: 'Status', key: 'status' }
       ],
@@ -928,8 +939,19 @@ export function ImportHistoryPage() {
     await loadTable();
   }
 
-  async function openTransportModal(group = null, onSaved = async () => {}) {
+    async function openTransportModal(group = null, onSaved = async () => {}) {
     await loadLookups();
+
+    let transportStockRows = [];
+    let transportStockLoadFailed = false;
+
+    try {
+      const stockContext = await api('/stock/current');
+      transportStockRows = stockContext.rows || [];
+    } catch (error) {
+      transportStockLoadFailed = true;
+    }
+
     const readOnlyMode = Boolean(group && isCanceledTransport(group));
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
@@ -976,8 +998,210 @@ export function ImportHistoryPage() {
         </form>
       </div>
     `;
-    const form = backdrop.querySelector('form');
+        const form = backdrop.querySelector('form');
     const linesTarget = backdrop.querySelector('.transport-lines-target');
+
+    function transportStockRow(materialId, originLocationId) {
+      if (!materialId || !originLocationId) return null;
+
+      return transportStockRows.find(row => (
+        String(row.materialId) === String(materialId)
+        && String(row.locationId) === String(originLocationId)
+      )) || null;
+    }
+
+        function transportOriginStockQty(materialId, originLocationId) {
+      if (!materialId || !originLocationId || transportStockLoadFailed) {
+        return null;
+      }
+
+      const stockRow = transportStockRow(materialId, originLocationId);
+
+      return Number(stockRow?.currentQty || 0);
+    }
+
+    function transportOriginStockHtml(
+      material,
+      originLocationId,
+      exceeded = false
+    ) {
+      if (!originLocationId) {
+        return '<span>Selecione a origem para consultar o estoque.</span>';
+      }
+
+      if (!material) {
+        return '<span>Selecione o material para consultar o estoque da origem.</span>';
+      }
+
+      if (transportStockLoadFailed) {
+        return '<span>Estoque da origem indisponível para consulta.</span>';
+      }
+
+      const primaryQty =
+        transportOriginStockQty(
+          material.id,
+          originLocationId
+        ) ?? 0;
+
+      const primaryUnit =
+        String(
+          material.primary_unit || ''
+        ).trim();
+
+      const secondaryUnit =
+        String(
+          material.secondary_unit || ''
+        ).trim();
+
+      const factor =
+        Number(
+          material.primary_to_secondary_factor || 0
+        );
+
+      const primaryText =
+        `${formatNumber(primaryQty)} ${primaryUnit}`.trim();
+
+      let quantityText = primaryText;
+
+      if (
+        secondaryUnit
+        && factor > 0
+        && (
+          secondaryUnit !== primaryUnit
+          || Math.abs(factor - 1) > 0.000001
+        )
+      ) {
+        const secondaryQty =
+          transportFactorQuantity(
+            material,
+            primaryQty
+          );
+
+        quantityText +=
+          ` / ${formatNumber(secondaryQty)} ${secondaryUnit}`;
+      }
+
+      return `
+        <span>Em estoque na origem:</span>
+        <strong>${escapeHtml(quantityText)}</strong>
+        ${
+          exceeded
+            ? '<em class="transport-stock-warning">Quantidade acima do estoque disponível.</em>'
+            : ''
+        }
+      `;
+    }
+
+    function updateAllTransportLineStocks() {
+      const originLocationId =
+        form.elements.originLocationId.value;
+
+      const lineRows =
+        [
+          ...linesTarget.querySelectorAll(
+            '.transport-line'
+          )
+        ];
+
+      const requestedByMaterial =
+        new Map();
+
+      lineRows.forEach(lineRow => {
+        const materialId =
+          lineRow.querySelector(
+            '[name="lineMaterialId"]'
+          )?.value;
+
+        const quantity =
+          Number(
+            lineRow.querySelector(
+              '[name="lineQuantity"]'
+            )?.value || 0
+          );
+
+        if (
+          !materialId
+          || !(quantity > 0)
+        ) {
+          return;
+        }
+
+        requestedByMaterial.set(
+          String(materialId),
+
+          Number(
+            requestedByMaterial.get(
+              String(materialId)
+            ) || 0
+          ) + quantity
+        );
+      });
+
+      let hasExceededStock = false;
+
+      lineRows.forEach(lineRow => {
+        const stockTarget =
+          lineRow.querySelector(
+            '[data-transport-origin-stock]'
+          );
+
+        const quantityInput =
+          lineRow.querySelector(
+            '[name="lineQuantity"]'
+          );
+
+        const materialId =
+          lineRow.querySelector(
+            '[name="lineMaterialId"]'
+          )?.value;
+
+        const material =
+          materialById(materialId);
+
+        const availableQty =
+          transportOriginStockQty(
+            materialId,
+            originLocationId
+          );
+
+        const requestedQty =
+          Number(
+            requestedByMaterial.get(
+              String(materialId)
+            ) || 0
+          );
+
+        const exceeded =
+          availableQty !== null
+          && requestedQty >
+            availableQty + 0.000001;
+
+        if (exceeded) {
+          hasExceededStock = true;
+        }
+
+        quantityInput?.classList.toggle(
+          'transport-stock-exceeded-input',
+          exceeded
+        );
+
+        stockTarget?.classList.toggle(
+          'is-exceeded',
+          exceeded
+        );
+
+        if (stockTarget) {
+          stockTarget.innerHTML =
+            transportOriginStockHtml(
+              material,
+              originLocationId,
+              exceeded
+            );
+        }
+      });
+
+      return hasExceededStock;
+    }
 
     function collectLines() {
       return [...linesTarget.querySelectorAll('.transport-line')].map(row => {
@@ -1018,8 +1242,13 @@ export function ImportHistoryPage() {
           .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'))
           .map(material => ({ value: String(material.id), label: materialSearchLabel(material), search: [material.name, ...(material.codes || [])].join(' ') }));
         return `
-          <div class="transport-line" data-line-index="${index}" data-record-id="${escapeHtml(line.id || '')}">
-            ${renderTransportCombo({ name: 'lineMaterialId', label: 'Material', placeholder: 'Digite para buscar material cadastrado', selectedValue: line.materialId || '', items: materialItems })}
+                    <div class="transport-line" data-line-index="${index}" data-record-id="${escapeHtml(line.id || '')}">
+            <div class="transport-material-stock-field">
+              ${renderTransportCombo({ name: 'lineMaterialId', label: 'Material', placeholder: 'Digite para buscar material cadastrado', selectedValue: line.materialId || '', items: materialItems })}
+              <div class="transport-origin-stock" data-transport-origin-stock>
+                ${transportOriginStockHtml(selectedMaterial, form.elements.originLocationId.value)}
+              </div>
+            </div>
             <label>Quantidade<input name="lineQuantity" type="number" step="0.001" min="0.001" required value="${escapeHtml(line.quantity || '')}" ${readOnlyMode ? 'readonly' : ''} /></label>
             <label>Unidade<input name="lineUnit" value="${escapeHtml(selectedMaterial?.primary_unit || line.unit || '')}" readonly /></label>
             <label>Peso fator<input name="lineFactorQty" value="${escapeHtml(factorQty > 0 && factorUnit ? `${formatNumber(factorQty)} ${factorUnit}` : '')}" readonly /></label>
@@ -1027,14 +1256,21 @@ export function ImportHistoryPage() {
           </div>
         `;
       }).join('');
-      bindTransportCombos(linesTarget, (name, value, combo) => {
+                  bindTransportCombos(linesTarget, (name, value, combo) => {
         if (name !== 'lineMaterialId') return;
-        const lineRow = combo?.closest('.transport-line');
+
+        const lineRow =
+          combo?.closest('.transport-line');
+
         updateTransportLineDerived(lineRow);
+        updateAllTransportLineStocks();
       });
+
+      updateAllTransportLineStocks();
     }
 
     renderLines();
+    form.elements.originLocationId.addEventListener('change', updateAllTransportLineStocks);
     backdrop.addEventListener('click', event => {
       if (event.target === backdrop || event.target.classList.contains('close-modal')) backdrop.remove();
     });
@@ -1050,10 +1286,24 @@ export function ImportHistoryPage() {
       lines = collectLines().filter((_, lineIndex) => lineIndex !== index);
       renderLines();
     });
-    linesTarget.addEventListener('input', event => {
-      if (!event.target.matches('[name="lineQuantity"]')) return;
-      updateTransportLineDerived(event.target.closest('.transport-line'));
+        linesTarget.addEventListener('input', event => {
+      if (
+        !event.target.matches(
+          '[name="lineQuantity"]'
+        )
+      ) {
+        return;
+      }
+
+      updateTransportLineDerived(
+        event.target.closest(
+          '.transport-line'
+        )
+      );
+
       lines = collectLines();
+
+      updateAllTransportLineStocks();
     });
     backdrop.querySelector('.clear-transport')?.addEventListener('click', () => {
       form.reset();
@@ -1084,10 +1334,31 @@ export function ImportHistoryPage() {
         toast('Preencha data, origem, destino, material e quantidade.');
         return;
       }
-      if (String(form.elements.originLocationId.value) === String(form.elements.destinationLocationId.value)) {
-        toast('Origem e destino devem ser diferentes.');
+            if (
+        String(
+          form.elements.originLocationId.value
+        ) ===
+        String(
+          form.elements.destinationLocationId.value
+        )
+      ) {
+        toast(
+          'Origem e destino devem ser diferentes.'
+        );
+
         return;
       }
+
+      if (
+        updateAllTransportLineStocks()
+      ) {
+        toast(
+          'A quantidade informada ultrapassa o estoque disponível na origem.'
+        );
+
+        return;
+      }
+
       const common = {
         transportDate: form.elements.transportDate.value,
         originLocationId: Number(form.elements.originLocationId.value),
@@ -1128,69 +1399,3531 @@ export function ImportHistoryPage() {
     page.appendChild(backdrop);
   }
 
-  async function renderPurchaseRecords(container) {
-    await loadLookups();
-    container.innerHTML = `
-      <div class="section-heading">
-        <h2>Compra</h2>
-      </div>
-      ${canWriteProduction ? `
-        <form class="filters manual-record-form purchase-record-form">
-          <label>Data<input name="purchaseDate" type="date" required value="${todayBrazil()}" /></label>
-          <label>Material<select name="materialId" required>${materialOptions('', true)}</select></label>
-          <label>Local<select name="locationId" required>${locationOptions('', true)}</select></label>
-          <label>Quantidade<input name="quantity" type="number" step="0.001" min="0.001" required /></label>
-          <label>Nota fiscal<input name="invoiceNumber" /></label>
-          <label class="wide-field">Observa&ccedil;&atilde;o<input name="notes" /></label>
-          <button class="primary-button" type="submit">Registrar compra</button>
-        </form>
-      ` : ''}
-      <div class="table-target"></div>
-    `;
-    const loadTable = async () => {
-      const rows = await api('/stock/material-purchases');
-      const tableTarget = container.querySelector('.table-target');
-      tableTarget.innerHTML = '';
-      tableTarget.appendChild(DataTable({
-        columns: [
-          { label: 'Data', render: row => formatDateOnly(row.purchase_date), sortValue: row => row.purchase_date },
-          { label: 'Material', render: row => row.material_name || '-' },
-          { label: 'C&oacute;digo', render: row => firstCodeFromCodes(row.material_codes) || '-' },
-          { label: 'Local', render: row => row.location_name || '-' },
-          { label: 'Quantidade', render: row => formatNumber(row.quantity), sortValue: row => Number(row.quantity || 0) },
-          { label: 'Nota fiscal', render: row => row.invoice_number || '-' },
-          { label: 'Observa&ccedil;&atilde;o', render: row => row.notes || '-' }
-        ],
-        rows
-      }));
-    };
-    container.querySelector('.purchase-record-form')?.addEventListener('submit', async event => {
-      event.preventDefault();
-      const form = event.currentTarget;
-      const submit = form.querySelector('button[type="submit"]');
-      submit.disabled = true;
-      try {
-        await api('/stock/material-purchases', {
-          method: 'POST',
-          body: {
-            purchaseDate: form.elements.purchaseDate.value,
-            materialId: Number(form.elements.materialId.value),
-            locationId: Number(form.elements.locationId.value),
-            quantity: Number(form.elements.quantity.value || 0),
-            invoiceNumber: form.elements.invoiceNumber.value,
-            notes: form.elements.notes.value
+   function purchaseStockQuantityFromWeight(
+    material,
+    totalWeightKg
+  ) {
+    const weight =
+      Number(
+        totalWeightKg || 0
+      );
+
+    if (
+      !(weight > 0)
+      || !material
+    ) {
+      return null;
+    }
+
+    const primaryUnit =
+      normalizeText(
+        material.primary_unit
+      );
+
+    const secondaryUnit =
+      normalizeText(
+        material.secondary_unit
+      );
+
+    const factor =
+      Number(
+        material
+          .primary_to_secondary_factor ||
+        0
+      );
+
+    if (
+      primaryUnit === 'kg'
+    ) {
+      return Number(
+        weight.toFixed(6)
+      );
+    }
+
+    if (
+      primaryUnit === 'un'
+      && secondaryUnit === 'kg'
+      && factor > 0
+    ) {
+      return Number(
+        (
+          weight /
+          factor
+        ).toFixed(6)
+      );
+    }
+
+    return null;
+  }
+
+  function purchaseQuantitySummary(
+    purchase
+  ) {
+    const totals =
+      (
+        purchase.items ||
+        []
+      ).reduce(
+        (
+          acc,
+          item
+        ) => {
+          const unit =
+            String(
+              item.primary_unit ||
+              ''
+            ).trim();
+
+          acc.set(
+            unit,
+
+            (
+              acc.get(unit) ||
+              0
+            ) +
+            Number(
+              item.stock_quantity ||
+              0
+            )
+          );
+
+          return acc;
+        },
+        new Map()
+      );
+
+    return [
+      ...totals.entries()
+    ]
+      .map(
+        (
+          [
+            unit,
+            quantity
+          ]
+        ) =>
+          `${formatNumber(quantity)} ${unit}`.trim()
+      )
+      .join(' / ')
+      || '0';
+  }
+
+  function purchaseMaterialSummary(
+    purchase
+  ) {
+    return (
+      purchase.items ||
+      []
+    )
+      .map(item => {
+        const code =
+          firstCodeFromCodes(
+            item.material_codes
+          );
+
+        const label =
+          [
+            item.material_name ||
+              '-',
+            code
+          ]
+            .filter(Boolean)
+            .join(' - ');
+
+        return `${escapeHtml(label)}: ${formatNumber(item.stock_quantity)} ${escapeHtml(item.primary_unit || '')}`.trim();
+      })
+      .join('<br>')
+      || '-';
+  }
+
+  function purchaseLocationSummary(
+    purchase
+  ) {
+    return [
+      ...new Set(
+        (
+          purchase.items ||
+          []
+        )
+          .map(
+            item =>
+              item.location_name
+          )
+          .filter(Boolean)
+      )
+    ]
+      .map(
+        escapeHtml
+      )
+      .join(' / ')
+      || '-';
+  }
+
+  function purchaseLotsSummary(
+  purchase
+) {
+  const lots =
+    (
+      purchase.items ||
+      []
+    ).flatMap(
+      item =>
+        item.lots ||
+        []
+    );
+
+  if (!lots.length) {
+    return '-';
+  }
+
+  const previewLots =
+    lots.slice(
+      0,
+      2
+    );
+
+  const remaining =
+    Math.max(
+      lots.length - previewLots.length,
+      0
+    );
+
+  return `
+    <div
+      class="purchase-lots-cell"
+    >
+      <div
+        class="purchase-lots-cell-head"
+      >
+        <strong>
+          ${formatNumber(
+            lots.length
+          )}
+          ${
+            lots.length === 1
+              ? 'lote'
+              : 'lotes'
           }
+        </strong>
+
+        <button
+          type="button"
+          class="purchase-lots-view-button"
+          data-view-purchase-lots="${escapeHtml(
+            purchase.id
+          )}"
+        >
+          Ver lotes
+        </button>
+      </div>
+
+      <div
+        class="purchase-lots-preview"
+      >
+        ${
+          previewLots
+            .map(
+              lot => `
+                <span>
+                  ${escapeHtml(
+                    lot.lot_number ||
+                    '-'
+                  )}
+                </span>
+              `
+            )
+            .join('')
+        }
+
+        ${
+          remaining > 0
+            ? `
+              <span
+                class="purchase-lots-more"
+              >
+                +${formatNumber(
+                  remaining
+                )}
+              </span>
+            `
+            : ''
+        }
+      </div>
+    </div>
+  `;
+}
+
+function openPurchaseLotsModal(
+  purchase
+) {
+  const items =
+    purchase.items ||
+    [];
+
+  const allLots =
+    items.flatMap(
+      item =>
+        item.lots ||
+        []
+    );
+
+  const backdrop =
+    document.createElement(
+      'div'
+    );
+
+  backdrop.className =
+    'modal-backdrop';
+
+
+  backdrop.innerHTML = `
+    <div
+      class="modal purchase-lots-view-modal"
+      role="dialog"
+      aria-modal="true"
+    >
+
+      <div
+        class="modal-header purchase-lots-view-header"
+      >
+        <div>
+          <h2>
+            Lotes da compra
+          </h2>
+
+          <p>
+            Nota fiscal
+            <strong>
+              ${escapeHtml(
+                purchase.invoice_number ||
+                '-'
+              )}
+            </strong>
+            ·
+            ${escapeHtml(
+              purchase.supplier ||
+              '-'
+            )}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          class="link-button close-purchase-lots"
+        >
+          Fechar
+        </button>
+      </div>
+
+
+      <div
+        class="purchase-lots-view-summary"
+      >
+
+        <article>
+          <span>
+            Lotes / UDs
+          </span>
+
+          <strong>
+            ${formatNumber(
+              allLots.length
+            )}
+          </strong>
+        </article>
+
+
+        <article>
+          <span>
+            Materiais
+          </span>
+
+          <strong>
+            ${formatNumber(
+              items.length
+            )}
+          </strong>
+        </article>
+
+
+        <article>
+          <span>
+            Peso total
+          </span>
+
+          <strong>
+            ${formatNumber(
+              purchase
+                .invoice_total_weight_kg
+              ||
+              0
+            )}
+            kg
+          </strong>
+        </article>
+
+
+        <article>
+          <span>
+            Certificado
+          </span>
+
+          <strong>
+            ${escapeHtml(
+              purchase
+                .certificate_number
+              ||
+              '-'
+            )}
+          </strong>
+        </article>
+
+      </div>
+
+
+      <div
+        class="purchase-lots-view-list"
+      >
+
+        ${
+          items
+            .map(
+              item => {
+                const codes =
+                  item.material_codes ||
+                  [];
+
+                const lots =
+                  item.lots ||
+                  [];
+
+                return `
+                  <section
+                    class="purchase-lots-view-material"
+                  >
+
+                    <div
+                      class="purchase-lots-view-material-head"
+                    >
+                      <div>
+                        <strong>
+                          ${escapeHtml(
+                            item.material_name ||
+                            'Material'
+                          )}
+                        </strong>
+
+                        ${
+                          codes.length
+                            ? `
+                              <small>
+                                ${escapeHtml(
+                                  codes.join(', ')
+                                )}
+                              </small>
+                            `
+                            : ''
+                        }
+                      </div>
+
+                      <span>
+                        ${formatNumber(
+                          lots.length
+                        )}
+                        ${
+                          lots.length === 1
+                            ? 'lote'
+                            : 'lotes'
+                        }
+                      </span>
+                    </div>
+
+
+                    ${
+                      lots.length
+                        ? `
+                          <div
+                            class="purchase-lots-view-table-wrap"
+                          >
+                            <table
+                              class="purchase-lots-view-table"
+                            >
+                              <thead>
+                                <tr>
+                                  <th>
+                                    Lote / UD
+                                  </th>
+
+                                  <th>
+                                    Peso
+                                  </th>
+
+                                  <th>
+                                    Corrida
+                                  </th>
+
+                                  <th>
+                                    Lim. resistência
+                                  </th>
+
+                                  <th>
+                                    Grau / Qualidade
+                                  </th>
+                                </tr>
+                              </thead>
+
+                              <tbody>
+                                ${
+                                  lots
+                                    .map(
+                                      lot => `
+                                        <tr>
+                                          <td>
+                                            <strong>
+                                              ${escapeHtml(
+                                                lot.lot_number ||
+                                                '-'
+                                              )}
+                                            </strong>
+                                          </td>
+
+                                          <td>
+                                            ${formatNumber(
+                                              lot.weight_kg
+                                              ||
+                                              0
+                                            )}
+                                            kg
+                                          </td>
+
+                                          <td>
+                                            ${escapeHtml(
+                                              lot.heat_number ||
+                                              '-'
+                                            )}
+                                          </td>
+
+                                          <td>
+                                            ${
+                                              lot
+                                                .tensile_strength_mpa
+                                                ? `${
+                                                    formatNumber(
+                                                      lot
+                                                        .tensile_strength_mpa
+                                                    )
+                                                  } MPa`
+                                                : '-'
+                                            }
+                                          </td>
+
+                                          <td>
+                                            ${escapeHtml(
+                                              lot.steel_grade ||
+                                              '-'
+                                            )}
+                                          </td>
+                                        </tr>
+                                      `
+                                    )
+                                    .join('')
+                                }
+                              </tbody>
+                            </table>
+                          </div>
+                        `
+                        : `
+                          <div
+                            class="empty-state compact"
+                          >
+                            Nenhum lote informado.
+                          </div>
+                        `
+                    }
+
+                  </section>
+                `;
+              }
+            )
+            .join('')
+        }
+
+      </div>
+
+    </div>
+  `;
+
+
+  const close =
+    () => {
+      backdrop.remove();
+    };
+
+
+  backdrop
+    .querySelector(
+      '.close-purchase-lots'
+    )
+    ?.addEventListener(
+      'click',
+      close
+    );
+
+
+  backdrop.addEventListener(
+    'mousedown',
+    event => {
+      if (
+        event.target === backdrop
+      ) {
+        close();
+      }
+    }
+  );
+
+
+  const onKeyDown =
+    event => {
+      if (
+        event.key === 'Escape'
+      ) {
+        document.removeEventListener(
+          'keydown',
+          onKeyDown
+        );
+
+        close();
+      }
+    };
+
+
+  document.addEventListener(
+    'keydown',
+    onKeyDown
+  );
+
+
+  document.body.appendChild(
+    backdrop
+  );
+}
+
+    function purchaseFilterValues(value) {
+    return Array.isArray(value)
+      ? value
+          .map(item => String(item || '').trim())
+          .filter(Boolean)
+      : String(value || '').trim()
+        ? [String(value).trim()]
+        : [];
+  }
+
+  function purchaseRowMatchesFilters(
+    row,
+    ignoredFilter = ''
+  ) {
+    const purchaseDate =
+      String(
+        row.purchase_date || ''
+      ).slice(0, 10);
+
+    const materialIds =
+      purchaseFilterValues(
+        purchaseFilters.materialIds
+      );
+
+    const suppliers =
+      purchaseFilterValues(
+        purchaseFilters.suppliers
+      );
+
+    const invoiceNumbers =
+      purchaseFilterValues(
+        purchaseFilters.invoiceNumbers
+      );
+
+    const certificateNumbers =
+      purchaseFilterValues(
+        purchaseFilters.certificateNumbers
+      );
+
+    if (
+      ignoredFilter !== 'material'
+      && materialIds.length
+      && !(
+        row.items || []
+      ).some(
+        item =>
+          materialIds.includes(
+            String(item.material_id)
+          )
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      ignoredFilter !== 'supplier'
+      && suppliers.length
+      && !suppliers.includes(
+        String(
+          row.supplier || ''
+        ).trim()
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      ignoredFilter !== 'invoice'
+      && invoiceNumbers.length
+      && !invoiceNumbers.includes(
+        String(
+          row.invoice_number || ''
+        ).trim()
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      ignoredFilter !== 'certificate'
+      && certificateNumbers.length
+      && !certificateNumbers.includes(
+        String(
+          row.certificate_number || ''
+        ).trim()
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      purchaseFilters.locationId
+      && !(
+        row.items || []
+      ).some(
+        item =>
+          String(item.location_id) ===
+          String(
+            purchaseFilters.locationId
+          )
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      purchaseFilters.startDate
+      && purchaseDate <
+        purchaseFilters.startDate
+    ) {
+      return false;
+    }
+
+    if (
+      purchaseFilters.endDate
+      && purchaseDate >
+        purchaseFilters.endDate
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function filteredPurchaseRecords(rows) {
+    return rows.filter(
+      row =>
+        purchaseRowMatchesFilters(row)
+    );
+  }
+
+  function purchaseFilterOptions(
+    candidateRows,
+    allRows,
+    selectedValues,
+    extractor
+  ) {
+    const selected =
+      new Set(
+        purchaseFilterValues(
+          selectedValues
+        )
+      );
+
+    const available =
+      new Map();
+
+    const all =
+      new Map();
+
+    const addRows = (
+      target,
+      sourceRows
+    ) => {
+      sourceRows.forEach(row => {
+        const extracted =
+          extractor(row);
+
+        const items =
+          Array.isArray(extracted)
+            ? extracted
+            : [extracted];
+
+        items.forEach(item => {
+          if (
+            !item
+            || !String(
+              item.value || ''
+            ).trim()
+          ) {
+            return;
+          }
+
+          target.set(
+            String(item.value),
+            {
+              value:
+                String(item.value),
+
+              label:
+                String(
+                  item.label ??
+                  item.value
+                ),
+
+              search:
+                String(
+                  item.search ??
+                  item.label ??
+                  item.value
+                )
+            }
+          );
         });
-        form.reset();
-        form.elements.purchaseDate.value = todayBrazil();
-        window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: 'Compra registrada.' }));
-        await loadTable();
-      } catch (error) {
-        toast(error);
-      } finally {
-        submit.disabled = false;
+      });
+    };
+
+    addRows(
+      available,
+      candidateRows
+    );
+
+    addRows(
+      all,
+      allRows
+    );
+
+    selected.forEach(value => {
+      if (
+        !available.has(value)
+        && all.has(value)
+      ) {
+        available.set(
+          value,
+          all.get(value)
+        );
       }
     });
+
+    return [
+      ...available.values()
+    ].sort(
+      (left, right) =>
+        left.label.localeCompare(
+          right.label,
+          'pt-BR',
+          {
+            numeric: true
+          }
+        )
+    );
+  }
+
+  function renderPurchaseMultiFilter({
+    name,
+    label,
+    placeholder,
+    selectedValues,
+    items
+  }) {
+    const selected =
+      purchaseFilterValues(
+        selectedValues
+      );
+
+    const selectedSet =
+      new Set(selected);
+
+    const selectedItems =
+      selected
+        .map(value =>
+          items.find(
+            item =>
+              String(item.value) ===
+              String(value)
+          )
+        )
+        .filter(Boolean);
+
+    const summary =
+      !selectedItems.length
+        ? placeholder
+        : selectedItems.length === 1
+          ? selectedItems[0].label
+          : `${selectedItems[0].label} +${selectedItems.length - 1}`;
+
+    return `
+      <div
+        class="purchase-multi-filter"
+        data-purchase-filter-name="${escapeHtml(name)}"
+      >
+        <span class="purchase-multi-filter-label">
+          ${escapeHtml(label)}
+        </span>
+
+        <button
+          class="purchase-multi-filter-trigger ${
+            selected.length
+              ? 'has-selection'
+              : ''
+          }"
+          type="button"
+          data-purchase-filter-toggle
+          aria-expanded="false"
+        >
+          <span>
+            ${escapeHtml(summary)}
+          </span>
+
+          <span
+            class="purchase-multi-filter-chevron"
+            aria-hidden="true"
+          >
+            ▾
+          </span>
+        </button>
+
+        <div
+          class="purchase-multi-filter-menu"
+          hidden
+        >
+          <input
+            class="purchase-multi-filter-search"
+            type="search"
+            autocomplete="off"
+            placeholder="Pesquisar ${escapeHtml(
+              label.toLowerCase()
+            )}"
+          />
+
+          <div class="purchase-multi-filter-actions">
+
+            <span>
+              ${
+                selected.length
+                  ? `${selected.length} selecionado(s)`
+                  : 'Nenhum selecionado'
+              }
+            </span>
+
+            <button
+              class="link-button"
+              type="button"
+              data-purchase-filter-clear
+              ${
+                selected.length
+                  ? ''
+                  : 'disabled'
+              }
+            >
+              Limpar seleção
+            </button>
+
+          </div>
+
+          <div class="purchase-multi-filter-options">
+
+            ${
+              items.map(
+                item => `
+                  <label
+                    class="purchase-multi-filter-option"
+                    data-purchase-filter-search="${escapeHtml(
+                      normalizeMaterialSearch(
+                        item.search ||
+                        item.label
+                      )
+                    )}"
+                  >
+                    <input
+                      type="checkbox"
+                      value="${escapeHtml(item.value)}"
+                      data-purchase-filter-option
+                      ${
+                        selectedSet.has(
+                          String(item.value)
+                        )
+                          ? 'checked'
+                          : ''
+                      }
+                    />
+
+                    <span>
+                      ${escapeHtml(item.label)}
+                    </span>
+                  </label>
+                `
+              ).join('')
+            }
+
+            <div
+              class="purchase-multi-filter-empty"
+              ${
+                items.length
+                  ? 'hidden'
+                  : ''
+              }
+            >
+              Nenhum registro lançado para este filtro.
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+    `;
+  }
+
+  function bindPurchaseMultiFilters(
+    root,
+    onChange = () => {}
+  ) {
+    root._purchaseMultiFilterChange =
+      onChange;
+
+    if (
+      root.dataset.purchaseMultiFiltersBound ===
+      'true'
+    ) {
+      return;
+    }
+
+    root.dataset.purchaseMultiFiltersBound =
+      'true';
+
+    const closeMenus =
+      except => {
+        root.querySelectorAll(
+          '.purchase-multi-filter-menu'
+        ).forEach(menu => {
+          if (
+            except
+            && menu === except
+          ) {
+            return;
+          }
+
+          menu.hidden =
+            true;
+
+          menu
+            .closest(
+              '.purchase-multi-filter'
+            )
+            ?.querySelector(
+              '[data-purchase-filter-toggle]'
+            )
+            ?.setAttribute(
+              'aria-expanded',
+              'false'
+            );
+        });
+      };
+
+    root.addEventListener(
+      'click',
+      event => {
+        const toggle =
+          event.target.closest(
+            '[data-purchase-filter-toggle]'
+          );
+
+        if (toggle) {
+          event.preventDefault();
+
+          const filter =
+            toggle.closest(
+              '.purchase-multi-filter'
+            );
+
+          const menu =
+            filter?.querySelector(
+              '.purchase-multi-filter-menu'
+            );
+
+          if (!menu) {
+            return;
+          }
+
+          const willOpen =
+            menu.hidden;
+
+          closeMenus(
+            willOpen
+              ? menu
+              : null
+          );
+
+          menu.hidden =
+            !willOpen;
+
+          toggle.setAttribute(
+            'aria-expanded',
+            willOpen
+              ? 'true'
+              : 'false'
+          );
+
+          if (willOpen) {
+            filter
+              .querySelector(
+                '.purchase-multi-filter-search'
+              )
+              ?.focus();
+          }
+
+          return;
+        }
+
+        const clear =
+          event.target.closest(
+            '[data-purchase-filter-clear]'
+          );
+
+        if (!clear) {
+          return;
+        }
+
+        event.preventDefault();
+
+        const filter =
+          clear.closest(
+            '.purchase-multi-filter'
+          );
+
+        const name =
+          filter?.dataset
+            .purchaseFilterName;
+
+        filter
+          ?.querySelectorAll(
+            '[data-purchase-filter-option]'
+          )
+          .forEach(input => {
+            input.checked =
+              false;
+          });
+
+        root
+          ._purchaseMultiFilterChange?.(
+            name,
+            []
+          );
+      }
+    );
+
+    root.addEventListener(
+      'input',
+      event => {
+        const search =
+          event.target.closest(
+            '.purchase-multi-filter-search'
+          );
+
+        if (!search) {
+          return;
+        }
+
+        const filter =
+          search.closest(
+            '.purchase-multi-filter'
+          );
+
+        const normalized =
+          normalizeMaterialSearch(
+            search.value
+          );
+
+        let visible = 0;
+
+        filter
+          ?.querySelectorAll(
+            '.purchase-multi-filter-option'
+          )
+          .forEach(option => {
+            const matches =
+              !normalized
+              || String(
+                option.dataset
+                  .purchaseFilterSearch ||
+                ''
+              ).includes(normalized);
+
+            option.hidden =
+              !matches;
+
+            if (matches) {
+              visible += 1;
+            }
+          });
+
+        const empty =
+          filter?.querySelector(
+            '.purchase-multi-filter-empty'
+          );
+
+        if (empty) {
+          empty.hidden =
+            visible > 0;
+        }
+      }
+    );
+
+    root.addEventListener(
+      'change',
+      event => {
+        const option =
+          event.target.closest(
+            '[data-purchase-filter-option]'
+          );
+
+        if (!option) {
+          return;
+        }
+
+        const filter =
+          option.closest(
+            '.purchase-multi-filter'
+          );
+
+        const name =
+          filter?.dataset
+            .purchaseFilterName;
+
+        const values =
+          [
+            ...filter.querySelectorAll(
+              '[data-purchase-filter-option]:checked'
+            )
+          ].map(
+            input =>
+              input.value
+          );
+
+        root
+          ._purchaseMultiFilterChange?.(
+            name,
+            values
+          );
+      }
+    );
+
+    document.addEventListener(
+      'pointerdown',
+      event => {
+        if (
+          !root.contains(
+            event.target
+          )
+        ) {
+          closeMenus();
+        }
+      }
+    );
+
+    document.addEventListener(
+      'keydown',
+      event => {
+        if (
+          event.key === 'Escape'
+        ) {
+          closeMenus();
+        }
+      }
+    );
+  }
+  function renderPurchaseIndicators(
+    target,
+    rows
+  ) {
+    const items =
+      rows.flatMap(
+        row =>
+          row.items ||
+          []
+      );
+
+    const lots =
+      items.flatMap(
+        item =>
+          item.lots ||
+          []
+      );
+
+    const totalWeight =
+      rows.reduce(
+        (
+          sum,
+          row
+        ) =>
+          sum +
+          Number(
+            row
+              .invoice_total_weight_kg ||
+            0
+          ),
+        0
+      );
+
+    target.innerHTML = `
+      <div class="summary-grid transport-summary-grid">
+
+        <article class="metric-card compact">
+          <span>Total de compras</span>
+          <strong>
+            ${formatNumber(rows.length)}
+          </strong>
+        </article>
+
+        <article class="metric-card compact">
+          <span>Materiais comprados</span>
+          <strong>
+            ${formatNumber(
+              new Set(
+                items.map(
+                  item =>
+                    String(
+                      item.material_id
+                    )
+                )
+              ).size
+            )}
+          </strong>
+        </article>
+
+        <article class="metric-card compact">
+          <span>Peso comprado</span>
+          <strong>
+            ${formatNumber(totalWeight)} kg
+          </strong>
+        </article>
+
+        <article class="metric-card compact">
+          <span>Fornecedores</span>
+          <strong>
+            ${formatNumber(
+              new Set(
+                rows
+                  .map(
+                    row =>
+                      String(
+                        row.supplier ||
+                        ''
+                      )
+                  )
+                  .filter(Boolean)
+              ).size
+            )}
+          </strong>
+        </article>
+
+        <article class="metric-card compact">
+          <span>Notas fiscais</span>
+          <strong>
+            ${formatNumber(
+              new Set(
+                rows
+                  .map(
+                    row =>
+                      String(
+                        row.invoice_number ||
+                        ''
+                      )
+                  )
+                  .filter(Boolean)
+              ).size
+            )}
+          </strong>
+        </article>
+
+        <article class="metric-card compact">
+          <span>Certificados</span>
+          <strong>
+            ${formatNumber(
+              new Set(
+                rows
+                  .map(
+                    row =>
+                      String(
+                        row.certificate_number ||
+                        ''
+                      )
+                  )
+                  .filter(Boolean)
+              ).size
+            )}
+          </strong>
+        </article>
+
+        <article class="metric-card compact">
+          <span>Lotes / UDs</span>
+          <strong>
+            ${formatNumber(lots.length)}
+          </strong>
+        </article>
+
+      </div>
+    `;
+  }
+
+  async function openPurchaseModal(
+    purchase = null,
+    onSaved = async () => {}
+  ) {
+    await loadLookups();
+
+    const backdrop =
+      document.createElement(
+        'div'
+      );
+
+    backdrop.className =
+      'modal-backdrop';
+
+    const blankLot =
+      () => ({
+        lotNumber: '',
+        weightKg: '',
+        heatNumber: '',
+        tensileStrengthMpa: '',
+        steelGrade: ''
+      });
+
+    const blankItem =
+      () => ({
+        materialId: '',
+        locationId: '',
+        lots: [
+          blankLot()
+        ]
+      });
+
+    let purchaseItems =
+      purchase?.items?.length
+        ? purchase.items.map(
+            item => ({
+              materialId:
+                item.material_id,
+
+              locationId:
+                item.location_id,
+
+              lots:
+                (
+                  item.lots ||
+                  []
+                ).length
+                  ? item.lots.map(
+                      lot => ({
+                        lotNumber:
+                          lot.lot_number ||
+                          '',
+
+                        weightKg:
+                          lot.weight_kg ||
+                          '',
+
+                        heatNumber:
+                          lot.heat_number ||
+                          '',
+
+                        tensileStrengthMpa:
+                          lot.tensile_strength_mpa ||
+                          '',
+
+                        steelGrade:
+                          lot.steel_grade ||
+                          ''
+                      })
+                    )
+                  : [
+                      blankLot()
+                    ]
+            })
+          )
+        : [
+            blankItem()
+          ];
+
+    backdrop.innerHTML = `
+      <div
+        class="modal wide-modal production-modal purchase-modal"
+        role="dialog"
+        aria-modal="true"
+      >
+
+        <div class="modal-header">
+
+          <h2>
+            ${
+              purchase
+                ? 'Editar compra'
+                : 'Realizar compra'
+            }
+          </h2>
+
+          <div class="modal-header-actions">
+
+            <button
+              class="secondary-button clear-purchase"
+              type="button"
+            >
+              Limpar compra
+            </button>
+
+          </div>
+
+        </div>
+
+        <form class="purchase-realization-form">
+
+          <div class="grid-form purchase-header-grid">
+
+            <label>
+              Data
+
+              <input
+                name="purchaseDate"
+                type="date"
+                required
+                value="${escapeHtml(
+                  String(
+                    purchase?.purchase_date ||
+                    todayBrazil()
+                  ).slice(
+                    0,
+                    10
+                  )
+                )}"
+              />
+            </label>
+
+            <label>
+              Fornecedor
+
+              <input
+                name="supplier"
+                required
+                value="${escapeHtml(
+                  purchase?.supplier ||
+                  ''
+                )}"
+                placeholder="Digite o fornecedor"
+              />
+            </label>
+
+            <label>
+              Nota fiscal
+
+              <input
+                name="invoiceNumber"
+                required
+                value="${escapeHtml(
+                  purchase?.invoice_number ||
+                  ''
+                )}"
+              />
+            </label>
+
+            <label>
+              Nº certificado de qualidade
+
+              <input
+                name="certificateNumber"
+                required
+                value="${escapeHtml(
+                  purchase?.certificate_number ||
+                  ''
+                )}"
+              />
+            </label>
+
+            <label>
+              Peso total NF (kg)
+
+              <input
+                name="invoiceTotalWeightKg"
+                type="number"
+                step="0.001"
+                min="0.001"
+                required
+                value="${escapeHtml(
+                  purchase?.invoice_total_weight_kg ||
+                  ''
+                )}"
+              />
+            </label>
+
+          </div>
+
+          <section class="purchase-lines-section">
+
+            <div class="section-heading compact-heading">
+
+              <h3>
+                Materiais comprados
+              </h3>
+
+              <button
+                class="secondary-button add-purchase-item"
+                type="button"
+              >
+                + Adicionar material
+              </button>
+
+            </div>
+
+            <div class="purchase-items-target"></div>
+
+          </section>
+
+          <div
+            class="purchase-weight-check"
+            data-purchase-weight-check
+          ></div>
+
+          <label class="wide-field">
+            Observação
+
+            <input
+              name="notes"
+              value="${escapeHtml(
+                purchase?.notes ||
+                ''
+              )}"
+            />
+          </label>
+
+          <div class="form-actions production-modal-actions">
+
+            ${
+              isSuperAdmin &&
+              purchase
+                ? `
+                  <button
+                    class="danger-button icon-danger-button delete-purchase"
+                    type="button"
+                    title="Excluir compra"
+                    aria-label="Excluir compra"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <path d="M3 6h18"/>
+                      <path d="M8 6V4h8v2"/>
+                      <path d="M19 6l-1 14H6L5 6"/>
+                      <path d="M10 11v5"/>
+                      <path d="M14 11v5"/>
+                    </svg>
+                  </button>
+                `
+                : ''
+            }
+
+            <button
+              class="secondary-button close-modal"
+              type="button"
+            >
+              Cancelar
+            </button>
+
+            <button
+              class="primary-button"
+              type="submit"
+            >
+              Salvar compra
+            </button>
+
+          </div>
+
+        </form>
+
+      </div>
+    `;
+
+    const form =
+      backdrop.querySelector(
+        'form'
+      );
+
+    const itemsTarget =
+      backdrop.querySelector(
+        '.purchase-items-target'
+      );
+
+    const weightCheck =
+      backdrop.querySelector(
+        '[data-purchase-weight-check]'
+      );
+
+    function collectPurchaseItems() {
+      return [
+        ...itemsTarget.querySelectorAll(
+          '.purchase-item'
+        )
+      ].map(
+        itemRow => ({
+          materialId:
+            itemRow.querySelector(
+              '[name="purchaseMaterialId"]'
+            )?.value ||
+            '',
+
+          locationId:
+            itemRow.querySelector(
+              '[name="purchaseLocationId"]'
+            )?.value ||
+            '',
+
+          lots: [
+            ...itemRow.querySelectorAll(
+              '.purchase-lot-row'
+            )
+          ].map(
+            lotRow => ({
+              lotNumber:
+                lotRow.querySelector(
+                  '[name="purchaseLotNumber"]'
+                )?.value ||
+                '',
+
+              weightKg:
+                lotRow.querySelector(
+                  '[name="purchaseLotWeightKg"]'
+                )?.value ||
+                '',
+
+              heatNumber:
+                lotRow.querySelector(
+                  '[name="purchaseHeatNumber"]'
+                )?.value ||
+                '',
+
+              tensileStrengthMpa:
+                lotRow.querySelector(
+                  '[name="purchaseTensileStrengthMpa"]'
+                )?.value ||
+                '',
+
+              steelGrade:
+                lotRow.querySelector(
+                  '[name="purchaseSteelGrade"]'
+                )?.value ||
+                ''
+            })
+          )
+        })
+      );
+    }
+
+    function itemWeightFromDom(
+      itemRow
+    ) {
+      return [
+        ...itemRow.querySelectorAll(
+          '[name="purchaseLotWeightKg"]'
+        )
+      ].reduce(
+        (
+          sum,
+          input
+        ) =>
+          sum +
+          Number(
+            input.value ||
+            0
+          ),
+        0
+      );
+    }
+
+    function updatePurchaseItemDerived(
+      itemRow
+    ) {
+      if (!itemRow) {
+        return;
+      }
+
+      const materialId =
+        itemRow.querySelector(
+          '[name="purchaseMaterialId"]'
+        )?.value;
+
+      const material =
+        materialById(
+          materialId
+        );
+
+      const weightKg =
+        itemWeightFromDom(
+          itemRow
+        );
+
+      const stockQuantity =
+        purchaseStockQuantityFromWeight(
+          material,
+          weightKg
+        );
+
+      const qtyInput =
+        itemRow.querySelector(
+          '[name="purchaseStockQuantity"]'
+        );
+
+      const unitInput =
+        itemRow.querySelector(
+          '[name="purchasePrimaryUnit"]'
+        );
+
+      const weightInput =
+        itemRow.querySelector(
+          '[name="purchaseItemWeightKg"]'
+        );
+
+      if (qtyInput) {
+        qtyInput.value =
+          stockQuantity === null
+            ? ''
+            : formatNumber(
+                stockQuantity
+              );
+      }
+
+      if (unitInput) {
+        unitInput.value =
+          material?.primary_unit ||
+          '';
+      }
+
+      if (weightInput) {
+        weightInput.value =
+          weightKg > 0
+            ? `${formatNumber(weightKg)} kg`
+            : '';
+      }
+    }
+
+    function updatePurchaseWeightCheck() {
+      itemsTarget
+        .querySelectorAll(
+          '.purchase-item'
+        )
+        .forEach(
+          updatePurchaseItemDerived
+        );
+
+      const invoiceWeight =
+        Number(
+          form.elements
+            .invoiceTotalWeightKg
+            .value ||
+          0
+        );
+
+      const lotsWeight =
+        [
+          ...itemsTarget.querySelectorAll(
+            '[name="purchaseLotWeightKg"]'
+          )
+        ].reduce(
+          (
+            sum,
+            input
+          ) =>
+            sum +
+            Number(
+              input.value ||
+              0
+            ),
+          0
+        );
+
+      const difference =
+        Number(
+          (
+            lotsWeight -
+            invoiceWeight
+          ).toFixed(3)
+        );
+
+      const matches =
+        invoiceWeight > 0
+        && Math.abs(
+          difference
+        ) <= 0.001;
+
+      weightCheck
+        .classList
+        .toggle(
+          'is-ok',
+          matches
+        );
+
+      weightCheck
+        .classList
+        .toggle(
+          'is-warning',
+          invoiceWeight > 0
+          && !matches
+        );
+
+      weightCheck.innerHTML = `
+        <article>
+          <span>Peso total NF</span>
+          <strong>
+            ${
+              invoiceWeight > 0
+                ? `${formatNumber(invoiceWeight)} kg`
+                : '-'
+            }
+          </strong>
+        </article>
+
+        <article>
+          <span>Soma dos lotes</span>
+          <strong>
+            ${formatNumber(lotsWeight)} kg
+          </strong>
+        </article>
+
+        <article>
+          <span>Diferença</span>
+          <strong>
+            ${
+              invoiceWeight > 0
+                ? `${formatNumber(Math.abs(difference))} kg`
+                : '-'
+            }
+          </strong>
+        </article>
+
+        <div class="purchase-weight-message">
+          ${
+            matches
+              ? '✓ Peso dos lotes confere com a nota fiscal.'
+              : invoiceWeight > 0
+                ? difference < 0
+                  ? `Faltam ${formatNumber(Math.abs(difference))} kg para conferir com a nota fiscal.`
+                  : `${formatNumber(Math.abs(difference))} kg acima do peso total informado.`
+                : 'Informe o peso total da nota fiscal.'
+          }
+        </div>
+      `;
+
+      return matches;
+    }
+
+    function renderPurchaseItems() {
+      const materialItems =
+        materials
+          .filter(
+            material =>
+              material.active !==
+              false
+          )
+          .sort(
+            (
+              a,
+              b
+            ) =>
+              String(
+                a.name ||
+                ''
+              ).localeCompare(
+                String(
+                  b.name ||
+                  ''
+                ),
+                'pt-BR'
+              )
+          )
+          .map(
+            material => ({
+              value:
+                String(
+                  material.id
+                ),
+
+              label:
+                materialSearchLabel(
+                  material
+                ),
+
+              search:
+                [
+                  material.name,
+                  ...(
+                    material.codes ||
+                    []
+                  )
+                ].join(' ')
+            })
+          );
+
+      itemsTarget.innerHTML =
+        purchaseItems
+          .map(
+            (
+              item,
+              itemIndex
+            ) => {
+              const material =
+                materialById(
+                  item.materialId
+                );
+
+              const totalWeight =
+                (
+                  item.lots ||
+                  []
+                ).reduce(
+                  (
+                    sum,
+                    lot
+                  ) =>
+                    sum +
+                    Number(
+                      lot.weightKg ||
+                      0
+                    ),
+                  0
+                );
+
+              const stockQuantity =
+                purchaseStockQuantityFromWeight(
+                  material,
+                  totalWeight
+                );
+
+              return `
+                <article
+                  class="purchase-item"
+                  data-purchase-item-index="${itemIndex}"
+                >
+
+                  <div class="purchase-item-main">
+
+                    ${renderTransportCombo({
+                      name:
+                        'purchaseMaterialId',
+
+                      label:
+                        'Material',
+
+                      placeholder:
+                        'Digite para buscar material cadastrado',
+
+                      selectedValue:
+                        item.materialId ||
+                        '',
+
+                      items:
+                        materialItems
+                    })}
+
+                    <label>
+                      Local de entrada
+
+                      <select
+                        name="purchaseLocationId"
+                        required
+                      >
+                        ${locationOptions(
+                          item.locationId ||
+                          '',
+                          true
+                        )}
+                      </select>
+                    </label>
+
+                    <label>
+                      Quantidade estoque
+
+                      <input
+                        name="purchaseStockQuantity"
+                        value="${escapeHtml(
+                          stockQuantity === null
+                            ? ''
+                            : formatNumber(
+                                stockQuantity
+                              )
+                        )}"
+                        readonly
+                      />
+                    </label>
+
+                    <label>
+                      Unidade
+
+                      <input
+                        name="purchasePrimaryUnit"
+                        value="${escapeHtml(
+                          material?.primary_unit ||
+                          ''
+                        )}"
+                        readonly
+                      />
+                    </label>
+
+                    <label>
+                      Peso dos lotes
+
+                      <input
+                        name="purchaseItemWeightKg"
+                        value="${escapeHtml(
+                          totalWeight > 0
+                            ? `${formatNumber(totalWeight)} kg`
+                            : ''
+                        )}"
+                        readonly
+                      />
+                    </label>
+
+                    ${
+                      purchaseItems.length <= 1
+                        ? ''
+                        : `
+                          <button
+                            class="small-action-button danger remove-purchase-item"
+                            type="button"
+                            aria-label="Remover material"
+                          >
+                            -
+                          </button>
+                        `
+                    }
+
+                  </div>
+
+                  <details
+                    class="purchase-lots-details"
+                    open
+                  >
+
+                    <summary>
+
+                      <span>
+                        Lotes / UDs
+                      </span>
+
+                      <strong>
+                        ${formatNumber(
+                          (
+                            item.lots ||
+                            []
+                          ).length
+                        )}
+                      </strong>
+
+                    </summary>
+
+                    <div class="purchase-lots-target">
+
+                      ${
+                        (
+                          item.lots ||
+                          []
+                        )
+                          .map(
+                            (
+                              lot,
+                              lotIndex
+                            ) => `
+                              <div
+                                class="purchase-lot-row"
+                                data-purchase-lot-index="${lotIndex}"
+                              >
+
+                                <label>
+                                  Lote / UD
+
+                                  <input
+                                    name="purchaseLotNumber"
+                                    required
+                                    value="${escapeHtml(
+                                      lot.lotNumber ||
+                                      ''
+                                    )}"
+                                  />
+                                </label>
+
+                                <label>
+                                  Peso (kg)
+
+                                  <input
+                                    name="purchaseLotWeightKg"
+                                    type="number"
+                                    step="0.001"
+                                    min="0.001"
+                                    required
+                                    value="${escapeHtml(
+                                      lot.weightKg ||
+                                      ''
+                                    )}"
+                                  />
+                                </label>
+
+                                <label>
+                                  Corrida
+
+                                  <input
+                                    name="purchaseHeatNumber"
+                                    required
+                                    value="${escapeHtml(
+                                      lot.heatNumber ||
+                                      ''
+                                    )}"
+                                  />
+                                </label>
+
+                                <label>
+                                  Lim. resistência (MPa)
+
+                                  <input
+                                    name="purchaseTensileStrengthMpa"
+                                    type="number"
+                                    step="0.001"
+                                    min="0.001"
+                                    required
+                                    value="${escapeHtml(
+                                      lot.tensileStrengthMpa ||
+                                      ''
+                                    )}"
+                                  />
+                                </label>
+
+                                <label>
+                                  Grau / Qualidade
+
+                                  <input
+                                    name="purchaseSteelGrade"
+                                    required
+                                    value="${escapeHtml(
+                                      lot.steelGrade ||
+                                      ''
+                                    )}"
+                                    placeholder="Ex.: 1008"
+                                  />
+                                </label>
+
+                                ${
+                                  (
+                                    item.lots ||
+                                    []
+                                  ).length <= 1
+                                    ? ''
+                                    : `
+                                      <button
+                                        class="small-action-button danger remove-purchase-lot"
+                                        type="button"
+                                        aria-label="Remover lote"
+                                      >
+                                        -
+                                      </button>
+                                    `
+                                }
+
+                              </div>
+                            `
+                          )
+                          .join('')
+                      }
+
+                    </div>
+
+                    <button
+                      class="secondary-button add-purchase-lot"
+                      type="button"
+                    >
+                      + Adicionar lote
+                    </button>
+
+                  </details>
+
+                </article>
+              `;
+            }
+          )
+          .join('');
+
+      bindTransportCombos(
+        itemsTarget,
+        (
+          name,
+          value,
+          combo
+        ) => {
+          if (
+            name !==
+            'purchaseMaterialId'
+          ) {
+            return;
+          }
+
+          updatePurchaseItemDerived(
+            combo?.closest(
+              '.purchase-item'
+            )
+          );
+
+          updatePurchaseWeightCheck();
+        }
+      );
+
+      updatePurchaseWeightCheck();
+    }
+
+    renderPurchaseItems();
+
+    backdrop.addEventListener(
+      'click',
+      event => {
+        if (
+          event.target === backdrop
+          || event.target.classList.contains(
+            'close-modal'
+          )
+        ) {
+          backdrop.remove();
+        }
+      }
+    );
+
+    backdrop
+      .querySelector(
+        '.add-purchase-item'
+      )
+      ?.addEventListener(
+        'click',
+        event => {
+          event.preventDefault();
+
+          purchaseItems =
+            collectPurchaseItems();
+
+          purchaseItems.push(
+            blankItem()
+          );
+
+          renderPurchaseItems();
+        }
+      );
+
+    itemsTarget.addEventListener(
+      'click',
+      event => {
+        const itemRow =
+          event.target.closest(
+            '.purchase-item'
+          );
+
+        if (!itemRow) {
+          return;
+        }
+
+        const itemIndex =
+          Number(
+            itemRow
+              .dataset
+              .purchaseItemIndex ||
+            0
+          );
+
+        if (
+          event.target.closest(
+            '.remove-purchase-item'
+          )
+        ) {
+          purchaseItems =
+            collectPurchaseItems()
+              .filter(
+                (
+                  _,
+                  index
+                ) =>
+                  index !==
+                  itemIndex
+              );
+
+          renderPurchaseItems();
+
+          return;
+        }
+
+        if (
+          event.target.closest(
+            '.add-purchase-lot'
+          )
+        ) {
+          purchaseItems =
+            collectPurchaseItems();
+
+          purchaseItems[
+            itemIndex
+          ].lots.push(
+            blankLot()
+          );
+
+          renderPurchaseItems();
+
+          return;
+        }
+
+        const removeLot =
+          event.target.closest(
+            '.remove-purchase-lot'
+          );
+
+        if (removeLot) {
+          const lotIndex =
+            Number(
+              removeLot
+                .closest(
+                  '.purchase-lot-row'
+                )
+                ?.dataset
+                .purchaseLotIndex ||
+              0
+            );
+
+          purchaseItems =
+            collectPurchaseItems();
+
+          purchaseItems[
+            itemIndex
+          ].lots =
+            purchaseItems[
+              itemIndex
+            ].lots.filter(
+              (
+                _,
+                index
+              ) =>
+                index !==
+                lotIndex
+            );
+
+          renderPurchaseItems();
+        }
+      }
+    );
+
+    itemsTarget.addEventListener(
+      'input',
+      event => {
+        if (
+          !event.target.closest(
+            '.purchase-lot-row'
+          )
+        ) {
+          return;
+        }
+
+        updatePurchaseWeightCheck();
+      }
+    );
+
+    form.elements
+      .invoiceTotalWeightKg
+      .addEventListener(
+        'input',
+        updatePurchaseWeightCheck
+      );
+
+    backdrop
+      .querySelector(
+        '.clear-purchase'
+      )
+      ?.addEventListener(
+        'click',
+        () => {
+          form.reset();
+
+          form.elements
+            .purchaseDate
+            .value =
+            todayBrazil();
+
+          purchaseItems = [
+            blankItem()
+          ];
+
+          renderPurchaseItems();
+        }
+      );
+
+    backdrop
+      .querySelector(
+        '.delete-purchase'
+      )
+      ?.addEventListener(
+        'click',
+        async () => {
+          if (
+            !confirm(
+              'Excluir definitivamente esta compra?'
+            )
+          ) {
+            return;
+          }
+
+          await api(
+            `/stock/material-purchases/${purchase.id}`,
+            {
+              method:
+                'DELETE'
+            }
+          );
+
+          backdrop.remove();
+
+          window.dispatchEvent(
+            new CustomEvent(
+              'planejamento:toast',
+              {
+                detail:
+                  'Compra excluída.'
+              }
+            )
+          );
+
+          await onSaved();
+        }
+      );
+
+    form.addEventListener(
+      'submit',
+      async event => {
+        event.preventDefault();
+
+        const items =
+          collectPurchaseItems();
+
+        const invoiceTotalWeightKg =
+          Number(
+            form.elements
+              .invoiceTotalWeightKg
+              .value ||
+            0
+          );
+
+        if (
+          !form.elements
+            .purchaseDate
+            .value
+          || !form.elements
+            .supplier
+            .value
+            .trim()
+          || !form.elements
+            .invoiceNumber
+            .value
+            .trim()
+          || !form.elements
+            .certificateNumber
+            .value
+            .trim()
+          || !(invoiceTotalWeightKg > 0)
+        ) {
+          toast(
+            'Preencha data, fornecedor, nota fiscal, certificado e peso total da nota fiscal.'
+          );
+
+          return;
+        }
+
+        if (
+          !items.length
+          || items.some(
+            item =>
+              !item.materialId
+              || !item.locationId
+              || !item.lots.length
+          )
+        ) {
+          toast(
+            'Preencha material, local de entrada e pelo menos um lote para cada material.'
+          );
+
+          return;
+        }
+
+        const lotMissing =
+          items.some(
+            item =>
+              item.lots.some(
+                lot => (
+                  !String(
+                    lot.lotNumber ||
+                    ''
+                  ).trim()
+
+                  || !(
+                    Number(
+                      lot.weightKg
+                    ) > 0
+                  )
+
+                  || !String(
+                    lot.heatNumber ||
+                    ''
+                  ).trim()
+
+                  || !(
+                    Number(
+                      lot.tensileStrengthMpa
+                    ) > 0
+                  )
+
+                  || !String(
+                    lot.steelGrade ||
+                    ''
+                  ).trim()
+                )
+              )
+          );
+
+        if (
+          lotMissing
+        ) {
+          toast(
+            'Preencha lote / UD, peso, corrida, limite de resistência e grau / qualidade em todos os lotes.'
+          );
+
+          return;
+        }
+
+        if (
+          !updatePurchaseWeightCheck()
+        ) {
+          toast(
+            'A soma dos pesos dos lotes precisa ser igual ao peso total da nota fiscal.'
+          );
+
+          return;
+        }
+
+        const unsupportedMaterial =
+          items.find(
+            item => {
+              const material =
+                materialById(
+                  item.materialId
+                );
+
+              const weight =
+                item.lots.reduce(
+                  (
+                    sum,
+                    lot
+                  ) =>
+                    sum +
+                    Number(
+                      lot.weightKg ||
+                      0
+                    ),
+                  0
+                );
+
+              return !(
+                purchaseStockQuantityFromWeight(
+                  material,
+                  weight
+                ) > 0
+              );
+            }
+          );
+
+        if (
+          unsupportedMaterial
+        ) {
+          toast(
+            'Não foi possível converter o peso de um dos materiais para sua unidade principal de estoque.'
+          );
+
+          return;
+        }
+
+        const body = {
+          purchaseDate:
+            form.elements
+              .purchaseDate
+              .value,
+
+          supplier:
+            form.elements
+              .supplier
+              .value
+              .trim(),
+
+          invoiceNumber:
+            form.elements
+              .invoiceNumber
+              .value
+              .trim(),
+
+          certificateNumber:
+            form.elements
+              .certificateNumber
+              .value
+              .trim(),
+
+          invoiceTotalWeightKg,
+
+          notes:
+            form.elements
+              .notes
+              .value,
+
+          items:
+            items.map(
+              item => ({
+                materialId:
+                  Number(
+                    item.materialId
+                  ),
+
+                locationId:
+                  Number(
+                    item.locationId
+                  ),
+
+                lots:
+                  item.lots.map(
+                    lot => ({
+                      lotNumber:
+                        String(
+                          lot.lotNumber ||
+                          ''
+                        ).trim(),
+
+                      weightKg:
+                        Number(
+                          lot.weightKg ||
+                          0
+                        ),
+
+                      heatNumber:
+                        String(
+                          lot.heatNumber ||
+                          ''
+                        ).trim(),
+
+                      tensileStrengthMpa:
+                        Number(
+                          lot.tensileStrengthMpa ||
+                          0
+                        ),
+
+                      steelGrade:
+                        String(
+                          lot.steelGrade ||
+                          ''
+                        ).trim()
+                    })
+                  )
+              })
+            )
+        };
+
+        const submit =
+          form.querySelector(
+            'button[type="submit"]'
+          );
+
+        submit.disabled =
+          true;
+
+        submit.textContent =
+          'Salvando compra...';
+
+        try {
+          await api(
+            purchase
+              ? `/stock/material-purchases/${purchase.id}`
+              : '/stock/material-purchases',
+            {
+              method:
+                purchase
+                  ? 'PUT'
+                  : 'POST',
+
+              body
+            }
+          );
+
+          backdrop.remove();
+
+          window.dispatchEvent(
+            new CustomEvent(
+              'planejamento:toast',
+              {
+                detail:
+                  purchase
+                    ? 'Compra atualizada.'
+                    : 'Compra registrada.'
+              }
+            )
+          );
+
+          await onSaved();
+        } catch (error) {
+          submit.disabled =
+            false;
+
+          submit.textContent =
+            'Salvar compra';
+
+          toast(error);
+        }
+      }
+    );
+
+    page.appendChild(
+      backdrop
+    );
+  }
+
+    async function renderPurchaseRecords(
+    container
+  ) {
+    await loadLookups();
+
+    let purchaseFilterToReopen = '';
+
+    container.innerHTML = `
+      <div class="launches-wide-panel production-launch-panel production-launch-layout transport-launch-layout purchase-launch-layout">
+
+        <div class="panel production-consult-card transport-consult-card">
+
+          <div class="purchase-filters-target"></div>
+
+          <div class="purchase-indicators-target"></div>
+
+        </div>
+
+        <div class="panel production-table-card transport-table-card">
+
+          <div class="section-heading">
+
+            <h2>
+              Compras lançadas
+            </h2>
+
+            ${
+              canWriteProduction
+                ? `
+                  <button
+                    class="primary-button realize-purchase"
+                    type="button"
+                  >
+                    Realizar compra
+                  </button>
+                `
+                : ''
+            }
+
+          </div>
+
+          <div class="table-target"></div>
+
+        </div>
+
+      </div>
+    `;
+
+    const loadTable =
+      async () => {
+        const rows =
+          await api(
+            '/stock/material-purchases'
+          );
+
+        const filteredRows =
+          filteredPurchaseRecords(
+            rows
+          );
+
+        const tableTarget =
+          container.querySelector(
+            '.table-target'
+          );
+
+        const filtersTarget =
+          container.querySelector(
+            '.purchase-filters-target'
+          );
+
+        const indicatorsTarget =
+          container.querySelector(
+            '.purchase-indicators-target'
+          );
+
+                const materialFilterItems =
+          purchaseFilterOptions(
+            rows.filter(
+              row =>
+                purchaseRowMatchesFilters(
+                  row,
+                  'material'
+                )
+            ),
+            rows,
+            purchaseFilters.materialIds,
+            row =>
+              (
+                row.items || []
+              ).map(item => {
+                const code =
+                  firstCodeFromCodes(
+                    item.material_codes
+                  );
+
+                const label =
+                  [
+                    item.material_name || '-',
+                    code
+                  ]
+                    .filter(Boolean)
+                    .join(' — ');
+
+                return {
+                  value:
+                    String(
+                      item.material_id
+                    ),
+
+                  label,
+
+                  search:
+                    [
+                      item.material_name,
+                      ...(
+                        item.material_codes ||
+                        []
+                      )
+                    ].join(' ')
+                };
+              })
+          );
+
+        const supplierFilterItems =
+          purchaseFilterOptions(
+            rows.filter(
+              row =>
+                purchaseRowMatchesFilters(
+                  row,
+                  'supplier'
+                )
+            ),
+            rows,
+            purchaseFilters.suppliers,
+            row => ({
+              value:
+                String(
+                  row.supplier || ''
+                ).trim(),
+
+              label:
+                String(
+                  row.supplier || ''
+                ).trim()
+            })
+          );
+
+        const invoiceFilterItems =
+          purchaseFilterOptions(
+            rows.filter(
+              row =>
+                purchaseRowMatchesFilters(
+                  row,
+                  'invoice'
+                )
+            ),
+            rows,
+            purchaseFilters.invoiceNumbers,
+            row => ({
+              value:
+                String(
+                  row.invoice_number || ''
+                ).trim(),
+
+              label:
+                String(
+                  row.invoice_number || ''
+                ).trim()
+            })
+          );
+
+        const certificateFilterItems =
+          purchaseFilterOptions(
+            rows.filter(
+              row =>
+                purchaseRowMatchesFilters(
+                  row,
+                  'certificate'
+                )
+            ),
+            rows,
+            purchaseFilters.certificateNumbers,
+            row => ({
+              value:
+                String(
+                  row.certificate_number || ''
+                ).trim(),
+
+              label:
+                String(
+                  row.certificate_number || ''
+                ).trim()
+            })
+          );
+
+        filtersTarget.innerHTML = `
+          <form class="filters purchase-filters">
+
+            ${renderPurchaseMultiFilter({
+              name:
+                'material',
+
+              label:
+                'Material comprado',
+
+              placeholder:
+                'Selecionar materiais',
+
+              selectedValues:
+                purchaseFilters.materialIds,
+
+              items:
+                materialFilterItems
+            })}
+
+            ${renderPurchaseMultiFilter({
+              name:
+                'supplier',
+
+              label:
+                'Fornecedor',
+
+              placeholder:
+                'Selecionar fornecedores',
+
+              selectedValues:
+                purchaseFilters.suppliers,
+
+              items:
+                supplierFilterItems
+            })}
+
+            ${renderPurchaseMultiFilter({
+              name:
+                'invoice',
+
+              label:
+                'Nota fiscal',
+
+              placeholder:
+                'Selecionar notas fiscais',
+
+              selectedValues:
+                purchaseFilters.invoiceNumbers,
+
+              items:
+                invoiceFilterItems
+            })}
+
+            ${renderPurchaseMultiFilter({
+              name:
+                'certificate',
+
+              label:
+                'Certificado',
+
+              placeholder:
+                'Selecionar certificados',
+
+              selectedValues:
+                purchaseFilters.certificateNumbers,
+
+              items:
+                certificateFilterItems
+            })}
+
+            <label>
+              Local
+
+              <select name="filterLocationId">
+                ${locationOptions(
+                  purchaseFilters.locationId,
+                  true
+                )}
+              </select>
+            </label>
+
+            <label>
+              Data inicial
+
+              <input
+                name="filterStartDate"
+                type="date"
+                value="${escapeHtml(
+                  purchaseFilters.startDate
+                )}"
+              />
+            </label>
+
+            <label>
+              Data final
+
+              <input
+                name="filterEndDate"
+                type="date"
+                value="${escapeHtml(
+                  purchaseFilters.endDate
+                )}"
+              />
+            </label>
+
+            <button
+              class="primary-button"
+              type="submit"
+            >
+              Filtrar
+            </button>
+
+            <button
+              class="secondary-button clear-purchase-filters"
+              type="button"
+            >
+              Limpar filtros
+            </button>
+
+          </form>
+        `;
+
+        bindPurchaseMultiFilters(
+          filtersTarget,
+          (
+            filterName,
+            values
+          ) => {
+            if (
+              filterName === 'material'
+            ) {
+              purchaseFilters.materialIds =
+                values;
+            }
+
+            if (
+              filterName === 'supplier'
+            ) {
+              purchaseFilters.suppliers =
+                values;
+            }
+
+            if (
+              filterName === 'invoice'
+            ) {
+              purchaseFilters.invoiceNumbers =
+                values;
+            }
+
+            if (
+              filterName === 'certificate'
+            ) {
+              purchaseFilters.certificateNumbers =
+                values;
+            }
+
+            purchaseFilterToReopen =
+              filterName || '';
+
+            loadTable()
+              .catch(
+                toast
+              );
+          }
+        );
+
+        if (
+          purchaseFilterToReopen
+        ) {
+          const filter =
+            filtersTarget.querySelector(
+              `[data-purchase-filter-name="${purchaseFilterToReopen}"]`
+            );
+
+          const menu =
+            filter?.querySelector(
+              '.purchase-multi-filter-menu'
+            );
+
+          const toggle =
+            filter?.querySelector(
+              '[data-purchase-filter-toggle]'
+            );
+
+          if (
+            menu
+            && toggle
+          ) {
+            menu.hidden =
+              false;
+
+            toggle.setAttribute(
+              'aria-expanded',
+              'true'
+            );
+          }
+
+          purchaseFilterToReopen =
+            '';
+        }
+
+        tableTarget.innerHTML =
+          '';
+
+        const table =
+          DataTable({
+            columns: [
+              {
+                label:
+                  'Data',
+
+                render:
+                  row =>
+                    formatDateOnly(
+                      row.purchase_date
+                    ),
+
+                sortValue:
+                  row =>
+                    row.purchase_date
+              },
+
+              {
+                label:
+                  'Fornecedor',
+
+                render:
+                  row =>
+                    escapeHtml(
+                      row.supplier ||
+                      '-'
+                    )
+              },
+
+              {
+                label:
+                  'Materiais comprados',
+
+                render:
+                  purchaseMaterialSummary
+              },
+
+              {
+                label:
+                  'Local',
+
+                render:
+                  purchaseLocationSummary
+              },
+
+              {
+                label:
+                  'Quantidade',
+
+                render:
+                  purchaseQuantitySummary
+              },
+
+              {
+                label:
+                  'Peso total',
+
+                render:
+                  row =>
+                    `${formatNumber(
+                      row.invoice_total_weight_kg
+                    )} kg`,
+
+                sortValue:
+                  row =>
+                    Number(
+                      row.invoice_total_weight_kg ||
+                      0
+                    )
+              },
+
+              {
+                label:
+                  'Nota fiscal',
+
+                render:
+                  row =>
+                    escapeHtml(
+                      row.invoice_number ||
+                      '-'
+                    )
+              },
+
+              {
+                label:
+                  'Certificado',
+
+                render:
+                  row =>
+                    escapeHtml(
+                      row.certificate_number ||
+                      '-'
+                    )
+              },
+
+              {
+                label:
+                  'Lotes / UDs',
+
+                render:
+                  purchaseLotsSummary
+              },
+
+              {
+                label:
+                  'Observação',
+
+                render:
+                  row =>
+                    escapeHtml(
+                      row.notes ||
+                      '-'
+                    )
+              },
+
+              {
+                label:
+                  'Editar',
+
+                render:
+                  row =>
+                    canWriteProduction
+                      ? `
+                        <button
+                          class="link-button"
+                          data-edit-purchase="${row.id}"
+                        >
+                          Editar
+                        </button>
+                      `
+                      : ''
+              }
+            ],
+
+            rows:
+              filteredRows
+          });
+
+        table.classList.add(
+          'transport-launch-table-wrap',
+          'purchase-launch-table-wrap'
+        );
+
+        tableTarget.appendChild(
+          table
+        );
+
+        renderPurchaseIndicators(
+          indicatorsTarget,
+          filteredRows
+        );
+
+                filtersTarget.onsubmit =
+          event => {
+            event.preventDefault();
+
+            const filterForm =
+              event.target.closest(
+                'form'
+              );
+
+            if (!filterForm) {
+              return;
+            }
+
+            purchaseFilters = {
+              ...purchaseFilters,
+
+              locationId:
+                filterForm.elements
+                  .filterLocationId
+                  .value,
+
+              startDate:
+                filterForm.elements
+                  .filterStartDate
+                  .value,
+
+              endDate:
+                filterForm.elements
+                  .filterEndDate
+                  .value
+            };
+
+            loadTable()
+              .catch(
+                toast
+              );
+          };
+
+        filtersTarget
+          .querySelector(
+            '.clear-purchase-filters'
+          )
+          ?.addEventListener(
+            'click',
+            () => {
+              purchaseFilters = {
+                materialIds: [],
+                suppliers: [],
+                invoiceNumbers: [],
+                certificateNumbers: [],
+                locationId: '',
+                startDate: '',
+                endDate: ''
+              };
+
+              purchaseFilterToReopen =
+                '';
+
+              loadTable()
+                .catch(
+                  toast
+                );
+            }
+          );
+
+        tableTarget.onclick =
+  event => {
+
+    /*
+     * VISUALIZAR LOTES
+     */
+    const lotsButton =
+      event.target.closest(
+        '[data-view-purchase-lots]'
+      );
+
+    if (lotsButton) {
+      const purchase =
+        rows.find(
+          row =>
+            String(
+              row.id
+            )
+            ===
+            String(
+              lotsButton
+                .dataset
+                .viewPurchaseLots
+            )
+        );
+
+      if (purchase) {
+        openPurchaseLotsModal(
+          purchase
+        );
+      }
+
+      return;
+    }
+
+
+    /*
+     * EDITAR COMPRA
+     */
+    if (
+      !canWriteProduction
+    ) {
+      return;
+    }
+
+
+    const button =
+      event.target.closest(
+        '[data-edit-purchase]'
+      );
+
+
+    if (!button) {
+      return;
+    }
+
+
+    const purchase =
+      rows.find(
+        row =>
+          String(
+            row.id
+          )
+          ===
+          String(
+            button
+              .dataset
+              .editPurchase
+          )
+      );
+
+
+    if (purchase) {
+      openPurchaseModal(
+        purchase,
+        loadTable
+      ).catch(
+        toast
+      );
+    }
+  };
+      };
+
+    container
+      .querySelector(
+        '.realize-purchase'
+      )
+      ?.addEventListener(
+        'click',
+        () =>
+          openPurchaseModal(
+            null,
+            loadTable
+          ).catch(
+            toast
+          )
+      );
+
     await loadTable();
   }
 

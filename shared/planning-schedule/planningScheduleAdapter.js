@@ -22,6 +22,14 @@ function toOptionalNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function roundQuantity(value) {
+  return Number(Number(value).toFixed(6));
+}
+
+function roundPercent(value) {
+  return Number(Number(value).toFixed(2));
+}
+
 function positiveInteger(value) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : null;
@@ -347,6 +355,19 @@ function operationDurationMinutes(operation) {
   ));
 }
 
+function operationDailyCapacity(operation) {
+  return toOptionalNumber(firstValue(
+    operation?.nominalDailyCapacity,
+    operation?.nominal_daily_capacity,
+    operation?.maxDailyCapacity,
+    operation?.dailyMaxCapacity,
+    operation?.capacityMaxPerDay,
+    operation?.maxCapacityPerDay,
+    operation?.calendarDailyCapacity?.capacityPerDay,
+    operation?.dailyCapacity?.capacityPerDay
+  ));
+}
+
 function findMachineByName(machines, machineName) {
   const key = normalizeProductionCalendarMachineName(machineName);
   if (!key) return null;
@@ -404,6 +425,8 @@ function operationParentOperationId(operation) {
   return firstValue(
     operation?.parentOperationId,
     operation?.parent_operation_id,
+    operation?.calendarParentOperationId,
+    operation?.calendar_parent_operation_id,
     operation?.splitParentOperationId,
     operation?.split_parent_operation_id
   );
@@ -425,6 +448,20 @@ function currentDailyId(operation) {
     operation?.calendar_day_id,
     operation?.id
   );
+}
+
+function addDateDays(date, days) {
+  if (!isValidDateOnly(date)) return '';
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function daysBetween(startDate, endDate) {
+  if (!isValidDateOnly(startDate) || !isValidDateOnly(endDate) || endDate < startDate) return [startDate].filter(Boolean);
+  const days = [];
+  for (let date = startDate; date <= endDate; date = addDateDays(date, 1)) days.push(date);
+  return days;
 }
 
 function deterministicAllocationId({ operation, operationId, planningId, machineId, date, sequence }) {
@@ -477,6 +514,10 @@ function adaptOperation(operation, context) {
   if (issues.length) return { allocation: null, issues };
 
   const safeSequence = Number.isFinite(sequence) ? sequence : context.index;
+  const maxDailyCapacity = operationDailyCapacity(operation);
+  const capacityPercent = maxDailyCapacity > 0
+    ? roundPercent((quantity / maxDailyCapacity) * 100)
+    : toNumber(firstValue(operation?.capacityPercent, operation?.capacity_percent, 0));
 
   return {
     allocation: {
@@ -511,15 +552,9 @@ function adaptOperation(operation, context) {
       quantity,
       unit: String(firstValue(operation?.unit, operation?.planned_unit, '')),
       durationMinutes,
-      capacityPercent: toNumber(firstValue(operation?.capacityPercent, operation?.capacity_percent, 0)),
-      maxDailyCapacity: toOptionalNumber(firstValue(
-        operation?.maxDailyCapacity,
-        operation?.dailyMaxCapacity,
-        operation?.capacityMaxPerDay,
-        operation?.maxCapacityPerDay,
-        operation?.calendarDailyCapacity?.capacityPerDay,
-        operation?.dailyCapacity?.capacityPerDay
-      )),
+      capacityPercent,
+      maxDailyCapacity,
+      nominalDailyCapacity: maxDailyCapacity,
       peopleCount: toNumber(firstValue(operation?.peopleCount, operation?.people_count, 0)),
       productivityOptions: toArray(operation?.productivityOptions).map(option => ({ ...option })),
       productivity: operation?.machineName || operation?.machine_name || operation?.outputQty || operation?.timeSeconds
@@ -537,6 +572,70 @@ function adaptOperation(operation, context) {
     },
     issues: []
   };
+}
+
+function expandOperationIntoDailyOperations(operation, context) {
+  const startDate = operationDate(operation);
+  const endDate = normalizeDateOnly(firstValue(operation?.endDate, operation?.end_date, startDate));
+  const quantity = operationQuantity(operation);
+  const capacity = operationDailyCapacity(operation);
+  if (
+    !isValidDateOnly(startDate)
+    || !(quantity > 0)
+    || !(capacity > 0)
+    || quantity <= capacity
+  ) return [operation];
+
+  const dateCandidates = daysBetween(startDate, endDate);
+  const requiredDays = Math.ceil(quantity / capacity);
+  const dates = [...dateCandidates];
+  while (dates.length < requiredDays) {
+    dates.push(addDateDays(dates.at(-1) || startDate, 1));
+  }
+
+  let remaining = quantity;
+  const originalDuration = operationDurationMinutes(operation);
+  const firstOperationId = operationIdFor(operation);
+  return dates
+    .map((date, index) => {
+      if (!(remaining > 0)) return null;
+      const dailyQuantity = roundQuantity(Math.min(remaining, capacity));
+      remaining = roundQuantity(remaining - dailyQuantity);
+      const dailyRatio = quantity > 0 ? dailyQuantity / quantity : 0;
+      const durationMinutes = originalDuration > 0 && dailyRatio > 0
+        ? Math.max(Math.ceil(originalDuration * dailyRatio), 1)
+        : operationDurationMinutes(operation);
+      return {
+        ...operation,
+        allocationId: firstValue(operation?.allocationId, operation?.allocation_id)
+          ? `${firstValue(operation?.allocationId, operation?.allocation_id)}:day-${index + 1}`
+          : undefined,
+        operationId: `${firstOperationId || operationMaterialId(operation)}:day-${index + 1}`,
+        calendarParentOperationId: firstOperationId || operationMaterialId(operation),
+        calendarDayIndex: index + 1,
+        calendarDayCount: requiredDays,
+        date,
+        plannedDate: date,
+        startDate: date,
+        endDate: date,
+        quantity: dailyQuantity,
+        produceQty: dailyQuantity,
+        plannedQty: dailyQuantity,
+        duration: durationMinutes,
+        durationMinutes,
+        capacityPercent: roundPercent((dailyQuantity / capacity) * 100),
+        maxDailyCapacity: capacity,
+        nominalDailyCapacity: capacity,
+        sequence: Number(firstValue(operation?.sequence, operation?.productionOrder, context.index)) + (index / 100),
+        segments: [{
+          date,
+          startTime: String(firstValue(operation?.startTime, operation?.start_time, '')),
+          endTime: String(firstValue(operation?.endTime, operation?.end_time, '')),
+          minutes: durationMinutes
+        }]
+      };
+    })
+    .filter(Boolean);
 }
 
 /**
@@ -569,8 +668,8 @@ function adaptOperation(operation, context) {
  */
 export function adaptPlanningResultToScheduleSnapshot(input = {}) {
   const planningId = firstValue(input.planningId, input.planId, input.plan_id, input.id);
-  const sourceOperations = toArray(input.calendarOperations).length
-    ? toArray(input.calendarOperations)
+  const sourceOperations = Array.isArray(input.calendarOperations)
+    ? input.calendarOperations
     : toArray(input.operations);
   const errors = [];
   const warnings = [];
@@ -591,7 +690,7 @@ export function adaptPlanningResultToScheduleSnapshot(input = {}) {
     pushUniqueMachine(machines, normalizeMachine(machine, index));
   });
 
-  sourceOperations.forEach((operation, index) => {
+  sourceOperations.flatMap((operation, index) => expandOperationIntoDailyOperations(operation, { index })).forEach((operation, index) => {
     const { allocation, issues } = adaptOperation(operation, {
       planningId,
       status: input.status,
@@ -622,6 +721,13 @@ export function adaptPlanningResultToScheduleSnapshot(input = {}) {
       0
     ));
   }
+
+  toArray(input.diagnostics?.errors).forEach(issue => {
+    errors.push({ ...issue });
+  });
+  toArray(input.diagnostics?.warnings).forEach(issue => {
+    warnings.push({ ...issue });
+  });
 
   return {
     days,

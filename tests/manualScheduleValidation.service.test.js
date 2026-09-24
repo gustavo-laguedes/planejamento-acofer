@@ -669,6 +669,17 @@ function codes(result) {
     allocation({ allocationId: 'team-touch-b', machineId: 'M2', peopleCount: 4, startTime: '10:00', endTime: '12:00' })
   ]);
   assert.ok(!codes(result).includes('TEAM_CAPACITY_EXCEEDED'));
+  assert.equal(result.resourceProjection.byDate['2026-07-13'].shifts.day.peakPeople, 4);
+}
+
+// Recursos L2. Overlap parcial deve bloquear pelo pico de simultaneidade.
+{
+  const result = validate([
+    allocation({ allocationId: 'team-partial-a', machineId: 'M1', peopleCount: 2, startTime: '07:00', endTime: '12:17' }),
+    allocation({ allocationId: 'team-partial-b', machineId: 'M2', peopleCount: 2, startTime: '10:31', endTime: '14:02' })
+  ], { shifts: [{ ...dayShift[0], teamAvailable: 3 }] });
+  assert.ok(codes(result).includes('TEAM_CAPACITY_EXCEEDED'));
+  assert.equal(result.resourceProjection.byDate['2026-07-13'].shifts.day.peakPeople, 4);
 }
 
 // Recursos M/N. dailyTeamOverride aumenta ou reduz a capacidade exata.

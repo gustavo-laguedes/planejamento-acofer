@@ -10,6 +10,7 @@ import stockRoutes from './routes/stock.routes.js';
 import productivityRoutes from './routes/productivity.routes.js';
 import planningRoutes from './routes/planning.routes.js';
 import actualsRoutes from './routes/actuals.routes.js';
+import actualsExcelRoutes from './routes/actualsExcel.routes.js';
 import locationsRoutes from './routes/locations.routes.js';
 import machinesRoutes from './routes/machines.routes.js';
 import materialsRoutes from './routes/materials.routes.js';
@@ -70,7 +71,17 @@ app.use('/api/imports', requireAuth, importRoutes);
 app.use('/api/stock', requireAuth, requireStockRead, stockRoutes);
 app.use('/api/productivity', requireAuth, requireProductivityRead, productivityRoutes);
 app.use('/api/planning', requireAuth, requirePermission('planning:read'), planningRoutes);
-app.use('/api/actuals', requireAuth, actualsRoutes);
+app.use(
+  '/api/actuals/excel',
+  requireAuth,
+  actualsExcelRoutes
+);
+
+app.use(
+  '/api/actuals',
+  requireAuth,
+  actualsRoutes
+);
 app.use('/api/locations', requireAuth, requirePermission('registrations:read'), locationsRoutes);
 app.use('/api/machines', requireAuth, requirePermission('registrations:read'), machinesRoutes);
 app.use('/api/materials', requireAuth, requirePermission('registrations:read'), materialsRoutes);

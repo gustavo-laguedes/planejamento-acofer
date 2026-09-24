@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import postgres from 'postgres';
+import { sql } from '../db.js';
 
 const expectedTables = [
   'app_users',
@@ -17,6 +17,7 @@ const expectedTables = [
   'production_plans',
   'productivity_matrix',
   'stock_adjustments',
+  'stock_import_sales_history',
   'stock_location_adjustments',
   'stock_transport_records',
   'stock_snapshot'
@@ -34,7 +35,26 @@ const expectedColumns = {
     'manual_schedule_is_dirty', 'manual_schedule_revision', 'updated_at'
   ],
   production_plan_days: ['allocation_id', 'start_time', 'end_time'],
-  stock_transport_records: ['status', 'canceled_at', 'cancel_reason']
+  production_launches: [
+  'location_id',
+  'location_name'
+],
+
+stock_import_sales_history: [
+  'import_id',
+  'material_id',
+  'location_id',
+  'period_start',
+  'period_end',
+  'sales_qty',
+  'product_codes'
+],
+
+stock_transport_records: [
+  'status',
+  'canceled_at',
+  'cancel_reason'
+]
 };
 
 const expectedAppUserRoles = [
@@ -52,12 +72,6 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
-const sql = postgres(process.env.DATABASE_URL, {
-  ssl: 'require',
-  max: 1,
-  idle_timeout: 5,
-  connect_timeout: 10
-});
 
 try {
   const rows = await sql.unsafe(`
@@ -75,7 +89,8 @@ try {
     WHERE table_schema = 'public'
       AND table_name IN (
         'app_users', 'import_history', 'inventory_counts', 'productivity_matrix',
-        'production_plans', 'production_plan_days', 'stock_transport_records'
+        'production_plans', 'production_plan_days', 'production_launches',
+'stock_import_sales_history', 'stock_transport_records'
       )
   `);
   const columnsByTable = new Map();

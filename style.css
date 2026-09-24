@@ -587,6 +587,8 @@ select:disabled {
 }
 
 .tab {
+  display: flex;
+  align-items: center;
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -594,6 +596,8 @@ select:disabled {
   font-weight: 700;
   border-bottom: 3px solid transparent;
   white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
 }
 
 .tab.active {
@@ -612,7 +616,8 @@ select:disabled {
   min-width: 0;
 }
 
-.page:has(.stock-page) {
+.page:has(.stock-page),
+.page:has(.stock-current-page) {
   width: calc(100vw - 48px);
   max-width: none;
   padding-left: 0;
@@ -1767,7 +1772,7 @@ body.analysis-fullscreen-open .modal-backdrop {
   display: grid;
   grid-template-columns: minmax(320px, 1fr) minmax(140px, 0.32fr) minmax(110px, 0.22fr) minmax(130px, 0.26fr) auto;
   gap: 10px;
-  align-items: end;
+  align-items: start;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfd;
@@ -1776,6 +1781,46 @@ body.analysis-fullscreen-open .modal-backdrop {
 
 .transport-line .transport-combo {
   min-width: 0;
+}
+
+.transport-material-stock-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  align-self: start;
+}
+
+.transport-origin-stock {
+  min-height: 16px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.transport-origin-stock strong {
+  color: var(--petroleum-dark);
+  font-weight: 900;
+}
+
+.transport-origin-stock.is-exceeded strong {
+  color: var(--danger);
+}
+
+.transport-stock-warning {
+  margin-left: 6px;
+  color: var(--danger);
+  font-style: normal;
+  font-weight: 900;
+}
+
+.transport-line input.transport-stock-exceeded-input {
+  border-color: var(--danger) !important;
+  background: #fff7f7;
+  color: #991b1b;
+  box-shadow:
+    0 0 0 2px
+    rgba(220, 38, 38, 0.12);
 }
 
 .transport-line .transport-combo-menu {
@@ -4494,7 +4539,226 @@ body.analysis-fullscreen-open {
   background-image: linear-gradient(rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.34));
 }
 
+.stock-current-page,
+.stock-current-page > *,
+.stock-current-table-target {
+  min-width: 0;
+}
+
+.stock-current-cards {
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.stock-current-cards .metric-card {
+  min-height: 96px;
+}
+
+.stock-current-cards .metric-card strong {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.stock-current-cards .metric-card small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.stock-current-panel {
+  display: grid;
+  gap: 14px;
+  overflow: hidden;
+}
+
+.stock-current-filters {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) repeat(2, minmax(150px, 180px)) auto auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.stock-current-filters button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.stock-current-table-wrap {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 68vh;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.stock-current-table-wrap table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.stock-current-table-wrap th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-width: 104px;
+  background: #f7f9fb;
+  border-bottom: 1px solid var(--line);
+  color: var(--petroleum-dark);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.stock-current-table-wrap th:nth-child(1) {
+  min-width: 130px;
+}
+
+.stock-current-table-wrap th:nth-child(2) {
+  min-width: 260px;
+}
+
+.stock-current-table-wrap td {
+  min-width: 104px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(47, 52, 59, 0.08);
+  color: #243443;
+  font-size: 13px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.stock-current-table-wrap td:nth-child(2) {
+  white-space: normal;
+}
+
+.stock-current-table-wrap tbody tr:hover td {
+  background: #fbfcfd;
+}
+
+.stock-material-cell {
+  position: relative;
+  min-height: 42px;
+  padding-right: 24px;
+}
+
+.stock-material-cell strong {
+  display: block;
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.stock-inventory-info {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0;
+}
+
+.stock-location-balance {
+  display: inline-grid;
+  grid-template-columns: minmax(54px, 1fr) 26px;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+}
+
+.stock-location-balance strong {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-expand-location {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--petroleum-dark);
+  font-weight: 900;
+  line-height: 1;
+  padding: 0;
+}
+
+.stock-expand-location[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: rgba(217, 119, 6, 0.1);
+  color: var(--accent);
+}
+
+.stock-duration-warning-row td:first-child {
+  border-left: 5px solid var(--danger);
+}
+
+.stock-duration-warning-row td:last-child {
+  color: var(--danger);
+  font-weight: 900;
+}
+
+.stock-inventory-photo-modal {
+  display: grid;
+  gap: 14px;
+}
+
+.stock-inventory-photo {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.stock-inventory-photo article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.stock-inventory-photo article.wide {
+  grid-column: 1 / -1;
+}
+
+.stock-inventory-photo span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.stock-inventory-photo strong {
+  color: var(--petroleum-dark);
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 1200px) {
+  .stock-current-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stock-current-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stock-current-filters label:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .stock-current-table-wrap table {
+    min-width: 1320px;
+  }
+
   .stock-panel {
     overflow: hidden;
   }
@@ -4622,6 +4886,412 @@ body.analysis-fullscreen-open {
 
 .planning-results[hidden] {
   display: none;
+}
+
+.planning-materials-program-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.planning-materials-program-target {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.planning-materials-program-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.planning-materials-program-group h3 {
+  color: var(--production-text, var(--ink));
+  font-size: 13px;
+  font-weight: 900;
+  margin: 0;
+}
+
+.planning-materials-program-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, max-content));
+  gap: 6px;
+}
+
+.planning-material-program-card {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    border: 1px solid color-mix(in srgb, var(--production-border, var(--line)) 45%, var(--line));
+  border-left: 3px solid var(--production-border, var(--accent));
+  border-radius: 6px;
+    background: #ffffff;
+    padding: 7px 8px;
+  }
+
+  .planning-material-program-card.is-ready {
+    cursor: grab;
+  }
+
+  .planning-material-program-card.is-partial {
+    border-color: #facc15;
+    border-left-color: #ca8a04;
+    background: #fef9c3;
+    color: #713f12;
+    cursor: grab;
+  }
+
+  .planning-material-program-card.is-ready[data-dragging="true"] {
+    opacity: .62;
+    outline: 2px solid var(--production-border, var(--accent));
+    outline-offset: 2px;
+  }
+
+  .planning-material-program-card.is-partial[data-dragging="true"] {
+    opacity: .62;
+    outline: 2px solid #ca8a04;
+    outline-offset: 2px;
+  }
+  
+  .planning-material-program-card.is-blocked {
+    border-color: #d1d5db;
+    border-left-color: #9ca3af;
+    background: #f3f4f6;
+    color: #6b7280;
+    cursor: not-allowed;
+  }
+
+  .planning-material-program-card.is-completed {
+    border-color: #bbf7d0;
+    border-left-color: #16a34a;
+    background: #f0fdf4;
+    color: #166534;
+    cursor: default;
+  }
+
+.planning-material-program-card-title {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.planning-material-program-card strong {
+  font-size: 12px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.planning-material-program-card-pill {
+  border: 1px solid #eab308;
+  border-radius: 999px;
+  background: #fef08a;
+  color: #713f12;
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 3px 5px;
+}
+
+.planning-material-program-card dl {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.planning-material-program-card dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.planning-material-program-card dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.planning-material-program-card dd {
+  font-size: 11px;
+  margin: 0;
+  font-weight: 900;
+  text-align: right;
+}
+
+.planning-material-secondary-qty {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.planning-shared-stock-strip {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 6px;
+  padding: 8px 10px;
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--production-border, var(--line)) 26%,
+      var(--line)
+    );
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.planning-shared-stock-strip-title {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.planning-shared-stock-strip-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.planning-shared-stock-strip-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.planning-shared-stock-strip-item > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.planning-shared-stock-strip-item small {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.planning-shared-stock-strip-item strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+/* =========================================================
+   OVERRIDE VISUAL — cards mais compridos na horizontal
+   ========================================================= */
+
+.planning-materials-program-cards {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 10px !important;
+  width: 100%;
+}
+
+.planning-material-program-card {
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  flex: 1 1 100% !important;
+
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: 10px 16px;
+  align-items: start;
+
+  padding: 12px 14px !important;
+  min-height: 96px;
+  box-sizing: border-box;
+}
+
+.planning-material-program-card > h4,
+.planning-material-program-card > .planning-material-program-card-title,
+.planning-material-program-card > .planning-material-program-card-header {
+  grid-column: 1 / 2;
+  margin: 0 !important;
+  align-self: start;
+}
+
+.planning-material-program-card > dl {
+  grid-column: 2 / 3;
+  margin: 0 !important;
+
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(110px, 1fr));
+  gap: 8px 14px;
+  align-items: start;
+}
+
+.planning-material-program-card dt {
+  margin: 0 0 2px 0 !important;
+  font-size: 10px !important;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.planning-material-program-card dd {
+  margin: 0 !important;
+  text-align: left !important;
+  font-size: 12px !important;
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.planning-material-program-card .planning-material-secondary-qty {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.planning-shared-stock-strip {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  margin: 4px 0 10px;
+}
+
+.planning-shared-stock-strip-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px 16px;
+  align-items: start;
+}
+
+.planning-shared-stock-strip-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.planning-shared-stock-strip-item > span {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.planning-shared-stock-strip-item strong {
+  text-align: right;
+}
+
+@media (max-width: 1100px) {
+  .planning-material-program-card {
+    grid-template-columns: 1fr;
+  }
+
+  .planning-material-program-card > h4,
+  .planning-material-program-card > .planning-material-program-card-title,
+  .planning-material-program-card > .planning-material-program-card-header,
+  .planning-material-program-card > dl {
+    grid-column: 1 / -1;
+  }
+
+  .planning-material-program-card > dl {
+    grid-template-columns: repeat(2, minmax(120px, 1fr)) !important;
+  }
+}
+
+@media (max-width: 700px) {
+  .planning-material-program-card > dl {
+    grid-template-columns: 1fr !important;
+  }
+
+  .planning-shared-stock-strip-items {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .planning-materials-program-target {
+    grid-template-columns: 1fr;
+  }
+}
+
+.planning-material-allocation-dialog {
+  max-width: 520px;
+}
+
+.planning-material-allocation-form {
+  display: grid;
+  gap: 12px;
+}
+
+.planning-material-allocation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.planning-material-allocation-result {
+  display: grid;
+
+  gap: 3px;
+
+  border: 1px solid var(--line);
+  border-radius: 6px;
+
+  background: #f8fafc;
+
+  color: var(--ink);
+
+  padding: 10px 12px;
+}
+
+
+.planning-material-allocation-result-primary {
+  color: var(--ink);
+
+  font-size: 18px;
+  font-weight: 900;
+
+  line-height: 1.2;
+}
+
+
+.planning-material-allocation-result-secondary {
+  display: block;
+
+  color: var(--muted);
+
+  font-size: 12px;
+  font-weight: 800;
+
+  line-height: 1.25;
+}
+
+.planning-material-allocation-alert {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  padding: 10px 12px;
+}
+
+.planning-material-allocation-alert[hidden] {
+  display: none;
+}
+
+.planning-material-allocation-form input.is-invalid {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, .14);
 }
 
 .planning-builder-panel .planning-form {
@@ -7331,6 +8001,7 @@ body.calendar-fullscreen-open {
 
   .page,
   .page:has(.stock-page),
+  .page:has(.stock-current-page),
   .page:has(.planning-page),
   .page:has(.registrations-page),
   .page:has(.launches-page),
@@ -7655,6 +8326,20 @@ body.calendar-fullscreen-open {
 
   .stock-panel {
     padding: 16px;
+  }
+
+  .stock-current-cards,
+  .stock-current-filters,
+  .stock-inventory-photo {
+    grid-template-columns: 1fr;
+  }
+
+  .stock-current-filters label:first-child {
+    grid-column: auto;
+  }
+
+  .stock-current-filters button {
+    width: 100%;
   }
 
   .modal-backdrop {
@@ -8106,3 +8791,8642 @@ body.calendar-fullscreen-open {
 
 .planning-stock-alerts .severity-error { color: #991b1b; }
 .planning-stock-alerts .severity-warning { color: #92400e; }
+
+/* =========================================================
+   ESTOQUE ATUAL - VISUAL
+   ========================================================= */
+
+.stock-current-page {
+  gap: 14px;
+}
+
+.stock-current-cards {
+  grid-template-columns:
+    1.2fr
+    1fr
+    .72fr
+    1.05fr
+    .72fr;
+
+  gap: 10px;
+}
+
+.stock-current-cards .metric-card {
+  min-height: 88px;
+  padding: 13px 15px;
+  border-radius: 10px;
+  box-shadow:
+    0 8px 22px
+    rgba(16, 24, 40, 0.05);
+}
+
+.stock-current-cards .metric-card span {
+  font-size: 11px;
+}
+
+.stock-current-cards .metric-card strong {
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.stock-card-import {
+  border-top: 3px solid #4d86a6;
+}
+
+.stock-card-inventory {
+  border-top: 3px solid #6d8f7b;
+}
+
+.stock-card-minimum {
+  border-top: 3px solid #d97706;
+}
+
+.stock-card-period {
+  border-top: 3px solid #7c83a6;
+}
+
+.stock-card-days {
+  border-top: 3px solid #697386;
+}
+
+
+/* ESTOQUE MÍNIMO */
+
+.stock-minimum-edit {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.stock-minimum-edit
+.stock-minimum-input {
+  width: 78px;
+  min-width: 78px;
+  height: 34px;
+
+  padding: 5px 8px;
+
+  border-radius: 7px;
+
+  text-align: center;
+
+  color: var(--petroleum-dark);
+
+  font-size: 16px;
+  font-weight: 900;
+
+  font-variant-numeric:
+    tabular-nums;
+}
+
+.stock-minimum-edit small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+
+/* FILTROS */
+
+.stock-current-panel {
+  gap: 12px;
+  padding: 14px;
+  border-radius: 10px;
+}
+
+.stock-current-filters {
+  display: grid;
+
+  grid-template-columns:
+    minmax(300px, 1fr)
+    repeat(
+      2,
+      minmax(145px, 175px)
+    )
+    auto
+    auto;
+
+  gap: 10px;
+
+  align-items: end;
+}
+
+.stock-current-filters label {
+  gap: 5px;
+
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.stock-current-filters input,
+.stock-current-filters button {
+  min-height: 38px;
+}
+
+
+/* TABELA */
+
+.stock-current-table-wrap {
+  width: 100%;
+
+  max-height: 68vh;
+
+  overflow: auto;
+
+  border:
+    1px solid #cfd6dd;
+
+  border-radius: 9px;
+
+  background: #ffffff;
+}
+
+.stock-current-overview-table {
+  width: max-content;
+  min-width: 100%;
+
+  border-collapse: separate;
+  border-spacing: 0;
+
+  background: #ffffff;
+}
+
+.stock-current-overview-table th,
+.stock-current-overview-table td {
+  min-width: 102px;
+
+  padding: 8px 9px;
+
+  border-right:
+    1px solid
+    rgba(47, 52, 59, 0.08);
+
+  border-bottom:
+    1px solid
+    rgba(47, 52, 59, 0.09);
+
+  text-align: center;
+  vertical-align: middle;
+
+  font-size: 12px;
+  line-height: 1.2;
+
+  white-space: nowrap;
+}
+
+.stock-current-overview-table
+th:last-child,
+.stock-current-overview-table
+td:last-child {
+  border-right: 0;
+}
+
+
+/* CABEÇALHO SUPERIOR */
+
+.stock-current-overview-table
+.stock-group-row th {
+  position: sticky;
+
+  top: 0;
+
+  z-index: 5;
+
+  height: 36px;
+
+  padding: 7px 8px;
+
+  color: #25313f;
+
+  font-size: 11.5px;
+  font-weight: 900;
+
+  text-transform: uppercase;
+}
+
+.stock-current-overview-table
+.stock-column-row th {
+  position: sticky;
+
+  top: 36px;
+
+  z-index: 4;
+
+  height: 42px;
+
+  padding: 7px 8px;
+}
+
+
+/* CORES DOS GRUPOS */
+
+.stock-group-material,
+.stock-col-material {
+  background: #f4f6f8;
+}
+
+.stock-group-matriz,
+.stock-col-matriz {
+  background: #edf7f3;
+}
+
+.stock-group-feital,
+.stock-col-feital {
+  background: #eef4fb;
+}
+
+.stock-group-centro,
+.stock-col-centro {
+  background: #fff6e8;
+}
+
+.stock-group-totals,
+.stock-col-totals {
+  background: #f3f5f8;
+}
+
+
+/* COR MAIS SUAVE NAS LINHAS */
+
+.stock-current-overview-table
+td.stock-col-material {
+  background: #fbfcfd;
+}
+
+.stock-current-overview-table
+td.stock-col-matriz {
+  background: #f6fbf9;
+}
+
+.stock-current-overview-table
+td.stock-col-feital {
+  background: #f7faff;
+}
+
+.stock-current-overview-table
+td.stock-col-centro {
+  background: #fffaf2;
+}
+
+.stock-current-overview-table
+td.stock-col-totals {
+  background: #fafbfc;
+}
+
+
+/* FAIXA COLORIDA EM CADA LOCAL */
+
+.stock-group-matriz {
+  box-shadow:
+    inset 0 3px 0 #6f9d88;
+}
+
+.stock-group-feital {
+  box-shadow:
+    inset 0 3px 0 #7195bd;
+}
+
+.stock-group-centro {
+  box-shadow:
+    inset 0 3px 0 #d3a15d;
+}
+
+.stock-group-totals {
+  box-shadow:
+    inset 0 3px 0 #7f8793;
+}
+
+
+/* TAMANHO DAS COLUNAS */
+
+.stock-col-code {
+  min-width: 138px !important;
+}
+
+.stock-col-name {
+  min-width: 230px !important;
+  max-width: 280px;
+}
+
+.stock-col-balance {
+  min-width: 112px !important;
+}
+
+.stock-col-duration {
+  min-width: 122px !important;
+}
+
+
+/* MATRIZ / FEITAL / CENTRO + */
+
+.stock-location-header {
+  display: inline-flex;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 7px;
+
+  width: 100%;
+}
+
+.stock-location-toggle {
+  display: inline-grid;
+
+  place-items: center;
+
+  width: 19px;
+  min-width: 19px;
+  height: 19px;
+
+  border:
+    1px solid
+    rgba(47, 52, 59, 0.26);
+
+  border-radius: 999px;
+
+  background:
+    rgba(
+      255,
+      255,
+      255,
+      0.82
+    );
+
+  color:
+    var(--petroleum-dark);
+
+  padding: 0;
+
+  font-size: 14px;
+  font-weight: 900;
+
+  line-height: 1;
+}
+
+.stock-location-toggle:hover,
+.stock-location-toggle[
+  aria-expanded="true"
+] {
+  border-color: var(--accent);
+
+  background: #ffffff;
+
+  color: var(--accent);
+}
+
+/* SETORES DENTRO DE MATRIZ / FEITAL / CENTRO */
+
+.stock-sector-row th {
+  border-bottom:
+    1px solid
+    #d7dee7;
+}
+
+.stock-sector-spacer {
+  background: #f4f6f8;
+}
+
+.stock-sector-header {
+  padding: 7px 6px;
+
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  text-align: center;
+
+  color: #5b6574;
+}
+
+.stock-sector-single {
+  font-weight: 700;
+}
+
+.stock-sector-production {
+  box-shadow:
+    inset 0 -2px 0
+    rgba(79, 138, 114, .22);
+}
+
+.stock-sector-transport {
+  box-shadow:
+    inset 0 -2px 0
+    rgba(82, 127, 174, .22);
+}
+
+.stock-sector-commercial {
+  box-shadow:
+    inset 0 -2px 0
+    rgba(197, 138, 55, .22);
+}
+
+
+/* ORDENAÇÃO */
+
+.stock-sort-button {
+  display: inline-flex;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 6px;
+
+  width: 100%;
+
+  min-height: 28px;
+
+  border: 0;
+
+  background: transparent;
+
+  color: #344054;
+
+  padding: 0;
+
+  font: inherit;
+
+  font-size: 11px;
+  font-weight: 800;
+
+  text-align: center;
+}
+
+.stock-sort-button
+.sort-indicator {
+  color: #7b8794;
+
+  font-size: 10px;
+}
+
+.stock-sort-button.active {
+  color:
+    var(--petroleum-dark);
+}
+
+
+/* CÓDIGOS */
+
+.stock-code-list {
+  display: flex;
+
+  flex-wrap: wrap;
+
+  justify-content: center;
+
+  gap: 4px;
+}
+
+.stock-code-list .code-pill {
+  min-height: 21px;
+
+  padding: 2px 7px;
+
+  font-size: 10.5px;
+}
+
+
+/* MATERIAL + ÍCONE DE INFORMAÇÃO */
+
+.stock-material-cell {
+  position: relative;
+
+  display: grid;
+
+  place-items: center;
+
+  min-height: 42px;
+
+  padding:
+    2px
+    22px;
+
+  text-align: center;
+
+  white-space: normal;
+}
+
+.stock-material-cell strong {
+  display: block;
+
+  width: 100%;
+
+  color: var(--ink);
+
+  font-size: 12px;
+  font-weight: 800;
+
+  line-height: 1.25;
+
+  text-align: center;
+}
+
+.stock-inventory-info {
+  position: absolute;
+
+  right: 2px;
+  bottom: 2px;
+
+  display: grid;
+
+  place-items: center;
+
+  width: 16px;
+  height: 16px;
+
+  border:
+    1px solid #c3cad3;
+
+  border-radius: 999px;
+
+  background:
+    rgba(
+      255,
+      255,
+      255,
+      0.92
+    );
+
+  color: #7b8794;
+
+  padding: 0;
+
+  font-family:
+    Georgia,
+    serif;
+
+  font-size: 10px;
+  font-weight: 800;
+
+  line-height: 1;
+
+  opacity: .86;
+}
+
+.stock-inventory-info:hover {
+  border-color:
+    var(--accent);
+
+  color:
+    var(--accent);
+
+  opacity: 1;
+}
+
+
+/* NÚMEROS */
+
+.stock-balance-value,
+.stock-current-overview-table td {
+  font-variant-numeric:
+    tabular-nums;
+}
+
+.stock-balance-value {
+  color: #25313f;
+
+  font-weight: 800;
+}
+
+
+/* ESTOQUE ABAIXO DO MÍNIMO */
+
+.stock-duration-warning-row
+td:first-child {
+  border-left:
+    4px solid
+    var(--danger);
+}
+
+.stock-duration-warning-row
+.stock-col-duration {
+  color:
+    var(--danger);
+
+  font-weight: 900;
+}
+
+
+/* MODAL DO i */
+
+.stock-inventory-photo-modal {
+  width:
+    min(
+      620px,
+      96vw
+    );
+}
+
+.stock-inventory-photo article {
+  text-align: center;
+}
+
+
+@media (
+  max-width: 1200px
+) {
+
+  .stock-current-cards {
+    grid-template-columns:
+      repeat(
+        2,
+        minmax(0, 1fr)
+      );
+  }
+
+  .stock-current-filters {
+    grid-template-columns:
+      repeat(
+        2,
+        minmax(0, 1fr)
+      );
+  }
+
+  .stock-current-filters
+  label:first-child {
+    grid-column:
+      1 / -1;
+  }
+}
+
+/* =========================================================
+   ESTOQUE ATUAL - AJUSTES FINOS DE TABELA
+   ========================================================= */
+
+
+/* ---------------------------------------------------------
+   1. TABELA SEM SCROLL VERTICAL INTERNO
+   O scroll vertical passa a ser o do navegador.
+   Mantém apenas scroll horizontal quando necessário.
+   --------------------------------------------------------- */
+
+.stock-current-table-wrap {
+  max-height: none !important;
+  height: auto !important;
+
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+}
+
+
+/* ---------------------------------------------------------
+   2. LARGURAS FIXAS / CONSISTENTES
+   --------------------------------------------------------- */
+
+.stock-current-overview-table
+.stock-col-code {
+  width: 155px !important;
+  min-width: 155px !important;
+  max-width: 155px !important;
+}
+
+.stock-current-overview-table
+.stock-col-name {
+  width: 300px !important;
+  min-width: 300px !important;
+  max-width: 300px !important;
+}
+
+
+/*
+  MATRIZ / FEITAL / CENTRO ficam SEMPRE com a mesma largura.
+  Isso vale tanto para saldo quanto para colunas abertas.
+*/
+
+.stock-current-overview-table
+.stock-col-location {
+  width: 122px !important;
+  min-width: 122px !important;
+  max-width: 122px !important;
+}
+
+.stock-current-overview-table
+.stock-col-balance {
+  width: 122px !important;
+  min-width: 122px !important;
+  max-width: 122px !important;
+}
+
+
+/* Totais */
+
+.stock-current-overview-table
+.stock-col-totals {
+  width: 132px;
+  min-width: 132px;
+}
+
+.stock-current-overview-table
+.stock-col-duration {
+  width: 135px;
+  min-width: 135px !important;
+}
+
+
+/* ---------------------------------------------------------
+   3. CÓDIGO E MATERIAL ALINHADOS À ESQUERDA
+   --------------------------------------------------------- */
+
+.stock-current-overview-table
+td.stock-col-code {
+  text-align: left;
+  padding-left: 14px;
+}
+
+.stock-code-list {
+  justify-content: flex-start !important;
+  align-items: center;
+}
+
+
+/*
+  Se tiver dois códigos eles continuam lado a lado,
+  exatamente como já está.
+*/
+
+.stock-current-overview-table
+td.stock-col-name {
+  text-align: left;
+  padding-left: 14px;
+}
+
+.stock-material-cell {
+  place-items: initial !important;
+
+  align-items: center;
+  justify-items: start;
+
+  text-align: left !important;
+
+  padding:
+    3px
+    24px
+    3px
+    4px;
+}
+
+.stock-material-cell strong {
+  text-align: left !important;
+}
+
+
+/* Os títulos Código e Nome do material podem continuar
+   centralizados no cabeçalho. */
+
+
+/* ---------------------------------------------------------
+   4. CONGELAR CÓDIGO E NOME DO MATERIAL
+   --------------------------------------------------------- */
+
+
+/*
+  Primeira coluna: Código
+*/
+
+.stock-current-overview-table
+thead
+.stock-column-row
+th:nth-child(1),
+.stock-current-overview-table
+tbody
+td:nth-child(1) {
+  position: sticky;
+
+  left: 0;
+
+  z-index: 7;
+
+  background: #f4f6f8;
+}
+
+
+/*
+  Segunda coluna: Nome do material
+
+  IMPORTANTE:
+  155px = largura exata da coluna Código definida acima.
+*/
+
+.stock-current-overview-table
+thead
+.stock-column-row
+th:nth-child(2),
+.stock-current-overview-table
+tbody
+td:nth-child(2) {
+  position: sticky;
+
+  left: 155px;
+
+  z-index: 7;
+
+  background: #f4f6f8;
+}
+
+
+/*
+  Linha superior "MATERIAL", que ocupa Código + Nome,
+  também fica congelada.
+*/
+
+.stock-current-overview-table
+.stock-group-material {
+  position: sticky !important;
+
+  left: 0;
+
+  z-index: 10 !important;
+
+  background: #e7ebef !important;
+}
+
+
+/*
+  As células do corpo precisam ter fundo sólido
+  para não ficar enxergando as outras colunas por trás
+  durante o scroll horizontal.
+*/
+
+.stock-current-overview-table
+tbody
+td:nth-child(1),
+.stock-current-overview-table
+tbody
+td:nth-child(2) {
+  background: #ffffff !important;
+}
+
+
+/*
+  Linhas alternadas discretas também nas colunas fixas.
+*/
+
+.stock-current-overview-table
+tbody
+tr:nth-child(even)
+td:nth-child(1),
+.stock-current-overview-table
+tbody
+tr:nth-child(even)
+td:nth-child(2) {
+  background: #fafbfc !important;
+}
+
+
+/*
+  Pequena sombra depois da segunda coluna,
+  deixando claro onde termina a área congelada.
+*/
+
+.stock-current-overview-table
+thead
+.stock-column-row
+th:nth-child(2),
+.stock-current-overview-table
+tbody
+td:nth-child(2) {
+  box-shadow:
+    5px 0 8px
+    -7px
+    rgba(15, 23, 42, 0.55);
+}
+
+
+/* ---------------------------------------------------------
+   5. CORES MAIS VISÍVEIS
+   --------------------------------------------------------- */
+
+
+/* MATERIAL */
+
+.stock-group-material {
+  background: #e7ebef !important;
+
+  box-shadow:
+    inset 0 3px 0
+    #7c8794;
+}
+
+
+/* MATRIZ */
+
+.stock-group-matriz {
+  background: #dcefe7 !important;
+
+  box-shadow:
+    inset 0 3px 0
+    #4f8a72;
+}
+
+.stock-current-overview-table
+th.stock-col-matriz {
+  background: #e3f2ec !important;
+}
+
+.stock-current-overview-table
+td.stock-col-matriz {
+  background: #edf7f3 !important;
+}
+
+
+/* FEITAL */
+
+.stock-group-feital {
+  background: #dce9f6 !important;
+
+  box-shadow:
+    inset 0 3px 0
+    #527fae;
+}
+
+.stock-current-overview-table
+th.stock-col-feital {
+  background: #e5eef8 !important;
+}
+
+.stock-current-overview-table
+td.stock-col-feital {
+  background: #f0f5fb !important;
+}
+
+
+/* CENTRO */
+
+.stock-group-centro {
+  background: #f5e6cb !important;
+
+  box-shadow:
+    inset 0 3px 0
+    #c58a37;
+}
+
+.stock-current-overview-table
+th.stock-col-centro {
+  background: #f8ecd8 !important;
+}
+
+.stock-current-overview-table
+td.stock-col-centro {
+  background: #fcf5e9 !important;
+}
+
+
+/* TOTAIS */
+
+.stock-group-totals {
+  background: #e6e9ed !important;
+
+  box-shadow:
+    inset 0 3px 0
+    #697386;
+}
+
+.stock-current-overview-table
+th.stock-col-totals {
+  background: #edf0f3 !important;
+}
+
+.stock-current-overview-table
+td.stock-col-totals {
+  background: #f6f7f9 !important;
+}
+
+
+/* ---------------------------------------------------------
+   6. HOVER MAIS BONITO
+   --------------------------------------------------------- */
+
+.stock-current-overview-table
+tbody
+tr:hover
+td {
+  filter: brightness(.975);
+}
+
+
+/*
+  Não escurecer exageradamente as duas colunas congeladas.
+*/
+
+.stock-current-overview-table
+tbody
+tr:hover
+td:nth-child(1),
+.stock-current-overview-table
+tbody
+tr:hover
+td:nth-child(2) {
+  background: #f4f6f8 !important;
+}
+
+
+/* ---------------------------------------------------------
+   7. BOTÃO + UM POUCO MAIS DELICADO
+   --------------------------------------------------------- */
+
+.stock-location-toggle {
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+
+  font-size: 13px;
+
+  border-color:
+    rgba(47, 52, 59, .28);
+
+  box-shadow:
+    0 1px 2px
+    rgba(16, 24, 40, .07);
+}
+
+
+/* ---------------------------------------------------------
+   8. ÍCONE i AINDA MAIS DISCRETO
+   --------------------------------------------------------- */
+
+.stock-inventory-info {
+  right: 2px;
+  bottom: 1px;
+
+  width: 15px;
+  height: 15px;
+
+  border-color: #c8cfd7;
+
+  color: #8b96a3;
+
+  font-size: 9px;
+
+  opacity: .72;
+}
+
+.stock-inventory-info:hover {
+  opacity: 1;
+
+  border-color:
+    var(--accent);
+
+  color:
+    var(--accent);
+}
+
+/* =========================================================
+   ESTOQUE - LARGURAS DEFINITIVAS DAS COLUNAS
+   ========================================================= */
+
+.stock-current-overview-table {
+  table-layout: fixed !important;
+  width: 100% !important;
+  min-width: 100% !important;
+}
+
+
+/* Código */
+
+.stock-current-overview-table
+col.stock-col-code {
+  width: 155px;
+}
+
+
+/* Nome do material */
+
+.stock-current-overview-table
+col.stock-col-name {
+  width: 300px;
+}
+
+
+/* Totais */
+
+.stock-current-overview-table
+col.stock-col-totals {
+  width: 132px;
+}
+
+.stock-current-overview-table
+col.stock-col-duration {
+  width: 135px;
+}
+
+
+/*
+  Quando MATRIZ / FEITAL / CENTRO estão FECHADOS,
+  os três recebem igualmente todo o espaço disponível.
+*/
+
+.stock-current-overview-table:not(
+  :has(.stock-location-toggle[aria-expanded="true"])
+)
+col.stock-col-location {
+  width: auto !important;
+}
+
+.stock-current-overview-table:not(
+  :has(.stock-location-toggle[aria-expanded="true"])
+)
+th.stock-col-location,
+
+.stock-current-overview-table:not(
+  :has(.stock-location-toggle[aria-expanded="true"])
+)
+td.stock-col-location {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+
+
+/*
+  Quando algum local é ABERTO,
+  cada coluna de detalhamento volta para uma largura fixa
+  e a tabela pode crescer horizontalmente.
+*/
+
+.stock-current-overview-table:has(
+  .stock-location-toggle[aria-expanded="true"]
+) {
+  width: max-content !important;
+  min-width: 100% !important;
+}
+
+.stock-current-overview-table:has(
+  .stock-location-toggle[aria-expanded="true"]
+)
+col.stock-col-location {
+  width: 122px !important;
+}
+
+.stock-current-overview-table:has(
+  .stock-location-toggle[aria-expanded="true"]
+)
+th.stock-col-location,
+
+.stock-current-overview-table:has(
+  .stock-location-toggle[aria-expanded="true"]
+)
+td.stock-col-location {
+  width: 122px !important;
+  min-width: 122px !important;
+  max-width: 122px !important;
+}
+
+
+/* =========================================================
+   NOME DO MATERIAL UM POUCO MAIOR
+   ========================================================= */
+
+.stock-current-overview-table
+td.stock-col-name
+.stock-material-cell strong {
+  font-size: 14px !important;
+  line-height: 1.3;
+  font-weight: 800;
+}
+
+/* =========================================================
+   PRODUÇÃO - TABELA CLICÁVEL + MODAL AJUSTADO
+   ========================================================= */
+
+
+/* ---------------------------------------------------------
+   LINHA INTEIRA CLICÁVEL
+   --------------------------------------------------------- */
+
+.production-launch-table-wrap
+tbody
+tr.production-clickable-row {
+  cursor: pointer;
+}
+
+.production-launch-table-wrap
+tbody
+tr.production-clickable-row
+td {
+  transition:
+    filter .12s ease,
+    box-shadow .12s ease;
+}
+
+.production-launch-table-wrap
+tbody
+tr.production-clickable-row:hover
+td {
+  filter: brightness(.975);
+}
+
+.production-launch-table-wrap
+tbody
+tr.production-clickable-row:hover
+td:first-child {
+  box-shadow:
+    inset 3px 0 0
+    var(--accent);
+}
+
+
+/* ---------------------------------------------------------
+   NOVAS LARGURAS DA TABELA
+
+   Agora são 14 colunas:
+   Data
+   Local
+   Material
+   Modelo
+   Materiais consumidos
+   Máquina
+   Pessoas
+   Quantidade
+   Unidade secundária
+   Peso real
+   Lotes
+   Beneficiamento
+   Observação
+   Status
+   --------------------------------------------------------- */
+
+.production-launch-table-wrap table {
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
+}
+
+
+/* Data */
+
+.production-launch-table-wrap
+th:nth-child(1),
+.production-launch-table-wrap
+td:nth-child(1) {
+  width: 5.5% !important;
+  white-space: nowrap;
+}
+
+
+/* Local */
+
+.production-launch-table-wrap
+th:nth-child(2),
+.production-launch-table-wrap
+td:nth-child(2) {
+  width: 5.5% !important;
+}
+
+
+/* Material produzido */
+
+.production-launch-table-wrap
+th:nth-child(3),
+.production-launch-table-wrap
+td:nth-child(3) {
+  width: 9.5% !important;
+}
+
+
+/* Modelo */
+
+.production-launch-table-wrap
+th:nth-child(4),
+.production-launch-table-wrap
+td:nth-child(4) {
+  width: 10% !important;
+}
+
+
+/* Materiais consumidos */
+
+.production-launch-table-wrap
+th:nth-child(5),
+.production-launch-table-wrap
+td:nth-child(5) {
+  width: 12% !important;
+}
+
+
+/* Máquina */
+
+.production-launch-table-wrap
+th:nth-child(6),
+.production-launch-table-wrap
+td:nth-child(6) {
+  width: 5.5% !important;
+}
+
+
+/* Pessoas */
+
+.production-launch-table-wrap
+th:nth-child(7),
+.production-launch-table-wrap
+td:nth-child(7) {
+  width: 4% !important;
+  text-align: center;
+}
+
+
+/* Quantidade */
+
+.production-launch-table-wrap
+th:nth-child(8),
+.production-launch-table-wrap
+td:nth-child(8) {
+  width: 6% !important;
+}
+
+
+/* Unidade secundária */
+
+.production-launch-table-wrap
+th:nth-child(9),
+.production-launch-table-wrap
+td:nth-child(9) {
+  width: 7% !important;
+}
+
+
+/* Peso real */
+
+.production-launch-table-wrap
+th:nth-child(10),
+.production-launch-table-wrap
+td:nth-child(10) {
+  width: 6% !important;
+}
+
+
+/* Lotes gerados */
+
+.production-launch-table-wrap
+th:nth-child(11),
+.production-launch-table-wrap
+td:nth-child(11) {
+  width: 10% !important;
+}
+
+
+/* Beneficiamento */
+
+.production-launch-table-wrap
+th:nth-child(12),
+.production-launch-table-wrap
+td:nth-child(12) {
+  width: 7% !important;
+}
+
+
+/* Observação */
+
+.production-launch-table-wrap
+th:nth-child(13),
+.production-launch-table-wrap
+td:nth-child(13) {
+  width: 6% !important;
+}
+
+
+/* Status */
+
+.production-launch-table-wrap
+th:nth-child(14),
+.production-launch-table-wrap
+td:nth-child(14) {
+  width: 6% !important;
+
+  padding-left: 7px !important;
+  padding-right: 7px !important;
+
+  text-align: center !important;
+}
+
+
+/* ---------------------------------------------------------
+   CABEÇALHOS MAIS LIMPOS
+   --------------------------------------------------------- */
+
+.production-launch-table-wrap
+.sortable-header {
+  gap: 4px;
+}
+
+.production-launch-table-wrap
+.sort-indicator {
+  margin-left: 4px;
+  opacity: .62;
+}
+
+
+/* =========================================================
+   CAMPO LOCAL - VISUAL DE SOMENTE LEITURA
+   ========================================================= */
+
+.production-location-field {
+  align-self: end;
+  gap: 6px;
+}
+
+.production-location-field > span {
+  color: var(--muted);
+
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.production-location-value {
+  display: flex;
+  align-items: center;
+
+  width: 100%;
+  min-height: 40px;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-radius: 6px;
+
+  background: #f1f3f5;
+
+  color: #475467;
+
+  padding:
+    10px
+    12px;
+
+  font-size: 14px;
+  font-weight: 700;
+
+  line-height: 1.2;
+
+  cursor: not-allowed;
+
+  box-shadow:
+    inset 0 1px 2px
+    rgba(16, 24, 40, .035);
+}
+
+
+/* =========================================================
+   MODAL DE PRODUÇÃO - SCROLL VERTICAL
+   ========================================================= */
+
+
+/*
+  Hoje existe uma regra antiga:
+      .production-modal { overflow: hidden; }
+
+  Ela é justamente o motivo de o modal ser cortado
+  quando aumenta o zoom.
+*/
+
+.production-modal:not(.transport-modal) {
+  width:
+    min(
+      1120px,
+      calc(100vw - 48px)
+    ) !important;
+
+  max-height:
+    calc(100dvh - 48px) !important;
+
+  overflow-x:
+    hidden !important;
+
+  overflow-y:
+    auto !important;
+
+  scrollbar-gutter:
+    stable;
+}
+
+
+/*
+  Scrollbar discreta no modal
+*/
+
+.production-modal:not(.transport-modal) {
+  scrollbar-width: thin;
+  scrollbar-color:
+    #a7adb5
+    transparent;
+}
+
+.production-modal:not(.transport-modal)
+::-webkit-scrollbar {
+  width: 9px;
+}
+
+.production-modal:not(.transport-modal)
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.production-modal:not(.transport-modal)
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #a7adb5;
+}
+
+
+/* ---------------------------------------------------------
+   ZOOM / TELAS MAIS BAIXAS
+   --------------------------------------------------------- */
+
+@media (max-height: 760px) {
+
+  .modal-backdrop:has(
+    .production-modal:not(.transport-modal)
+  ) {
+    align-items: start;
+
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+
+  .production-modal:not(.transport-modal) {
+    max-height:
+      calc(100dvh - 28px) !important;
+  }
+
+}
+
+/* =========================================================
+   PRODUÇÃO - POLIMENTO VISUAL
+   ========================================================= */
+
+
+/* ---------------------------------------------------------
+   1. LINHA CLICÁVEL - HOVER MAIS VISÍVEL
+   --------------------------------------------------------- */
+
+.production-launch-table-wrap
+tbody
+tr.production-clickable-row
+td {
+  transition:
+    background-color .14s ease,
+    box-shadow .14s ease;
+}
+
+.production-launch-table-wrap
+tbody
+tr.production-clickable-row:hover
+td {
+  background-color: #e9edf2 !important;
+}
+
+/* Marca delicadamente a primeira célula da linha */
+.production-launch-table-wrap
+tbody
+tr.production-clickable-row:hover
+td:first-child {
+  box-shadow:
+    inset 4px 0 0
+    #7b8490;
+}
+
+/* Mantém o mouse indicando que a linha é clicável */
+.production-launch-table-wrap
+tbody
+tr.production-clickable-row {
+  cursor: pointer;
+}
+
+
+/* Linhas canceladas continuam com identidade vermelha */
+.production-launch-table-wrap
+tbody
+tr.production-canceled-row:hover
+td {
+  background-color: #fbe7e7 !important;
+}
+
+.production-launch-table-wrap
+tbody
+tr.production-canceled-row:hover
+td:first-child {
+  box-shadow:
+    inset 4px 0 0
+    #dc2626;
+}
+
+
+/* ---------------------------------------------------------
+   2. SETA DE ORDENAÇÃO ABAIXO DO TEXTO
+   --------------------------------------------------------- */
+
+.production-launch-table-wrap
+.sortable-header {
+  display: flex !important;
+
+  flex-direction: column !important;
+
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+
+  gap: 3px !important;
+
+  min-height: 42px;
+
+  text-align: left !important;
+}
+
+
+/* Texto do cabeçalho */
+.production-launch-table-wrap
+.sortable-header
+span:first-child {
+  width: 100%;
+
+  line-height: 1.2;
+
+  text-align: left;
+}
+
+
+/* Seta fica em uma linha própria */
+.production-launch-table-wrap
+.sort-indicator {
+  display: block !important;
+
+  width: 100%;
+
+  margin: 0 !important;
+  padding: 0 !important;
+
+  color: #98a2b3;
+
+  font-size: 10px !important;
+  line-height: 10px !important;
+
+  text-align: center;
+
+  opacity: .75;
+}
+
+
+/* Quando estiver ordenando, destaca só um pouco */
+.production-launch-table-wrap
+.sortable-header.active
+.sort-indicator {
+  color: #475467;
+
+  opacity: 1;
+}
+
+
+/* ---------------------------------------------------------
+   3. MODAL DE PRODUÇÃO - VISUAL LIMPO
+   --------------------------------------------------------- */
+
+.production-modal:not(.transport-modal) {
+  border:
+    1px solid
+    #cfd5dc !important;
+
+  border-top:
+    1px solid
+    #cfd5dc !important;
+
+  border-radius:
+    10px !important;
+
+  background:
+    #ffffff !important;
+
+  box-shadow:
+    0 26px 70px
+    rgba(16, 24, 40, .26) !important;
+}
+
+
+/*
+  Remove completamente aquela faixa
+  vertical laranja/preta da lateral.
+*/
+.production-modal:not(.transport-modal)::before {
+  display: none !important;
+}
+
+
+/*
+  Cabeçalho sem laranja e sem listras.
+*/
+.production-modal:not(.transport-modal)
+.modal-header {
+  margin:
+    -20px
+    -20px
+    20px
+    -20px !important;
+
+  padding:
+    18px
+    20px !important;
+
+  border-bottom:
+    1px solid
+    #dde2e8 !important;
+
+  border-radius:
+    10px
+    10px
+    0
+    0;
+
+  background:
+    #f8fafc !important;
+}
+
+
+/* Título */
+.production-modal:not(.transport-modal)
+.modal-header
+h2 {
+  color:
+    #1f2937 !important;
+
+  font-size:
+    22px;
+
+  font-weight:
+    850;
+}
+
+
+/*
+  Botão "Limpar produção" um pouco menos pesado
+*/
+.production-modal:not(.transport-modal)
+.modal-header
+.secondary-button {
+  background:
+    #eef1f4;
+
+  color:
+    #344054;
+}
+
+
+/* ---------------------------------------------------------
+   4. SEÇÕES INTERNAS MAIS ORGANIZADAS
+   --------------------------------------------------------- */
+
+.production-modal:not(.transport-modal)
+.consumed-inputs-section,
+
+.production-modal:not(.transport-modal)
+.production-lines-section {
+  padding-top:
+    4px;
+}
+
+
+/* Títulos das seções */
+.production-modal:not(.transport-modal)
+.consumed-inputs-section
+h3,
+
+.production-modal:not(.transport-modal)
+.production-lines-section
+h3 {
+  color:
+    #273142;
+
+  font-size:
+    17px;
+
+  font-weight:
+    850;
+}
+
+
+/*
+  Cards de insumos um pouco mais neutros,
+  combinando com o novo modal.
+*/
+.production-modal:not(.transport-modal)
+.consumed-input-row {
+  border-color:
+    #d8dee5;
+
+  background:
+    #fafbfc;
+}
+
+
+/*
+  Área dos lotes também mais limpa.
+*/
+.production-modal:not(.transport-modal)
+.produced-line {
+  border-color:
+    #d8dee5;
+
+  background:
+    #fafbfc;
+}
+
+
+/* ---------------------------------------------------------
+   5. LOCAL READONLY
+   Mantém o campo bloqueado, mas fica no padrão.
+   --------------------------------------------------------- */
+
+.production-modal:not(.transport-modal)
+.production-location-value {
+  border:
+    1px solid
+    #d1d5db;
+
+  background:
+    #eef1f4;
+
+  color:
+    #475467;
+
+  box-shadow:
+    none;
+}
+
+
+/* ---------------------------------------------------------
+   6. RODAPÉ DO MODAL
+   --------------------------------------------------------- */
+
+.production-modal:not(.transport-modal)
+.production-modal-actions {
+  margin-top:
+    2px;
+
+  padding-top:
+    14px;
+
+  border-top:
+    1px solid
+    #e4e7ec;
+}
+
+
+/* ---------------------------------------------------------
+   7. SCROLL CONTINUA FUNCIONANDO
+   --------------------------------------------------------- */
+
+.production-modal:not(.transport-modal) {
+  max-height:
+    calc(100dvh - 48px) !important;
+
+  overflow-x:
+    hidden !important;
+
+  overflow-y:
+    auto !important;
+
+  scrollbar-gutter:
+    stable;
+}
+
+/* =========================================================
+   PRODUÇÃO - IMPORTAÇÃO EXCEL
+   ========================================================= */
+
+.production-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+
+/* Botão pequeno ao lado de Realizar produção */
+
+.production-excel-trigger {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+
+  padding: 0;
+
+  display: inline-grid;
+  place-items: center;
+
+  border:
+    1px solid
+    var(--line);
+
+  background:
+    #f4f6f8;
+}
+
+.production-excel-trigger svg {
+  width: 19px;
+  height: 19px;
+
+  fill: none;
+
+  stroke:
+    #344054;
+
+  stroke-width: 1.8;
+
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.production-excel-trigger:hover {
+  background:
+    #e9edf2;
+}
+
+
+/* Modal */
+
+.production-excel-modal {
+  width:
+    min(
+      1120px,
+      calc(100vw - 48px)
+    );
+
+  max-height:
+    calc(100dvh - 48px);
+
+  overflow-y:
+    auto;
+
+  border-radius:
+    10px;
+}
+
+
+/* Abas Produções / Beneficiamentos */
+
+.production-excel-tabs {
+  display: flex;
+
+  gap: 10px;
+
+  border-bottom:
+    1px solid
+    var(--line);
+
+  margin:
+    0
+    0
+    18px;
+}
+
+.production-excel-tabs button {
+  min-height: 46px;
+
+  border: 0;
+  border-bottom:
+    3px solid
+    transparent;
+
+  background:
+    transparent;
+
+  color:
+    #344054;
+
+  padding:
+    0
+    14px;
+
+  font-size:
+    15px;
+
+  font-weight:
+    800;
+}
+
+.production-excel-tabs button.active {
+  color:
+    var(--petroleum-dark);
+
+  border-bottom-color:
+    var(--accent);
+}
+
+
+/* Conteúdo */
+
+.production-excel-body {
+  display: grid;
+
+  gap: 18px;
+}
+
+
+.production-excel-download {
+  width: 100%;
+
+  min-height: 44px;
+
+  border:
+    2px solid
+    var(--petroleum-dark);
+
+  border-radius:
+    999px;
+
+  background:
+    #f8fafc;
+
+  color:
+    var(--petroleum-dark);
+
+  font-size:
+    15px;
+
+  font-weight:
+    850;
+}
+
+.production-excel-download:hover {
+  background:
+    #eef1f4;
+}
+
+
+/* Arquivo */
+
+.production-excel-file-field {
+  display: grid;
+
+  gap: 8px;
+
+  color:
+    var(--muted);
+
+  font-size:
+    13px;
+
+  font-weight:
+    800;
+}
+
+.production-excel-file-field input {
+  background:
+    #ffffff;
+}
+
+.production-excel-file-field small {
+  color:
+    #475467;
+
+  font-weight:
+    700;
+}
+
+
+.production-excel-help {
+  margin:
+    4px
+    14px;
+
+  color:
+    #667085;
+
+  font-size:
+    14px;
+
+  line-height:
+    1.4;
+}
+
+
+.production-excel-actions {
+  justify-content:
+    flex-end;
+
+  padding-top:
+    4px;
+}
+
+
+/* =========================================================
+   RESUMO / REVISÃO
+   ========================================================= */
+
+.production-excel-review-summary {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      2,
+      minmax(160px, 220px)
+    );
+
+  gap: 10px;
+}
+
+.production-excel-review-summary article {
+  display: grid;
+
+  gap: 5px;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-radius:
+    8px;
+
+  background:
+    #f8fafc;
+
+  padding:
+    12px;
+}
+
+.production-excel-review-summary span {
+  color:
+    var(--muted);
+
+  font-size:
+    11px;
+
+  font-weight:
+    850;
+
+  text-transform:
+    uppercase;
+}
+
+.production-excel-review-summary strong {
+  color:
+    var(--ink);
+
+  font-size:
+    20px;
+}
+
+
+/* Tabela do resumo */
+
+.production-excel-review-wrap {
+  max-height:
+    min(
+      58vh,
+      600px
+    );
+
+  overflow:
+    auto;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-radius:
+    8px;
+}
+
+.production-excel-review-table {
+  width: 100%;
+
+  min-width:
+    900px;
+
+  border-collapse:
+    collapse;
+}
+
+.production-excel-review-table th {
+  position:
+    sticky;
+
+  top: 0;
+
+  z-index: 2;
+
+  background:
+    #f4f6f8;
+
+  color:
+    #1f2937;
+
+  font-size:
+    12px;
+
+  font-weight:
+    850;
+}
+
+.production-excel-review-table td {
+  vertical-align:
+    middle;
+
+  font-size:
+    12px;
+
+  line-height:
+    1.3;
+}
+
+
+/* APLICÁVEL */
+
+.production-excel-review-row.is-applicable td {
+  background:
+    #ffffff;
+}
+
+.production-excel-review-row.is-applicable td:nth-last-child(2) {
+  color:
+    #047857;
+}
+
+
+/* LOTE ALTERADO / REGISTRO ALTERADO */
+
+.production-excel-review-row.is-changed td {
+  background:
+    #fff7f7;
+}
+
+.production-excel-review-row.is-changed td:first-child {
+  border-left:
+    4px solid
+    #dc2626;
+}
+
+.production-excel-review-row.is-changed td:nth-last-child(2) {
+  color:
+    #991b1b;
+}
+
+
+/* Inválidos */
+
+.production-excel-review-row.is-blocked td {
+  background:
+    #fff7ed;
+}
+
+.production-excel-review-row.is-blocked td:first-child {
+  border-left:
+    4px solid
+    #f59e0b;
+}
+
+.production-excel-review-row.is-blocked td:nth-last-child(2) {
+  color:
+    #92400e;
+}
+
+
+/* Já aplicado / sem alteração */
+
+.production-excel-review-row.is-neutral td {
+  background:
+    #f8fafc;
+
+  color:
+    #667085;
+}
+
+
+@media (max-width: 800px) {
+
+  .production-heading-actions {
+    flex-wrap:
+      wrap;
+  }
+
+  .production-excel-modal {
+    width:
+      calc(100vw - 24px);
+
+    max-height:
+      calc(100dvh - 24px);
+  }
+
+}
+
+/* =========================================================
+   PRODUÇÃO - PAGINAÇÃO
+   ========================================================= */
+
+.production-pagination-target {
+  margin-top: 14px;
+}
+
+.production-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 16px;
+
+  min-height: 52px;
+
+  padding:
+    10px
+    12px;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-radius:
+    8px;
+
+  background:
+    #f8fafc;
+}
+
+.production-pagination-info {
+  color:
+    var(--muted);
+
+  font-size:
+    12px;
+
+  font-weight:
+    700;
+}
+
+.production-pagination-info strong {
+  color:
+    var(--petroleum-dark);
+}
+
+.production-pagination-actions {
+  display: flex;
+  align-items: center;
+
+  gap: 7px;
+}
+
+.production-pagination-actions
+.secondary-button {
+  min-height:
+    34px;
+
+  padding:
+    0
+    12px;
+
+  font-size:
+    12px;
+}
+
+.production-pagination-page {
+  min-width:
+    115px;
+
+  color:
+    var(--muted);
+
+  font-size:
+    12px;
+
+  font-weight:
+    700;
+
+  text-align:
+    center;
+}
+
+.production-pagination-page strong {
+  color:
+    var(--petroleum-dark);
+
+  font-size:
+    13px;
+}
+
+@media (max-width: 850px) {
+  .production-pagination {
+    align-items:
+      stretch;
+
+    flex-direction:
+      column;
+  }
+
+  .production-pagination-actions {
+    flex-wrap:
+      wrap;
+
+    justify-content:
+      flex-start;
+  }
+}
+
+/* =========================================================
+   PLANEJAMENTO - MODO REAL / TEÓRICO
+   ========================================================= */
+
+.planning-mode-card {
+  grid-column: 1 / -1;
+}
+
+.planning-mode-help,
+.planning-mode-note {
+  margin: 4px 0 0;
+
+  color: var(--muted);
+
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.planning-mode-selector {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      2,
+      minmax(0, 1fr)
+    );
+
+  gap: 10px;
+
+  margin-top: 12px;
+}
+
+.planning-mode-option {
+  position: relative;
+
+  display: grid;
+
+  gap: 4px;
+
+  min-height: 78px;
+
+  padding: 14px 16px;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-radius:
+    10px;
+
+  background:
+    #f8fafc;
+
+  cursor: pointer;
+
+  transition:
+    border-color .14s ease,
+    background-color .14s ease,
+    box-shadow .14s ease;
+}
+
+.planning-mode-option input {
+  position: absolute;
+
+  opacity: 0;
+
+  pointer-events: none;
+}
+
+.planning-mode-option strong {
+  color: var(--ink);
+
+  font-size: 15px;
+}
+
+.planning-mode-option span {
+  color: var(--muted);
+
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.planning-mode-option:hover {
+  border-color: #98a2b3;
+
+  background:
+    #f2f4f7;
+}
+
+.planning-mode-option.is-active {
+  border-color:
+    var(--petroleum-dark);
+
+  background:
+    #eef3f6;
+
+  box-shadow:
+    inset
+    0
+    0
+    0
+    1px
+    var(--petroleum-dark);
+}
+
+.planning-mode-option.is-active::after {
+  content: 'Ativo';
+
+  position: absolute;
+
+  top: 10px;
+  right: 12px;
+
+  color:
+    var(--petroleum-dark);
+
+  font-size: 10px;
+
+  font-weight: 850;
+
+  text-transform:
+    uppercase;
+
+  letter-spacing:
+    .04em;
+}
+
+.planning-mode-note {
+  margin-top: 10px;
+
+  padding:
+    9px
+    11px;
+
+  border-radius:
+    7px;
+
+  background:
+    #fff8e8;
+
+  color:
+    #7a5a12;
+
+  font-weight:
+    700;
+}
+
+@media (max-width: 760px) {
+
+  .planning-mode-selector {
+    grid-template-columns:
+      1fr;
+  }
+}
+
+/* =========================================================
+   PLANEJAMENTO - SELETOR REAL / TEÓRICO
+   ========================================================= */
+
+.planning-page-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.planning-page-title-row h1 {
+  margin: 0;
+}
+
+.planning-mode-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+
+  padding: 3px;
+
+  border: 1px solid #D1D5DB;
+  border-radius: 999px;
+
+  background: #E9EDF1;
+
+  box-shadow:
+    inset 0 1px 2px rgba(16, 24, 40, 0.05);
+}
+
+.planning-mode-pills[hidden] {
+  display: none;
+}
+
+.planning-mode-pill {
+  width: auto;
+  min-width: 76px;
+  min-height: 30px;
+
+  margin: 0;
+  padding: 0 14px;
+
+  border: 0;
+  border-radius: 999px;
+
+  background: transparent;
+  color: #667085;
+
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+
+  cursor: pointer;
+
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.planning-mode-pill:hover:not(.is-active) {
+  background: rgba(255, 255, 255, 0.7);
+  color: #1F2937;
+}
+
+.planning-mode-pill.is-active {
+  background: #2F343B;
+  color: #FFFFFF;
+
+  box-shadow:
+    0 2px 6px rgba(16, 24, 40, 0.18);
+}
+
+.planning-mode-pill:active {
+  transform: scale(0.98);
+}
+
+.planning-mode-pill:focus-visible {
+  outline: 2px solid rgba(47, 52, 59, 0.25);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .planning-page-title-row {
+    gap: 10px;
+  }
+
+  .planning-mode-pill {
+    min-width: 68px;
+    padding: 0 11px;
+  }
+}
+
+/* =========================================================
+   PLANEJAMENTO TEÓRICO - ESCOLHA DE MATÉRIA-PRIMA
+   ========================================================= */
+
+.theoretical-material-choice-modal {
+  padding: 28px;
+}
+
+.theoretical-material-choice-modal .modal {
+  width: min(720px, calc(100vw - 40px));
+  padding: 0;
+  overflow: hidden;
+
+  border: 1px solid #d8dee6;
+  border-radius: 14px;
+
+  background: #ffffff;
+
+  box-shadow:
+    0 24px 70px rgba(16, 24, 40, 0.24);
+}
+
+.theoretical-material-choice-modal .modal-header {
+  margin: 0;
+  padding: 20px 22px 16px;
+
+  border-bottom: 1px solid #e4e7ec;
+
+  background: #f8fafc;
+}
+
+.theoretical-material-choice-modal .modal-header h2 {
+  margin: 0;
+
+  color: #1f2937;
+
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.theoretical-material-choice-modal .modal-subtitle {
+  margin-top: 5px;
+
+  color: #667085;
+
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.theoretical-material-choice-form {
+  display: grid;
+
+  gap: 0;
+}
+
+.theoretical-material-choice-list {
+  display: grid;
+
+  gap: 12px;
+
+  max-height: min(56vh, 520px);
+
+  padding: 18px 22px;
+
+  overflow-y: auto;
+}
+
+.theoretical-material-choice-card {
+  display: grid;
+
+  gap: 12px;
+
+  padding: 14px;
+
+  border: 1px solid #d8dee6;
+  border-radius: 10px;
+
+  background: #ffffff;
+
+  box-shadow:
+    0 5px 14px rgba(16, 24, 40, 0.05);
+}
+
+.theoretical-material-choice-heading {
+  display: flex;
+
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 12px;
+
+  padding-bottom: 10px;
+
+  border-bottom: 1px solid #eef1f4;
+}
+
+.theoretical-material-choice-heading strong {
+  color: #1f2937;
+
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.theoretical-material-choice-heading span {
+  display: inline-flex;
+
+  align-items: center;
+
+  min-height: 26px;
+
+  padding: 0 9px;
+
+  border-radius: 999px;
+
+  background: #eef2f5;
+
+  color: #475467;
+
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.theoretical-material-choice-card label {
+  display: grid;
+
+  gap: 6px;
+
+  color: #667085;
+
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.theoretical-material-choice-card select {
+  width: 100%;
+  min-height: 42px;
+
+  padding: 0 12px;
+
+  border: 1px solid #cbd2da;
+  border-radius: 8px;
+
+  background: #ffffff;
+
+  color: #1f2937;
+
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.theoretical-material-choice-card select:focus {
+  border-color: #2f343b;
+
+  outline: 3px solid rgba(47, 52, 59, 0.10);
+}
+
+.theoretical-material-choice-modal .modal-actions {
+  display: flex;
+
+  justify-content: flex-end;
+
+  gap: 8px;
+
+  margin: 0;
+
+  padding: 14px 22px;
+
+  border-top: 1px solid #e4e7ec;
+
+  background: #f8fafc;
+}
+
+.theoretical-material-choice-modal .modal-actions button {
+  width: auto;
+
+  min-height: 38px;
+
+  padding: 0 16px;
+
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .theoretical-material-choice-modal {
+    padding: 12px;
+  }
+
+  .theoretical-material-choice-modal .modal {
+    width: calc(100vw - 24px);
+  }
+
+  .theoretical-material-choice-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .theoretical-material-choice-modal .modal-actions {
+    flex-direction: column;
+  }
+
+  .theoretical-material-choice-modal .modal-actions button {
+    width: 100%;
+  }
+}
+
+/* =========================================================
+   GANTT APS - RESOURCE LOGÍSTICO / TRANSPORTE
+   ========================================================= */
+
+.gantt-aps__row--group[data-transport-resource="true"] {
+  --transport-row-bg: #fff7e8;
+  --transport-row-border: #e7b35f;
+  --transport-row-text: #8a5a00;
+}
+
+.gantt-aps__row--group[data-transport-resource="true"]
+.gantt-aps__table {
+  background: var(--transport-row-bg);
+  border-color: var(--transport-row-border);
+}
+
+.gantt-aps__row--group[data-transport-resource="true"]
+.gantt-aps__timeline {
+  background:
+    linear-gradient(
+      rgba(255, 247, 232, 0.82),
+      rgba(255, 247, 232, 0.82)
+    );
+  border-color: var(--transport-row-border);
+}
+
+.gantt-aps__row--group[data-transport-resource="true"]
+.gantt-aps__group-toggle {
+  color: var(--transport-row-text);
+}
+
+.gantt-aps__row--group[data-transport-resource="true"]
+.gantt-aps__group-toggle strong {
+  color: #6f4700;
+}
+
+/* =========================================================
+   PLANEJAMENTO - FLUXO DOS MATERIAIS A PROGRAMAR
+   ========================================================= */
+
+.planning-materials-program-target {
+  grid-template-columns: 1fr;
+}
+
+.planning-materials-program-group--flow {
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.planning-materials-program-flow {
+  display: grid;
+
+  grid-template-columns:
+    max-content
+    150px
+    max-content
+    58px
+    max-content;
+
+  align-items: center;
+
+  width: max-content;
+  min-width: 100%;
+
+  padding: 6px 4px 10px;
+}
+
+.planning-program-stage {
+  position: relative;
+
+  display: grid;
+
+  gap: 8px;
+
+  align-content: center;
+
+  z-index: 2;
+}
+
+.planning-program-stage > .planning-material-program-card {
+  width: 180px;
+}
+
+.planning-program-stage--source.is-empty {
+  width: 0;
+  min-width: 0;
+}
+
+.planning-program-stage--parallel {
+  gap: 10px;
+}
+
+
+/* ---------- SETAS ---------- */
+
+.planning-program-connector {
+  position: relative;
+
+  align-self: stretch;
+
+  min-height: 100px;
+
+  display: grid;
+
+  place-items: center;
+
+  z-index: 1;
+}
+
+.planning-program-connector-line {
+  position: absolute;
+
+  left: 0;
+  right: 0;
+
+  top: 50%;
+
+  height: 2px;
+
+  transform: translateY(-50%);
+
+  background:
+    color-mix(
+      in srgb,
+      var(--production-border, #64748b) 68%,
+      #94a3b8
+    );
+}
+
+.planning-program-connector-arrow {
+  position: absolute;
+
+  right: -1px;
+
+  top: 50%;
+
+  width: 0;
+  height: 0;
+
+  transform: translateY(-50%);
+
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+
+  border-left:
+    8px solid
+    color-mix(
+      in srgb,
+      var(--production-border, #64748b) 68%,
+      #94a3b8
+    );
+}
+
+
+/* ---------- TRANSPORTE EM CIMA DA SETA ---------- */
+
+.planning-program-transport-stack {
+  position: relative;
+
+  z-index: 3;
+
+  display: grid;
+
+  gap: 5px;
+
+  width: 136px;
+}
+
+.planning-transport-program-card {
+  width: 136px !important;
+  min-width: 136px;
+
+  gap: 4px;
+
+  padding: 6px 8px;
+
+  border: 1px solid #e5a53d;
+  border-left: 3px solid #d97706;
+
+  border-radius: 7px;
+
+  background: #fffaf0;
+
+  color: #7c4a03;
+
+  box-shadow:
+    0 5px 14px rgba(120, 72, 10, 0.11);
+
+  cursor: grab;
+}
+
+.planning-transport-program-card:hover {
+  border-color: #d97706;
+
+  box-shadow:
+    0 7px 18px rgba(120, 72, 10, 0.16);
+
+  transform: translateY(-1px);
+}
+
+.planning-transport-program-card[data-dragging="true"] {
+  opacity: .64;
+
+  outline: 2px solid #d97706;
+  outline-offset: 2px;
+}
+
+.planning-transport-program-card dl {
+  display: none;
+}
+
+.planning-transport-program-card-head {
+  display: flex;
+
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 6px;
+}
+
+.planning-transport-program-card-head strong {
+  color: #7c4a03;
+
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.planning-transport-program-card-head span {
+  border-radius: 999px;
+
+  background: #fde68a;
+
+  color: #854d0e;
+
+  padding: 2px 5px;
+
+  font-size: 8px;
+  font-weight: 900;
+}
+
+.planning-transport-program-material {
+  color: #334155;
+
+  font-size: 11px;
+  font-weight: 800;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.planning-transport-program-route {
+  display: flex;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 5px;
+
+  color: #92400e;
+
+  font-size: 9px;
+  font-weight: 850;
+
+  text-transform: uppercase;
+}
+
+.planning-transport-program-route span {
+  color: #d97706;
+
+  font-size: 13px;
+}
+
+.planning-transport-program-qty {
+  color: #7c4a03;
+
+  font-size: 10px;
+  font-weight: 900;
+
+  text-align: center;
+}
+
+
+/* =========================================================
+   MODAL DE PROGRAMAÇÃO DO TRANSPORTE
+   ========================================================= */
+
+.planning-transport-allocation-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.planning-transport-allocation-form {
+  display: grid;
+
+  gap: 16px;
+}
+
+.planning-transport-allocation-summary {
+  display: grid;
+
+  grid-template-columns:
+    repeat(3, minmax(0, 1fr));
+
+  gap: 8px;
+}
+
+.planning-transport-allocation-summary > div {
+  display: grid;
+
+  gap: 3px;
+
+  padding: 10px;
+
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+
+  background: #f8fafc;
+}
+
+.planning-transport-allocation-summary span {
+  color: #667085;
+
+  font-size: 10px;
+  font-weight: 800;
+
+  text-transform: uppercase;
+}
+
+.planning-transport-allocation-summary strong {
+  color: #1f2937;
+
+  font-size: 12px;
+}
+
+.planning-transport-allocation-dates {
+  display: grid;
+
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+
+  gap: 10px;
+}
+
+@media (max-width: 700px) {
+  .planning-materials-program-flow {
+    grid-template-columns:
+      max-content
+      125px
+      max-content
+      44px
+      max-content;
+  }
+
+  .planning-program-stage > .planning-material-program-card {
+    width: 160px;
+  }
+
+  .planning-program-transport-stack,
+  .planning-transport-program-card {
+    width: 116px !important;
+    min-width: 116px;
+  }
+
+  .planning-transport-allocation-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .planning-transport-allocation-dates {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================
+   FLUXO MANUAL - COM / SEM TRANSPORTE
+   ========================================================= */
+
+.planning-materials-program-flow.has-source-stage.has-transport-stage {
+  grid-template-columns:
+    max-content
+    150px
+    max-content
+    58px
+    max-content;
+}
+
+.planning-materials-program-flow.without-source-stage.has-transport-stage {
+  grid-template-columns:
+    150px
+    max-content
+    58px
+    max-content;
+}
+
+.planning-materials-program-flow.has-source-stage.without-transport-stage {
+  grid-template-columns:
+    max-content
+    58px
+    max-content
+    58px
+    max-content;
+}
+
+.planning-materials-program-flow.without-source-stage.without-transport-stage {
+  grid-template-columns:
+    max-content
+    58px
+    max-content;
+}
+
+/*
+ * Sem etapa anterior e sem logística:
+ * não reserva nenhum espaço à esquerda.
+ */
+.planning-materials-program-flow.without-source-stage.without-transport-stage {
+  padding-left: 0;
+}
+
+/* =========================================================
+   GANTT APS - SUBLINHAS DOS TRANSPORTES
+   ========================================================= */
+
+.gantt-aps__row--allocation[data-transport-allocation="true"] {
+  --transport-allocation-bg: #fff7e8;
+  --transport-allocation-border: #e7b35f;
+}
+
+.gantt-aps__row--allocation[data-transport-allocation="true"]
+.gantt-aps__table {
+  background: var(--transport-allocation-bg);
+  border-color: var(--transport-allocation-border);
+}
+
+.gantt-aps__row--allocation[data-transport-allocation="true"]
+.gantt-aps__cell {
+  background: transparent;
+  border-color: var(--transport-allocation-border);
+}
+
+.gantt-aps__row--allocation[data-transport-allocation="true"]
+.gantt-aps__timeline {
+  background:
+    linear-gradient(
+      rgba(255, 247, 232, 0.82),
+      rgba(255, 247, 232, 0.82)
+    );
+
+  border-color: var(--transport-allocation-border);
+}
+
+/* Produção continua com a cor da produção,
+   mesmo dentro da linha logística. */
+.gantt-aps__row--allocation[data-transport-allocation="true"]
+.gantt-aps__cell.gantt-aps__cell--2 {
+  background: var(--gantt-aps-production-background, #2563eb);
+  color: #ffffff;
+}
+
+/* =========================================================
+   MATERIAIS A PROGRAMAR
+   LAYOUT HORIZONTAL FINAL
+   ========================================================= */
+
+/*
+ * Cada produção ocupa uma linha inteira.
+ */
+.planning-materials-program-target {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 18px !important;
+}
+
+
+/*
+ * Bloco individual da produção.
+ */
+.planning-materials-program-group--flow {
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+
+  gap: 10px;
+
+  padding: 12px 14px 14px;
+
+  border:
+    1px solid
+    color-mix(
+      in srgb,
+      var(--production-border, var(--line)) 32%,
+      var(--line)
+    );
+
+  border-left:
+    4px solid
+    var(--production-border, var(--accent));
+
+  border-radius: 8px;
+
+  background: #ffffff;
+}
+
+
+.planning-materials-program-group--flow > h3 {
+  margin: 0;
+
+  color:
+    var(
+      --production-text,
+      var(--ink)
+    );
+
+  font-size: 14px;
+  font-weight: 900;
+}
+
+
+/* =========================================================
+   SALDOS COMPARTILHADOS
+   ========================================================= */
+
+.planning-shared-stock-strip {
+  width: 100%;
+
+  margin: 0 0 4px;
+
+  padding: 9px 10px;
+
+  border:
+    1px solid
+    color-mix(
+      in srgb,
+      var(--production-border, var(--line)) 22%,
+      var(--line)
+    );
+
+  border-radius: 7px;
+
+  background: #f8fafc;
+}
+
+
+.planning-shared-stock-strip-items {
+  display: flex !important;
+
+  flex-wrap: wrap;
+
+  align-items: center;
+
+  justify-content: flex-start;
+
+  gap: 6px 10px;
+}
+
+
+.planning-shared-stock-strip-item {
+  display: inline-flex !important;
+
+  flex: 0 0 auto;
+
+  align-items: baseline;
+
+  justify-content: flex-start !important;
+
+  gap: 7px;
+
+  width: auto;
+
+  min-width: 0;
+
+  padding: 5px 8px;
+
+  border: 1px solid #e5e9ef;
+  border-radius: 6px;
+
+  background: #ffffff;
+}
+
+
+.planning-shared-stock-strip-item > span {
+  display: inline-flex;
+
+  align-items: baseline;
+
+  gap: 5px;
+
+  min-width: 0;
+
+  color: var(--ink);
+
+  font-size: 10px;
+  font-weight: 850;
+}
+
+
+.planning-shared-stock-strip-item small {
+  color: var(--muted);
+
+  font-size: 9px;
+  font-weight: 800;
+}
+
+
+.planning-shared-stock-strip-item strong {
+  color: var(--ink);
+
+  font-size: 11px;
+  font-weight: 900;
+
+  text-align: left !important;
+
+  white-space: nowrap;
+}
+
+/* =========================================================
+   SETORIZAÇÃO DO TOPO
+   ========================================================= */
+
+.planning-flow-sectors {
+  display: grid;
+
+  grid-template-columns:
+    minmax(0, 1fr)
+    210px
+    minmax(0, 1fr);
+
+  gap: 10px;
+
+  width: 100%;
+
+  margin: 0 0 8px;
+}
+
+
+.planning-flow-sector {
+  display: grid;
+
+  align-content: start;
+
+  gap: 8px;
+
+  min-width: 0;
+
+  padding: 10px;
+
+  border:
+    1px solid
+    color-mix(
+      in srgb,
+      var(--production-border, var(--line)) 22%,
+      var(--line)
+    );
+
+  border-radius: 8px;
+
+  background: #f8fafc;
+}
+
+
+.planning-flow-sector-head {
+  display: grid;
+
+  gap: 2px;
+}
+
+
+.planning-flow-sector-label {
+  color:
+    var(
+      --production-text,
+      var(--ink)
+    );
+
+  font-size: 12px;
+  font-weight: 900;
+
+  text-transform: uppercase;
+}
+
+
+.planning-flow-sector-subtitle {
+  color: var(--muted);
+
+  font-size: 9px;
+  font-weight: 800;
+
+  text-transform: uppercase;
+}
+
+
+.planning-flow-sector-route {
+  display: flex;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 8px;
+
+  min-height: 42px;
+
+  color: var(--ink);
+
+  font-size: 12px;
+  font-weight: 900;
+
+  text-align: center;
+}
+
+
+.planning-flow-sector-route span {
+  color:
+    var(
+      --production-border,
+      var(--accent)
+    );
+
+  font-size: 14px;
+  font-weight: 900;
+}
+
+
+.planning-flow-sector-empty {
+  padding: 10px 12px;
+
+  border: 1px dashed #cbd5e1;
+  border-radius: 6px;
+
+  color: var(--muted);
+
+  font-size: 11px;
+  font-weight: 700;
+
+  background: #ffffff;
+}
+
+
+.planning-flow-sector .planning-shared-stock-strip {
+  margin: 0;
+
+  padding: 8px 9px;
+}
+
+
+.planning-flow-sector .planning-shared-stock-strip-title {
+  font-size: 8px;
+}
+
+
+.planning-flow-sector .planning-shared-stock-strip-items {
+  gap: 6px 8px;
+}
+
+
+.planning-flow-sector .planning-shared-stock-strip-item {
+  width: 100%;
+}
+
+
+/* =========================================================
+   FLUXO GERAL
+   ========================================================= */
+
+.planning-materials-program-flow {
+  display: grid;
+
+  align-items: stretch;
+
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100%;
+
+  column-gap: 0;
+
+  padding: 4px 0 0;
+}
+
+
+/*
+ * Só Long/Trans -> produto final.
+ */
+.planning-materials-program-flow
+.without-source-stage.without-transport-stage {
+  grid-template-columns:
+    minmax(0, 1fr)
+    44px
+    minmax(340px, 420px) !important;
+}
+
+
+/*
+ * Transporte -> Long/Trans -> produto final.
+ */
+.planning-materials-program-flow
+.without-source-stage.has-transport-stage {
+  grid-template-columns:
+    145px
+    minmax(0, 1fr)
+    44px
+    minmax(340px, 420px) !important;
+}
+
+
+/*
+ * Material anterior -> Long/Trans -> produto final.
+ */
+.planning-materials-program-flow
+.has-source-stage.without-transport-stage {
+  grid-template-columns:
+    minmax(180px, 210px)
+    44px
+    minmax(0, 1fr)
+    44px
+    minmax(340px, 420px) !important;
+}
+
+
+/*
+ * Material anterior -> Transporte ->
+ * Long/Trans -> produto final.
+ */
+.planning-materials-program-flow
+.has-source-stage.has-transport-stage {
+  grid-template-columns:
+    minmax(180px, 210px)
+    145px
+    minmax(0, 1fr)
+    44px
+    minmax(340px, 420px) !important;
+}
+
+
+/* =========================================================
+   ETAPAS
+   ========================================================= */
+
+.planning-program-stage {
+  min-width: 0;
+}
+
+
+.planning-program-stage--parallel {
+  width: 100%;
+
+  gap: 9px;
+}
+
+
+.planning-program-stage--final {
+  width: 100%;
+
+  align-content: center;
+}
+
+
+.planning-program-stage--source {
+  width: 100%;
+
+  align-content: center;
+}
+
+
+/* =========================================================
+   LONGITUDINAL / TRANSVERSAL
+   MESMO PADRÃO VISUAL DO CARD FINAL
+   ========================================================= */
+
+.planning-program-stage--parallel {
+  width: 100%;
+
+  max-width: 520px;
+
+  justify-self: start;
+
+  gap: 10px;
+}
+
+
+.planning-program-stage--parallel
+> .planning-material-program-card {
+  width: 100% !important;
+  max-width: 520px !important;
+
+  min-height: 96px;
+
+  display: grid;
+
+  grid-template-columns: minmax(0, 1fr);
+
+  align-content: center;
+
+  gap: 10px;
+
+  padding: 11px 12px !important;
+}
+
+
+.planning-program-stage--parallel
+> .planning-material-program-card
+> .planning-material-program-card-title {
+  grid-column: 1;
+
+  margin: 0 !important;
+}
+
+
+.planning-program-stage--parallel
+> .planning-material-program-card
+> dl {
+  grid-column: 1;
+
+  display: grid !important;
+
+  grid-template-columns:
+    repeat(
+      4,
+      minmax(0, 1fr)
+    ) !important;
+
+  gap: 0;
+
+  width: 100%;
+
+  margin: 0 !important;
+}
+
+
+.planning-program-stage--parallel
+> .planning-material-program-card
+> dl
+> div {
+  display: grid;
+
+  justify-content: initial;
+
+  gap: 3px;
+
+  min-width: 0;
+
+  padding: 0 8px;
+
+  border-left: 1px solid #e5e7eb;
+}
+
+
+.planning-program-stage--parallel
+> .planning-material-program-card
+> dl
+> div:first-child {
+  border-left: 0;
+
+  padding-left: 0;
+}
+
+
+.planning-program-stage--parallel
+.planning-material-program-card dt {
+  font-size: 9px !important;
+
+  text-transform: uppercase;
+}
+
+
+.planning-program-stage--parallel
+.planning-material-program-card dd {
+  margin: 0 !important;
+
+  font-size: 11px !important;
+
+  text-align: left !important;
+
+  white-space: normal;
+}
+
+
+/* =========================================================
+   PRODUTO FINAL
+   ========================================================= */
+
+.planning-program-stage--final
+> .planning-material-program-card {
+  width: 100% !important;
+  max-width: none !important;
+
+  min-height: 96px;
+
+  display: grid;
+
+  grid-template-columns: minmax(0, 1fr);
+
+  align-content: center;
+
+  gap: 10px;
+
+  padding: 11px 12px !important;
+}
+
+
+.planning-program-stage--final
+> .planning-material-program-card
+> .planning-material-program-card-title {
+  grid-column: 1;
+
+  margin: 0 !important;
+}
+
+
+.planning-program-stage--final
+> .planning-material-program-card
+> dl {
+  grid-column: 1;
+
+  display: grid !important;
+
+  grid-template-columns:
+    repeat(
+      4,
+      minmax(0, 1fr)
+    ) !important;
+
+  gap: 0;
+
+  width: 100%;
+
+  margin: 0 !important;
+}
+
+
+.planning-program-stage--final
+> .planning-material-program-card
+> dl
+> div {
+  display: grid;
+
+  justify-content: initial;
+
+  gap: 3px;
+
+  min-width: 0;
+
+  padding: 0 8px;
+
+  border-left: 1px solid #e5e7eb;
+}
+
+
+.planning-program-stage--final
+> .planning-material-program-card
+> dl
+> div:first-child {
+  border-left: 0;
+
+  padding-left: 0;
+}
+
+
+.planning-program-stage--final
+.planning-material-program-card dt {
+  font-size: 9px !important;
+
+  text-transform: uppercase;
+}
+
+
+.planning-program-stage--final
+.planning-material-program-card dd {
+  font-size: 11px !important;
+
+  text-align: left !important;
+
+  white-space: normal;
+}
+
+
+/* =========================================================
+   MATERIAL DE ORIGEM
+   Mantém compacto porque esta coluna é estreita.
+   ========================================================= */
+
+.planning-program-stage--source
+> .planning-material-program-card {
+  width: 100% !important;
+  max-width: none !important;
+
+  display: grid;
+
+  grid-template-columns: 1fr;
+
+  min-height: 0;
+
+  padding: 9px 10px !important;
+}
+
+
+.planning-program-stage--source
+> .planning-material-program-card
+> .planning-material-program-card-title,
+.planning-program-stage--source
+> .planning-material-program-card
+> dl {
+  grid-column: 1;
+}
+
+
+.planning-program-stage--source
+> .planning-material-program-card
+> dl {
+  display: grid !important;
+
+  grid-template-columns: 1fr !important;
+
+  gap: 4px;
+}
+
+
+.planning-program-stage--source
+> .planning-material-program-card
+> dl
+> div {
+  display: flex;
+
+  align-items: baseline;
+
+  justify-content: space-between;
+
+  gap: 8px;
+
+  padding: 0;
+
+  border: 0;
+}
+
+
+/* =========================================================
+   CONECTORES
+   ========================================================= */
+
+.planning-program-connector {
+  min-width: 0;
+
+  min-height: 78px;
+}
+
+
+.planning-program-connector--plain {
+  width: 44px;
+}
+
+
+.planning-program-connector--transport {
+  width: 145px;
+}
+
+
+/* =========================================================
+   UNIDADE SECUNDÁRIA
+   ========================================================= */
+
+.planning-material-secondary-qty {
+  display: inline !important;
+
+  margin-left: 3px;
+
+  color: var(--muted);
+
+  font-size: 9px !important;
+  font-weight: 800;
+
+  white-space: nowrap;
+}
+
+
+/* =========================================================
+   NOTEBOOKS / TELAS MÉDIAS
+   ========================================================= */
+
+@media (max-width: 1450px) {
+
+  .planning-program-stage--parallel
+  > .planning-material-program-card {
+    grid-template-columns: 1fr;
+  }
+
+
+  .planning-program-stage--parallel
+  > .planning-material-program-card
+  > .planning-material-program-card-title,
+  .planning-program-stage--parallel
+  > .planning-material-program-card
+  > dl {
+    grid-column: 1;
+  }
+
+}
+
+
+/* =========================================================
+   TELAS MENORES
+   ========================================================= */
+
+@media (max-width: 1050px) {
+
+  .planning-materials-program-group--flow {
+    overflow: visible;
+  }
+
+
+  .planning-materials-program-flow,
+  .planning-materials-program-flow
+  .without-source-stage.without-transport-stage,
+  .planning-materials-program-flow
+  .without-source-stage.has-transport-stage,
+  .planning-materials-program-flow
+  .has-source-stage.without-transport-stage,
+  .planning-materials-program-flow
+  .has-source-stage.has-transport-stage {
+    grid-template-columns: 1fr !important;
+
+    gap: 9px;
+  }
+
+
+  .planning-program-connector {
+    display: none;
+  }
+
+
+  .planning-program-stage--source,
+  .planning-program-stage--parallel,
+  .planning-program-stage--final {
+    width: 100%;
+  }
+
+
+  .planning-program-stage--parallel
+  > .planning-material-program-card,
+  .planning-program-stage--final
+  > .planning-material-program-card,
+  .planning-program-stage--source
+  > .planning-material-program-card {
+    width: 100% !important;
+    max-width: none !important;
+  }
+
+}
+
+/* =========================================================
+   MATERIAIS A PROGRAMAR
+   LARGURA ADAPTATIVA CONFORME O FLUXO
+   ========================================================= */
+
+
+/* ---------------------------------------------------------
+   CENÁRIO 1
+   Long/Trans -> Produto final
+   --------------------------------------------------------- */
+
+.planning-materials-program-flow
+.without-source-stage.without-transport-stage {
+  grid-template-columns:
+    minmax(0, 1.65fr)
+    38px
+    minmax(300px, .75fr) !important;
+}
+
+
+/* ---------------------------------------------------------
+   CENÁRIO 2
+   Transporte -> Long/Trans -> Produto final
+   --------------------------------------------------------- */
+
+.planning-materials-program-flow
+.without-source-stage.has-transport-stage {
+  grid-template-columns:
+    clamp(215px, 14vw, 240px)
+    minmax(0, 1.25fr)
+    32px
+    minmax(300px, .68fr) !important;
+}
+
+
+/* ---------------------------------------------------------
+   CENÁRIO 3
+   Produção anterior -> Long/Trans -> Produto final
+   --------------------------------------------------------- */
+
+.planning-materials-program-flow
+.has-source-stage.without-transport-stage {
+  grid-template-columns:
+    clamp(175px, 12vw, 215px)
+    36px
+    minmax(0, 1.4fr)
+    36px
+    minmax(280px, .70fr) !important;
+}
+
+
+/* ---------------------------------------------------------
+   CENÁRIO 4
+   Produção anterior -> Transporte ->
+   Long/Trans -> Produto final
+   --------------------------------------------------------- */
+
+.planning-materials-program-flow
+.has-source-stage.has-transport-stage {
+  grid-template-columns:
+    clamp(150px, 10vw, 180px)
+    clamp(195px, 12.5vw, 220px)
+    minmax(0, 1.08fr)
+    30px
+    minmax(250px, .58fr) !important;
+}
+
+/* =========================================================
+   TRANSPORTE ADAPTATIVO
+   ========================================================= */
+
+.planning-program-connector--transport {
+  width: 100% !important;
+  min-width: 0 !important;
+
+  padding: 0 6px;
+}
+
+
+.planning-program-transport-stack {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+
+  margin: 0;
+
+  gap: 7px;
+}
+
+
+.planning-transport-program-card {
+  /*
+   * IMPORTANTE:
+   *
+   * O transporte também possui a classe
+   * planning-material-program-card.
+   *
+   * Portanto precisamos cancelar explicitamente
+   * o grid de duas colunas dos materiais normais.
+   */
+  display: grid !important;
+
+  grid-template-columns:
+    minmax(0, 1fr) !important;
+
+  grid-auto-flow: row !important;
+
+  align-content: center;
+
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+
+  min-height: 118px;
+
+  padding: 10px 12px !important;
+
+  gap: 6px !important;
+
+  overflow: visible;
+}
+
+
+.planning-transport-program-card
+> .planning-transport-program-card-head,
+
+.planning-transport-program-card
+> .planning-transport-program-material,
+
+.planning-transport-program-card
+> .planning-transport-program-route,
+
+.planning-transport-program-card
+> .planning-transport-program-qty {
+  grid-column: 1 / -1 !important;
+}
+
+
+.planning-transport-program-card-head {
+  display: flex;
+
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 8px;
+
+  min-width: 0;
+}
+
+
+.planning-transport-program-card-head strong {
+  font-size: 11px;
+
+  white-space: nowrap;
+}
+
+
+.planning-transport-program-material {
+  display: block;
+
+  min-width: 0;
+
+  color: #334155;
+
+  font-size: 10px;
+
+  line-height: 1.2;
+
+  white-space: normal;
+
+  overflow: visible;
+
+  text-overflow: initial;
+}
+
+
+.planning-transport-program-route {
+  display: flex;
+
+  align-items: center;
+  justify-content: flex-start;
+
+  flex-wrap: wrap;
+
+  gap: 5px;
+
+  font-size: 9px;
+
+  line-height: 1.15;
+
+  white-space: normal;
+}
+
+
+.planning-transport-program-qty {
+  display: grid;
+
+  gap: 2px;
+
+  min-width: 0;
+
+  color: #7c4a03;
+
+  text-align: left;
+}
+
+
+.planning-transport-program-qty small {
+  color: #a16207;
+
+  font-size: 8px;
+  font-weight: 900;
+
+  line-height: 1;
+
+  text-transform: uppercase;
+}
+
+
+.planning-transport-program-qty strong {
+  color: #7c4a03;
+
+  font-size: 12px;
+  font-weight: 900;
+
+  line-height: 1.15;
+
+  white-space: normal;
+}
+
+/* =========================================================
+   ETAPA ANTERIOR / PRODUÇÃO DE MATÉRIA-PRIMA
+   ========================================================= */
+
+.planning-program-stage--source {
+  width: 100%;
+
+  min-width: 0;
+}
+
+
+.planning-program-stage--source
+> .planning-material-program-card {
+  width: 100% !important;
+
+  min-width: 0 !important;
+  max-width: none !important;
+
+  padding: 10px !important;
+}
+
+
+.planning-program-stage--source
+.planning-material-program-card-title {
+  margin-bottom: 3px !important;
+}
+
+
+.planning-program-stage--source
+.planning-material-program-card strong {
+  font-size: 11px;
+}
+
+
+.planning-program-stage--source
+.planning-material-program-card dl {
+  gap: 4px !important;
+}
+
+
+.planning-program-stage--source
+.planning-material-program-card dl div {
+  gap: 5px;
+}
+
+
+.planning-program-stage--source
+.planning-material-program-card dt {
+  font-size: 9px !important;
+}
+
+
+.planning-program-stage--source
+.planning-material-program-card dd {
+  font-size: 10px !important;
+}
+
+/* =========================================================
+   LONG / TRANS
+   REDUZ A COLUNA DO NOME QUANDO O FLUXO CRESCE
+   ========================================================= */
+
+
+/* Fluxo simples: dá bastante espaço ao nome. */
+
+.planning-materials-program-flow
+.without-source-stage.without-transport-stage
+.planning-program-stage--parallel
+> .planning-material-program-card {
+  grid-template-columns:
+    minmax(190px, 230px)
+    minmax(0, 1fr);
+}
+
+
+/* Só transporte ou só etapa anterior. */
+
+.planning-materials-program-flow
+.has-transport-stage
+.planning-program-stage--parallel
+> .planning-material-program-card,
+
+.planning-materials-program-flow
+.has-source-stage
+.planning-program-stage--parallel
+> .planning-material-program-card {
+  grid-template-columns:
+    minmax(150px, 185px)
+    minmax(0, 1fr);
+}
+
+
+/* Fluxo completo:
+   Bobina + Transporte + Long/Trans + Produto. */
+
+.planning-materials-program-flow
+.has-source-stage.has-transport-stage
+.planning-program-stage--parallel
+> .planning-material-program-card {
+  grid-template-columns:
+    minmax(125px, 160px)
+    minmax(0, 1fr);
+}
+
+.planning-program-stage--parallel
+.planning-material-program-card
+> dl {
+  min-width: 0;
+}
+
+
+.planning-program-stage--parallel
+.planning-material-program-card
+> dl
+> div {
+  min-width: 0;
+
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+
+.planning-program-stage--parallel
+.planning-material-program-card dd {
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+}
+
+.planning-program-stage--final {
+  width: 100%;
+
+  min-width: 0;
+}
+
+
+.planning-program-stage--final
+> .planning-material-program-card {
+  width: 100% !important;
+
+  min-width: 0 !important;
+  max-width: none !important;
+}
+
+
+.planning-materials-program-flow
+.has-source-stage.has-transport-stage
+.planning-program-stage--final
+> .planning-material-program-card {
+  padding: 9px 10px !important;
+}
+
+
+.planning-materials-program-flow
+.has-source-stage.has-transport-stage
+.planning-program-stage--final
+.planning-material-program-card dd {
+  font-size: 10px !important;
+}
+
+/* =========================================================
+   QUANDO NÃO HÁ MAIS ESPAÇO DE VERDADE
+   ========================================================= */
+
+@media (max-width: 1280px) {
+
+  .planning-materials-program-flow
+  .has-source-stage.has-transport-stage {
+
+    grid-template-columns:
+      150px
+      150px
+      minmax(0, 1fr)
+      28px
+      240px !important;
+  }
+
+
+  .planning-materials-program-flow
+  .has-source-stage.has-transport-stage
+  .planning-program-stage--parallel
+  > .planning-material-program-card {
+
+    grid-template-columns: 1fr;
+  }
+
+
+  .planning-materials-program-flow
+  .has-source-stage.has-transport-stage
+  .planning-program-stage--parallel
+  > .planning-material-program-card
+  > .planning-material-program-card-title,
+
+  .planning-materials-program-flow
+  .has-source-stage.has-transport-stage
+  .planning-program-stage--parallel
+  > .planning-material-program-card
+  > dl {
+
+    grid-column: 1;
+  }
+
+}
+
+/* =========================================================
+   PLANEJAMENTO
+   LAYOUT FINAL MATRIZ > TRANSPORTE > FEITAL
+   ========================================================= */
+
+
+/* =========================
+   SETORES DO TOPO
+   ========================= */
+
+.planning-flow-sectors {
+  display: grid !important;
+
+  grid-template-columns:
+    minmax(300px, .75fr)
+    minmax(0, 1.75fr) !important;
+
+  gap: 12px !important;
+
+  width: 100%;
+
+  margin-bottom: 12px;
+}
+
+
+.planning-flow-sector {
+  min-width: 0;
+
+  border-radius: 8px;
+
+  padding: 10px 12px;
+}
+
+
+.planning-flow-sector--source {
+  background: #f8fafc;
+}
+
+
+.planning-flow-sector--transport {
+  border-color: #efc274;
+
+  background: #fffaf0;
+}
+
+
+.planning-flow-sector--target {
+  background: #f8fafc;
+}
+
+
+.planning-flow-sector--transport
+.planning-flow-sector-head {
+  text-align: center;
+}
+
+
+.planning-flow-sector--transport
+.planning-flow-sector-route {
+  justify-content: center;
+
+  min-height: 44px;
+}
+
+
+/*
+ * Na MATRIZ normalmente temos poucas
+ * informações. Pode ocupar a largura.
+ */
+.planning-flow-sector--source
+.planning-shared-stock-strip-item {
+  width: 100% !important;
+}
+
+
+/*
+ * No FEITAL podem existir Bobina,
+ * Longitudinal, Transversal etc.
+ *
+ * Deixa os saldos virarem pequenos chips.
+ */
+.planning-flow-sector--target
+.planning-shared-stock-strip-items {
+  display: flex !important;
+
+  flex-wrap: wrap;
+
+  gap: 6px 8px;
+}
+
+
+.planning-flow-sector--target
+.planning-shared-stock-strip-item {
+  width: auto !important;
+
+  flex: 0 0 auto;
+}
+
+
+/* =========================
+   FLUXO INFERIOR
+   ========================= */
+
+.planning-materials-program-flow {
+  width: 100% !important;
+
+  min-width: 0 !important;
+
+  justify-content: start !important;
+
+  align-items: center !important;
+
+  column-gap: 14px !important;
+}
+
+
+/*
+ * LONG / TRANS
+ *        ->
+ * PRODUTO FINAL
+ */
+.planning-materials-program-flow.without-source-stage.without-transport-stage {
+  grid-template-columns:
+    520px
+    32px
+    420px !important;
+}
+
+
+/*
+ * TRANSPORTE
+ *   ->
+ * LONG / TRANS
+ *   ->
+ * PRODUTO FINAL
+ */
+.planning-materials-program-flow.without-source-stage.has-transport-stage {
+  grid-template-columns:
+    230px
+    520px
+    32px
+    420px !important;
+}
+
+
+/*
+ * PRODUÇÃO ANTERIOR
+ *   ->
+ * LONG / TRANS
+ *   ->
+ * PRODUTO FINAL
+ */
+.planning-materials-program-flow.has-source-stage.without-transport-stage {
+  grid-template-columns:
+    340px
+    32px
+    520px
+    32px
+    420px !important;
+}
+
+
+/*
+ * PRODUÇÃO ANTERIOR
+ *   ->
+ * TRANSPORTE
+ *   ->
+ * LONG / TRANS
+ *   ->
+ * PRODUTO FINAL
+ */
+.planning-materials-program-flow.has-source-stage.has-transport-stage {
+  grid-template-columns:
+    340px
+    230px
+    480px
+    32px
+    380px !important;
+}
+
+
+/* =========================
+   LONGITUDINAL / TRANSVERSAL
+   MESMO PADRÃO DA MALHA
+   ========================= */
+
+.planning-materials-program-flow
+.planning-program-stage--parallel {
+  width: 100% !important;
+
+  max-width: 520px !important;
+
+  justify-self: start !important;
+
+  gap: 10px;
+}
+
+
+.planning-materials-program-flow
+.planning-program-stage--parallel
+> .planning-material-program-card {
+  display: grid !important;
+
+  grid-template-columns:
+    minmax(0, 1fr) !important;
+
+  width: 100% !important;
+
+  max-width: 520px !important;
+
+  min-height: 96px;
+
+  align-content: center;
+
+  gap: 10px;
+
+  padding: 11px 12px !important;
+}
+
+
+.planning-materials-program-flow
+.planning-program-stage--parallel
+> .planning-material-program-card
+> .planning-material-program-card-title {
+  grid-column: 1 / -1 !important;
+
+  margin: 0 !important;
+}
+
+
+.planning-materials-program-flow
+.planning-program-stage--parallel
+> .planning-material-program-card
+> dl {
+  grid-column: 1 / -1 !important;
+
+  display: grid !important;
+
+  grid-template-columns:
+    repeat(
+      4,
+      minmax(0, 1fr)
+    ) !important;
+
+  width: 100%;
+
+  margin: 0 !important;
+}
+
+
+.planning-materials-program-flow
+.planning-program-stage--parallel
+> .planning-material-program-card
+> dl
+> div {
+  display: grid;
+
+  gap: 3px;
+
+  min-width: 0;
+
+  padding: 0 8px;
+
+  border-left: 1px solid #e5e7eb;
+}
+
+
+.planning-materials-program-flow
+.planning-program-stage--parallel
+> .planning-material-program-card
+> dl
+> div:first-child {
+  padding-left: 0;
+
+  border-left: 0;
+}
+
+
+.planning-materials-program-flow
+.planning-program-stage--parallel
+.planning-material-program-card dt {
+  font-size: 9px !important;
+
+  text-transform: uppercase;
+}
+
+
+.planning-materials-program-flow
+.planning-program-stage--parallel
+.planning-material-program-card dd {
+  margin: 0 !important;
+
+  overflow: visible !important;
+
+  color: inherit;
+
+  font-size: 11px !important;
+
+  text-align: left !important;
+
+  text-overflow: initial !important;
+
+  white-space: normal;
+}
+
+
+/* =========================
+   PRODUTO FINAL
+   ========================= */
+
+.planning-materials-program-flow
+.planning-program-stage--final {
+  width: 100% !important;
+
+  max-width: 420px;
+
+  justify-self: start;
+}
+
+
+.planning-materials-program-flow
+.planning-program-stage--final
+> .planning-material-program-card {
+  width: 100% !important;
+
+  max-width: 420px !important;
+}
+
+
+/* =========================
+   PRODUÇÃO ANTERIOR
+   Ex.: futura produção da Bobina
+   ========================= */
+
+.planning-materials-program-flow
+.planning-program-stage--source {
+  width: 100% !important;
+
+  max-width: 340px;
+
+  justify-self: start;
+}
+
+
+.planning-materials-program-flow
+.planning-program-stage--source
+> .planning-material-program-card {
+  width: 100% !important;
+
+  max-width: 340px !important;
+}
+
+
+/* =========================
+   TRANSPORTE
+   ========================= */
+
+.planning-materials-program-flow
+.planning-program-connector--transport {
+  display: grid !important;
+
+  width: 230px !important;
+
+  min-width: 0 !important;
+
+  padding: 0 !important;
+}
+
+
+.planning-materials-program-flow
+.planning-program-transport-stack {
+  width: 100% !important;
+
+  max-width: 230px !important;
+
+  margin: 0 !important;
+}
+
+
+.planning-materials-program-flow
+.planning-transport-program-card {
+  display: grid !important;
+
+  grid-template-columns:
+    minmax(0, 1fr) !important;
+
+  width: 100% !important;
+
+  min-width: 0 !important;
+
+  max-width: 230px !important;
+
+  min-height: 110px;
+
+  align-content: center;
+
+  gap: 6px !important;
+
+  padding: 10px 12px !important;
+}
+
+
+.planning-materials-program-flow
+.planning-transport-program-card
+> * {
+  grid-column: 1 / -1 !important;
+}
+
+
+.planning-materials-program-flow
+.planning-transport-program-material {
+  font-size: 10px;
+
+  font-weight: 850;
+
+  white-space: normal;
+}
+
+
+.planning-materials-program-flow
+.planning-transport-program-route {
+  justify-content: flex-start;
+
+  flex-wrap: wrap;
+
+  white-space: normal;
+}
+
+
+.planning-materials-program-flow
+.planning-transport-program-qty {
+  font-size: 12px;
+
+  font-weight: 900;
+}
+
+
+/* =========================
+   TELAS MÉDIAS
+   ========================= */
+
+@media (max-width: 1500px) {
+
+    .planning-materials-program-flow.without-source-stage.has-transport-stage {
+    grid-template-columns:
+      210px
+      460px
+      28px
+      360px !important;
+  }
+
+
+    .planning-materials-program-flow.has-source-stage.has-transport-stage {
+    grid-template-columns:
+      260px
+      200px
+      430px
+      28px
+      340px !important;
+  }
+
+
+  .planning-materials-program-flow
+  .planning-program-stage--parallel {
+    max-width: 460px !important;
+  }
+
+
+  .planning-materials-program-flow
+  .planning-program-stage--parallel
+  > .planning-material-program-card {
+    max-width: 460px !important;
+  }
+
+
+  .planning-materials-program-flow
+  .planning-program-connector--transport,
+  .planning-materials-program-flow
+  .planning-program-transport-stack,
+  .planning-materials-program-flow
+  .planning-transport-program-card {
+    max-width: 210px !important;
+  }
+
+}
+
+
+/* =========================
+   TELAS PEQUENAS
+   ========================= */
+
+@media (max-width: 1180px) {
+
+  .planning-flow-sectors {
+    grid-template-columns:
+      1fr !important;
+  }
+
+
+  .planning-materials-program-flow,
+  .planning-materials-program-flow
+  .without-source-stage.without-transport-stage,
+  .planning-materials-program-flow
+  .without-source-stage.has-transport-stage,
+  .planning-materials-program-flow
+  .has-source-stage.without-transport-stage,
+  .planning-materials-program-flow
+  .has-source-stage.has-transport-stage {
+    grid-template-columns:
+      minmax(0, 1fr) !important;
+
+    gap: 10px !important;
+  }
+
+
+  /*
+   * As setas simples desaparecem.
+   */
+  .planning-materials-program-flow
+  .planning-program-connector--plain {
+    display: none !important;
+  }
+
+
+  /*
+   * O TRANSPORTE NÃO pode desaparecer.
+   * Ele usa a classe connector também.
+   */
+  .planning-materials-program-flow
+  .planning-program-connector--transport {
+    display: grid !important;
+
+    width: 100% !important;
+
+    max-width: none !important;
+
+    min-height: 0;
+  }
+
+
+  .planning-materials-program-flow
+  .planning-program-stage--source,
+
+  .planning-materials-program-flow
+  .planning-program-stage--parallel,
+
+  .planning-materials-program-flow
+  .planning-program-stage--final,
+
+  .planning-materials-program-flow
+  .planning-program-transport-stack,
+
+  .planning-materials-program-flow
+  .planning-transport-program-card {
+    width: 100% !important;
+
+    max-width: none !important;
+  }
+
+}
+
+.planning-transport-allocation-summary {
+  grid-template-columns:
+    repeat(
+      4,
+      minmax(0, 1fr)
+    ) !important;
+}
+
+
+@media (max-width: 760px) {
+  .planning-transport-allocation-summary {
+    grid-template-columns:
+      repeat(
+        2,
+        minmax(0, 1fr)
+      ) !important;
+  }
+}
+
+
+@media (max-width: 520px) {
+  .planning-transport-allocation-summary {
+    grid-template-columns:
+      1fr !important;
+  }
+}
+
+/* =========================================================
+   SELEÇÃO DE CARD PARA PROGRAMAÇÃO NO GANTT
+   ========================================================= */
+
+.planning-material-program-card-actions,
+.planning-transport-program-card-actions {
+  display: inline-flex;
+
+  align-items: center;
+  justify-content: flex-end;
+
+  gap: 7px;
+
+  flex: 0 0 auto;
+}
+
+
+.planning-gantt-select-control {
+  display: inline-grid;
+
+  place-items: center;
+
+  width: 22px;
+  height: 22px;
+
+  min-width: 22px;
+
+  margin: 0;
+
+  cursor: pointer;
+}
+
+
+.planning-gantt-select-control input {
+  width: 17px;
+  height: 17px;
+
+  margin: 0;
+  padding: 0;
+
+  accent-color:
+    var(--petroleum-dark);
+
+  cursor: pointer;
+}
+
+
+/*
+ * Destaca também o card selecionado,
+ * para quando o usuário descer a página
+ * ficar claro qual material está ativo.
+ */
+.planning-material-program-card[
+  data-selected-for-gantt="true"
+] {
+  box-shadow:
+    0 0 0 3px
+      rgba(37, 99, 235, 0.14),
+
+    0 10px 22px
+      rgba(15, 23, 42, 0.10);
+}
+
+
+.planning-material-program-card[
+  data-selected-for-gantt="true"
+]
+.planning-gantt-select-control input {
+  outline:
+    2px solid
+    rgba(37, 99, 235, 0.22);
+
+  outline-offset: 2px;
+}
+
+
+/*
+ * Normalmente as células do Gantt usam
+ * pointer-events:none porque foram feitas
+ * para drag.
+ *
+ * Enquanto há um card marcado pela checkbox,
+ * elas também passam a aceitar clique.
+ */
+.gantt-aps[
+  data-planning-material-click-mode="true"
+]
+.gantt-aps__drop-cell {
+  pointer-events: auto;
+
+  cursor: pointer;
+}
+
+
+.gantt-aps[
+  data-planning-material-click-mode="true"
+]
+.gantt-aps__drop-cell[
+  data-planning-material-compatible="true"
+] {
+  z-index: 2;
+
+  cursor: pointer;
+}
+
+
+.gantt-aps[
+  data-planning-material-click-mode="true"
+]
+.gantt-aps__drop-cell[
+  data-planning-material-invalid="true"
+] {
+  z-index: 2;
+
+  cursor: not-allowed;
+}
+
+/* =========================================================
+   DEMANDA / ATENDIMENTO POR SALDO COMPARTILHADO
+   ========================================================= */
+
+.planning-material-program-card-pill.is-shared-stock {
+  border-color: #86efac;
+
+  background: #dcfce7;
+
+  color: #166534;
+}
+
+
+.planning-material-program-card-pill.is-shared-demand {
+  border-color: #93c5fd;
+
+  background: #eff6ff;
+
+  color: #1d4ed8;
+}
+
+/* =========================================================
+   ENTRADA PREVISTA / COMPRA ESTIMADA
+   ========================================================= */
+
+.planning-shortage-actions {
+  grid-template-columns:
+    repeat(
+      4,
+      minmax(0, 1fr)
+    );
+}
+
+
+.planning-shortage-receipt {
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+
+  background: #f8fbff;
+
+  padding: 12px;
+}
+
+
+.planning-shortage-card:not(
+  :has(
+    .planning-shortage-actions
+    input[value="receipt"]:checked
+  )
+)
+.planning-shortage-receipt {
+  display: none;
+}
+
+
+.planning-shortage-receipt-grid {
+  display: grid;
+
+  grid-template-columns:
+    minmax(180px, 1.25fr)
+    minmax(150px, .8fr)
+    minmax(170px, .85fr)
+    minmax(190px, 1fr);
+
+  gap: 10px;
+
+  align-items: end;
+}
+
+
+.planning-shortage-receipt-grid > label {
+  display: grid;
+
+  gap: 6px;
+
+  color: #667085;
+
+  font-size: 11px;
+  font-weight: 800;
+}
+
+
+.planning-shortage-receipt-grid select,
+.planning-shortage-receipt-grid input {
+  width: 100%;
+}
+
+
+.planning-shortage-receipt-availability {
+  display: grid;
+
+  gap: 3px;
+
+  min-height: 42px;
+
+  padding: 9px 10px;
+
+  border: 1px solid #dbeafe;
+  border-radius: 6px;
+
+  background: #ffffff;
+}
+
+
+.planning-shortage-receipt-availability span {
+  color: #667085;
+
+  font-size: 9px;
+  font-weight: 900;
+
+  text-transform: uppercase;
+}
+
+
+.planning-shortage-receipt-availability strong {
+  color: #1e3a5f;
+
+  font-size: 13px;
+  font-weight: 900;
+}
+
+
+.planning-shortage-receipt-availability small {
+  color: #64748b;
+
+  font-size: 10px;
+  font-weight: 700;
+}
+
+
+/* =========================
+   PAINEL ABAIXO DAS PRODUÇÕES
+   ========================= */
+
+.planning-planned-receipts {
+  display: grid;
+
+  gap: 10px;
+
+  margin-top: 16px;
+
+  padding: 14px;
+
+  border: 1px solid #bfdbfe;
+  border-left: 4px solid #2563eb;
+  border-radius: 8px;
+
+  background: #f8fbff;
+}
+
+
+.planning-planned-receipts-head {
+  display: flex;
+
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 14px;
+}
+
+
+.planning-planned-receipts-head h3 {
+  margin: 0;
+
+  color: #172033;
+
+  font-size: 14px;
+}
+
+
+.planning-planned-receipts-head p {
+  margin: 3px 0 0;
+
+  color: #64748b;
+
+  font-size: 10px;
+  font-weight: 700;
+}
+
+
+.planning-planned-receipts-head > span {
+  flex: 0 0 auto;
+
+  padding: 4px 8px;
+
+  border-radius: 999px;
+
+  background: #dbeafe;
+
+  color: #1d4ed8;
+
+  font-size: 10px;
+  font-weight: 900;
+
+  text-transform: uppercase;
+}
+
+
+.planning-planned-receipts-list {
+  display: grid;
+
+  gap: 8px;
+}
+
+
+.planning-planned-receipt-card {
+  display: grid;
+
+  grid-template-columns:
+    minmax(220px, 1.3fr)
+    minmax(150px, .8fr)
+    minmax(150px, .8fr)
+    minmax(180px, .9fr);
+
+  gap: 12px;
+
+  align-items: center;
+
+  padding: 10px 12px;
+
+  border: 1px solid #dbeafe;
+  border-radius: 7px;
+
+  background: #ffffff;
+}
+
+
+.planning-planned-receipt-card > div {
+  display: grid;
+
+  gap: 3px;
+
+  min-width: 0;
+}
+
+
+.planning-planned-receipt-card span,
+.planning-planned-receipt-material small {
+  color: #64748b;
+
+  font-size: 9px;
+  font-weight: 800;
+
+  text-transform: uppercase;
+}
+
+
+.planning-planned-receipt-card strong {
+  color: #172033;
+
+  font-size: 12px;
+  font-weight: 900;
+}
+
+
+@media (max-width: 980px) {
+
+  .planning-shortage-actions,
+
+  .planning-shortage-receipt-grid,
+
+  .planning-planned-receipt-card {
+    grid-template-columns:
+      repeat(
+        2,
+        minmax(0, 1fr)
+      );
+  }
+
+}
+
+
+@media (max-width: 620px) {
+
+  .planning-shortage-actions,
+
+  .planning-shortage-receipt-grid,
+
+  .planning-planned-receipt-card {
+    grid-template-columns:
+      1fr;
+  }
+
+}
+
+/* Quando a decisão for PREVER CHEGADA,
+   o insumo previsto passa a ser a escolha principal. */
+.planning-shortage-card:has(
+  .planning-shortage-actions
+  input[value="receipt"]:checked
+)
+.planning-shortage-model {
+  display: none !important;
+}
+
+/* =========================================================
+   COMPRAS - mesma linguagem visual de transportes
+   ========================================================= */
+
+.purchase-launch-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.purchase-filters {
+  grid-template-columns:
+    minmax(240px, 1.25fr)
+    minmax(190px, .95fr)
+    minmax(150px, .72fr)
+    minmax(160px, .78fr)
+    minmax(140px, .68fr)
+    minmax(140px, .62fr)
+    minmax(140px, .62fr)
+    auto
+    auto;
+
+  gap: 18px 12px;
+
+  margin: 0;
+
+  position: relative;
+
+  z-index: 40;
+}
+
+.purchase-multi-filter {
+  position: relative;
+
+  display: grid;
+
+  gap: 6px;
+
+  min-width: 0;
+
+  align-self: end;
+}
+
+.purchase-multi-filter-label {
+  color: var(--muted);
+
+  font-size: 12px;
+
+  font-weight: 800;
+}
+
+.purchase-multi-filter-trigger {
+  width: 100%;
+
+  min-width: 0;
+
+  min-height: 42px;
+
+  display: grid;
+
+  grid-template-columns:
+    minmax(0, 1fr)
+    auto;
+
+  align-items: center;
+
+  gap: 8px;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-radius: 6px;
+
+  background: #ffffff;
+
+  color: var(--muted);
+
+  padding:
+    9px 11px 9px 12px;
+
+  text-align: left;
+
+  font-weight: 600;
+}
+
+.purchase-multi-filter-trigger
+> span:first-child {
+  min-width: 0;
+
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+}
+
+.purchase-multi-filter-trigger.has-selection {
+  color: var(--ink);
+
+  font-weight: 800;
+}
+
+.purchase-multi-filter-trigger:hover,
+.purchase-multi-filter-trigger[
+  aria-expanded="true"
+] {
+  border-color:
+    var(--petroleum);
+}
+
+.purchase-multi-filter-trigger[
+  aria-expanded="true"
+] {
+  outline:
+    2px solid
+    rgba(217, 119, 6, .18);
+}
+
+.purchase-multi-filter-chevron {
+  color: var(--muted);
+
+  font-size: 12px;
+}
+
+.purchase-multi-filter-menu {
+  position: absolute;
+
+  top: calc(100% + 6px);
+
+  left: 0;
+
+  z-index: 160;
+
+  width:
+    min(
+      420px,
+      88vw
+    );
+
+  max-height: 360px;
+
+  display: grid;
+
+  grid-template-rows:
+    auto
+    auto
+    minmax(0, 1fr);
+
+  gap: 9px;
+
+  overflow: hidden;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-radius: 8px;
+
+  background: #ffffff;
+
+  box-shadow:
+    0 18px 42px
+    rgba(16, 24, 40, .22);
+
+  padding: 10px;
+}
+
+.purchase-multi-filter-menu[hidden] {
+  display: none;
+}
+
+.purchase-multi-filter-search {
+  min-height: 38px;
+}
+
+.purchase-multi-filter-actions {
+  display: flex;
+
+  align-items: center;
+
+  justify-content: space-between;
+
+  gap: 10px;
+
+  padding-bottom: 8px;
+
+  border-bottom:
+    1px solid
+    var(--line);
+}
+
+.purchase-multi-filter-actions
+> span {
+  color: var(--muted);
+
+  font-size: 11px;
+
+  font-weight: 800;
+}
+
+.purchase-multi-filter-actions
+.link-button {
+  border: 0;
+
+  background: transparent;
+
+  padding: 0;
+
+  color: var(--petroleum-dark);
+
+  font-size: 11px;
+
+  font-weight: 900;
+}
+
+.purchase-multi-filter-actions
+.link-button:disabled {
+  opacity: .45;
+
+  cursor: default;
+}
+
+.purchase-multi-filter-options {
+  display: grid;
+
+  gap: 3px;
+
+  max-height: 245px;
+
+  overflow: auto;
+
+  padding-right: 2px;
+}
+
+.purchase-multi-filter-option {
+  display: grid;
+
+  grid-template-columns:
+    18px
+    minmax(0, 1fr);
+
+  align-items: center;
+
+  gap: 9px;
+
+  min-height: 36px;
+
+  border-radius: 6px;
+
+  padding:
+    6px 7px;
+
+  color: var(--ink);
+
+  font-size: 12px;
+
+  font-weight: 700;
+
+  cursor: pointer;
+}
+
+.purchase-multi-filter-option:hover {
+  background: #f4f6f8;
+}
+
+.purchase-multi-filter-option[hidden] {
+  display: none;
+}
+
+.purchase-multi-filter-option input {
+  width: 16px;
+
+  height: 16px;
+
+  margin: 0;
+
+  accent-color:
+    var(--petroleum);
+}
+
+.purchase-multi-filter-option span {
+  min-width: 0;
+
+  line-height: 1.25;
+
+  overflow-wrap: anywhere;
+}
+
+.purchase-multi-filter-empty {
+  padding:
+    10px 8px;
+
+  color: var(--muted);
+
+  font-size: 12px;
+
+  text-align: center;
+}
+
+.purchase-multi-filter-empty[hidden] {
+  display: none;
+}
+
+.purchase-modal {
+  width:
+    min(
+      1480px,
+      96vw
+    );
+
+  overflow: visible;
+}
+
+.purchase-realization-form,
+.purchase-lines-section,
+.purchase-items-target {
+  display: grid;
+
+  gap: 16px;
+}
+
+.purchase-header-grid {
+  grid-template-columns:
+    minmax(150px, .65fr)
+    minmax(240px, 1.2fr)
+    minmax(170px, .78fr)
+    minmax(210px, .95fr)
+    minmax(170px, .72fr);
+}
+
+.purchase-item {
+  display: grid;
+
+  gap: 14px;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-radius:
+    8px;
+
+  background:
+    #fbfcfd;
+
+  padding:
+    14px;
+}
+
+.purchase-item-main {
+  display: grid;
+
+  grid-template-columns:
+    minmax(320px, 1.5fr)
+    minmax(170px, .72fr)
+    minmax(150px, .62fr)
+    minmax(110px, .42fr)
+    minmax(160px, .62fr)
+    auto;
+
+  gap: 10px;
+
+  align-items: end;
+}
+
+.purchase-item-main
+.transport-combo {
+  min-width: 0;
+}
+
+.purchase-lots-details {
+  border-top:
+    1px solid
+    var(--line);
+
+  padding-top:
+    10px;
+}
+
+.purchase-lots-details
+> summary {
+  display: flex;
+
+  align-items: center;
+
+  gap: 8px;
+
+  width: fit-content;
+
+  color:
+    var(--petroleum-dark);
+
+  font-size:
+    13px;
+
+  font-weight:
+    900;
+
+  cursor:
+    pointer;
+
+  user-select:
+    none;
+}
+
+.purchase-lots-details
+> summary strong {
+  display:
+    inline-grid;
+
+  place-items:
+    center;
+
+  min-width:
+    24px;
+
+  height:
+    22px;
+
+  border-radius:
+    999px;
+
+  background:
+    #eef2f6;
+
+  color:
+    var(--muted);
+
+  font-size:
+    11px;
+}
+
+.purchase-lots-target {
+  display: grid;
+
+  gap: 10px;
+
+  margin:
+    12px 0 10px;
+}
+
+.purchase-lot-row {
+  display: grid;
+
+  grid-template-columns:
+    minmax(190px, 1fr)
+    minmax(130px, .62fr)
+    minmax(150px, .7fr)
+    minmax(170px, .76fr)
+    minmax(150px, .68fr)
+    auto;
+
+  gap: 10px;
+
+  align-items: end;
+
+  border:
+    1px solid
+    rgba(
+      47,
+      52,
+      59,
+      .10
+    );
+
+  border-radius:
+    8px;
+
+  background:
+    #ffffff;
+
+  padding:
+    10px;
+}
+
+.purchase-lots-details
+> .add-purchase-lot {
+  min-height:
+    34px;
+
+  padding-inline:
+    12px;
+
+  font-size:
+    12px;
+}
+
+.purchase-weight-check {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      3,
+      minmax(
+        150px,
+        1fr
+      )
+    )
+    minmax(
+      320px,
+      1.4fr
+    );
+
+  gap: 10px;
+
+  align-items:
+    stretch;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-radius:
+    8px;
+
+  background:
+    #f8fafc;
+
+  padding:
+    12px;
+}
+
+.purchase-weight-check
+article {
+  display: grid;
+
+  gap: 4px;
+
+  border:
+    1px solid
+    rgba(
+      47,
+      52,
+      59,
+      .10
+    );
+
+  border-radius:
+    7px;
+
+  background:
+    #ffffff;
+
+  padding:
+    10px;
+}
+
+.purchase-weight-check
+article span {
+  color:
+    var(--muted);
+
+  font-size:
+    10px;
+
+  font-weight:
+    900;
+
+  text-transform:
+    uppercase;
+}
+
+.purchase-weight-check
+article strong {
+  color:
+    var(--petroleum-dark);
+
+  font-size:
+    14px;
+}
+
+.purchase-weight-message {
+  display: flex;
+
+  align-items:
+    center;
+
+  border-radius:
+    7px;
+
+  padding:
+    10px 12px;
+
+  color:
+    var(--muted);
+
+  background:
+    #ffffff;
+
+  font-size:
+    12px;
+
+  font-weight:
+    900;
+}
+
+.purchase-weight-check.is-ok {
+  border-color:
+    rgba(
+      22,
+      163,
+      74,
+      .34
+    );
+
+  background:
+    #f0fdf4;
+}
+
+.purchase-weight-check.is-ok
+.purchase-weight-message {
+  color:
+    #166534;
+
+  background:
+    #dcfce7;
+}
+
+.purchase-weight-check.is-warning {
+  border-color:
+    rgba(
+      220,
+      38,
+      38,
+      .28
+    );
+
+  background:
+    #fff7f7;
+}
+
+.purchase-weight-check.is-warning
+.purchase-weight-message {
+  color:
+    #991b1b;
+
+  background:
+    #fee2e2;
+}
+
+.purchase-launch-table-wrap
+td:nth-child(3),
+.purchase-launch-table-wrap
+td:nth-child(9) {
+  white-space:
+    normal;
+
+  line-height:
+    1.35;
+}
+
+
+/* =========================================================
+   COMPRAS - RESUMO COMPACTO DOS LOTES
+   ========================================================= */
+
+.purchase-lots-cell {
+  display: grid;
+
+  gap: 7px;
+
+  min-width: 145px;
+}
+
+
+.purchase-lots-cell-head {
+  display: flex;
+
+  align-items: center;
+
+  justify-content: space-between;
+
+  gap: 8px;
+}
+
+
+.purchase-lots-cell-head strong {
+  color:
+    var(--petroleum-dark);
+
+  font-size: 11px;
+
+  white-space: nowrap;
+}
+
+
+.purchase-lots-view-button {
+  appearance: none;
+
+  border: 0;
+
+  background: transparent;
+
+  padding: 0;
+
+  color: #2563eb;
+
+  font-size: 10px;
+
+  font-weight: 900;
+
+  cursor: pointer;
+
+  white-space: nowrap;
+}
+
+
+.purchase-lots-view-button:hover {
+  text-decoration: underline;
+}
+
+
+.purchase-lots-preview {
+  display: flex;
+
+  align-items: center;
+
+  flex-wrap: wrap;
+
+  gap: 5px;
+}
+
+
+.purchase-lots-preview > span {
+  max-width: 95px;
+
+  overflow: hidden;
+
+  padding: 3px 7px;
+
+  border:
+    1px solid #dbe3ec;
+
+  border-radius: 999px;
+
+  background: #f8fafc;
+
+  color: #475569;
+
+  font-size: 9px;
+
+  font-weight: 800;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+}
+
+
+.purchase-lots-preview
+.purchase-lots-more {
+  border-color: #bfdbfe;
+
+  background: #eff6ff;
+
+  color: #2563eb;
+}
+
+
+/* =========================================================
+   MODAL DE LOTES DA COMPRA
+   ========================================================= */
+
+.purchase-lots-view-modal {
+  width: calc(100vw - 40px);
+  max-width: 1450px;
+
+  max-height: calc(100vh - 32px);
+
+  display: grid;
+
+  grid-template-rows:
+    auto
+    auto
+    minmax(0, 1fr);
+
+  gap: 16px;
+
+  overflow: hidden;
+}
+
+
+.purchase-lots-view-header {
+  align-items: flex-start;
+}
+
+
+.purchase-lots-view-header h2 {
+  margin: 0;
+}
+
+
+.purchase-lots-view-header p {
+  margin:
+    4px 0 0;
+
+  color:
+    var(--muted);
+
+  font-size: 11px;
+}
+
+
+.purchase-lots-view-summary {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      4,
+      minmax(
+        0,
+        1fr
+      )
+    );
+
+  gap: 10px;
+}
+
+
+.purchase-lots-view-summary article {
+  display: grid;
+
+  gap: 5px;
+
+  padding: 11px 12px;
+
+  border:
+    1px solid #e2e8f0;
+
+  border-radius: 9px;
+
+  background: #f8fafc;
+}
+
+
+.purchase-lots-view-summary span {
+  color: #64748b;
+
+  font-size: 9px;
+
+  font-weight: 900;
+
+  text-transform: uppercase;
+}
+
+
+.purchase-lots-view-summary strong {
+  color:
+    var(--petroleum-dark);
+
+  font-size: 14px;
+}
+
+
+.purchase-lots-view-list {
+  display: block;
+
+  max-height: 55vh;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  padding-right: 8px;
+
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 transparent;
+}
+
+.purchase-lots-view-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.purchase-lots-view-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.purchase-lots-view-list::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+
+  border-radius: 999px;
+}
+
+.purchase-lots-view-list::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+
+.purchase-lots-view-material {
+  overflow: hidden;
+
+  border:
+    1px solid #dbe3ec;
+
+  border-radius: 10px;
+
+  background: #ffffff;
+}
+
+
+.purchase-lots-view-material-head {
+  display: flex;
+
+  align-items: center;
+
+  justify-content: space-between;
+
+  gap: 16px;
+
+  padding: 11px 13px;
+
+  border-bottom:
+    1px solid #e2e8f0;
+
+  background: #f8fafc;
+}
+
+
+.purchase-lots-view-material-head
+> div {
+  display: grid;
+
+  gap: 2px;
+}
+
+
+.purchase-lots-view-material-head strong {
+  color:
+    var(--petroleum-dark);
+
+  font-size: 12px;
+}
+
+
+.purchase-lots-view-material-head small {
+  color: #64748b;
+
+  font-size: 9px;
+}
+
+
+.purchase-lots-view-material-head
+> span {
+  padding: 4px 8px;
+
+  border-radius: 999px;
+
+  background: #eff6ff;
+
+  color: #2563eb;
+
+  font-size: 9px;
+
+  font-weight: 900;
+
+  white-space: nowrap;
+}
+
+.purchase-lots-view-table-wrap {
+  width: 100%;
+  max-width: 100%;
+
+  overflow-x: hidden;
+  overflow-y: visible;
+}
+
+
+.purchase-lots-view-table {
+  width: 100%;
+
+  table-layout: fixed;
+
+  border-collapse: collapse;
+}
+
+.purchase-lots-view-table th:nth-child(1),
+.purchase-lots-view-table td:nth-child(1) {
+  width: 20%;
+}
+
+.purchase-lots-view-table th:nth-child(2),
+.purchase-lots-view-table td:nth-child(2) {
+  width: 17%;
+}
+
+.purchase-lots-view-table th:nth-child(3),
+.purchase-lots-view-table td:nth-child(3) {
+  width: 18%;
+}
+
+.purchase-lots-view-table th:nth-child(4),
+.purchase-lots-view-table td:nth-child(4) {
+  width: 23%;
+}
+
+.purchase-lots-view-table th:nth-child(5),
+.purchase-lots-view-table td:nth-child(5) {
+  width: 22%;
+}
+
+.purchase-lots-view-table th {
+  padding: 8px 10px;
+
+  border-bottom:
+    1px solid #dbe3ec;
+
+  background: #ffffff;
+
+  color: #64748b;
+
+  font-size: 9px;
+
+  font-weight: 900;
+
+  text-align: left;
+
+  text-transform: uppercase;
+
+}
+
+
+.purchase-lots-view-table td {
+  padding: 8px 10px;
+
+  border-bottom:
+    1px solid #edf2f7;
+
+  color: #334155;
+
+  font-size: 10px;
+
+  vertical-align: middle;
+
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+
+.purchase-lots-view-table
+tbody
+tr:last-child
+td {
+  border-bottom: 0;
+}
+
+
+.purchase-lots-view-table
+tbody
+tr:hover {
+  background: #f8fbff;
+}
+
+
+@media (
+  max-width: 800px
+) {
+  .purchase-lots-view-summary {
+    grid-template-columns:
+      repeat(
+        2,
+        minmax(
+          0,
+          1fr
+        )
+      );
+  }
+}
+
+@media (
+  max-width:
+    1350px
+) {
+  .purchase-filters {
+    grid-template-columns:
+      repeat(
+        3,
+        minmax(
+          180px,
+          1fr
+        )
+      );
+  }
+
+  .purchase-header-grid,
+  .purchase-item-main,
+  .purchase-lot-row {
+    grid-template-columns:
+      repeat(
+        2,
+        minmax(
+          180px,
+          1fr
+        )
+      );
+  }
+
+  .purchase-weight-check {
+    grid-template-columns:
+      repeat(
+        2,
+        minmax(
+          180px,
+          1fr
+        )
+      );
+  }
+}
+
+/* =========================================================
+   FALTA DE INSUMO - ENTRADAS PREVISTAS GLOBAIS
+   ========================================================= */
+
+.planning-global-receipts {
+  display: grid;
+  gap: 12px;
+
+  margin-bottom: 16px;
+
+  padding: 14px;
+
+  border: 1px solid #bfdbfe;
+  border-left: 4px solid #2563eb;
+  border-radius: 9px;
+
+  background: #f8fbff;
+}
+
+.planning-global-receipts-head {
+  display: flex;
+
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 14px;
+}
+
+.planning-global-receipts-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.planning-global-receipts-head strong {
+  color: #172033;
+
+  font-size: 14px;
+}
+
+.planning-global-receipts-head span {
+  color: #64748b;
+
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.planning-global-receipts-list {
+  display: grid;
+
+  gap: 10px;
+}
+
+.planning-global-receipt-row {
+  display: grid;
+
+  grid-template-columns:
+    minmax(190px, 1.15fr)
+    minmax(135px, .72fr)
+    minmax(165px, .82fr)
+    minmax(145px, .72fr)
+    minmax(170px, .88fr)
+    auto;
+
+  gap: 10px;
+
+  align-items: end;
+
+  padding: 11px;
+
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+
+  background: #ffffff;
+}
+
+.planning-global-receipt-row > label {
+  display: grid;
+
+  gap: 6px;
+
+  color: #667085;
+
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.planning-global-receipt-row select,
+.planning-global-receipt-row input {
+  width: 100%;
+}
+
+.planning-global-receipt-availability {
+  display: grid;
+
+  gap: 3px;
+
+  min-height: 42px;
+
+  padding: 9px 10px;
+
+  border: 1px solid #dbeafe;
+  border-radius: 6px;
+
+  background: #f8fbff;
+}
+
+.planning-global-receipt-availability span {
+  color: #667085;
+
+  font-size: 9px;
+  font-weight: 900;
+
+  text-transform: uppercase;
+}
+
+.planning-global-receipt-availability strong {
+  color: #1e3a5f;
+
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.planning-global-receipt-availability small {
+  color: #64748b;
+
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.planning-global-receipt-remove {
+  width: 34px;
+  height: 34px;
+
+  border: 1px solid #fecaca;
+  border-radius: 999px;
+
+  background: #fff7f7;
+
+  color: #dc2626;
+
+  font-size: 18px;
+  font-weight: 900;
+
+  cursor: pointer;
+}
+
+.planning-global-receipt-remove:hover {
+  background: #fee2e2;
+}
+
+.planning-shortage-badge.is-ok {
+  border-color: #bbf7d0;
+
+  background: #ecfdf5;
+
+  color: #166534 !important;
+}
+
+.planning-shortage-quantity {
+  display: none;
+
+  gap: 8px;
+
+  padding: 12px;
+
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+
+  background: #f8fbff;
+}
+
+.planning-shortage-card:has(
+  .planning-shortage-actions
+  input[value="quantity"]:checked
+)
+.planning-shortage-quantity {
+  display: grid;
+}
+
+.planning-shortage-quantity > label {
+  display: grid;
+
+  gap: 6px;
+
+  color: #667085;
+
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.planning-shortage-quantity
+> label
+> div {
+  display: grid;
+
+  grid-template-columns:
+    minmax(120px, 190px)
+    auto;
+
+  align-items: center;
+
+  gap: 8px;
+}
+
+.planning-shortage-quantity
+> label
+span {
+  color: #334155;
+
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.planning-shortage-quantity small {
+  color: #64748b;
+
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.production-shortage-modal
+.planning-shortage-list {
+  max-height: 48vh;
+}
+
+@media (max-width: 1100px) {
+  .planning-global-receipt-row {
+    grid-template-columns:
+      repeat(
+        2,
+        minmax(0, 1fr)
+      );
+  }
+}
+
+@media (max-width: 680px) {
+  .planning-global-receipts-head {
+    align-items: stretch;
+
+    flex-direction: column;
+  }
+
+  .planning-global-receipt-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================
+   PREVER CHEGADA GLOBAL - MODAL DE FALTA DE SALDO
+   ========================================================= */
+
+.planning-global-receipts {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 16px 18px;
+  border: 1px solid #d9e2ec;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.planning-global-receipts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.planning-global-receipts-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.planning-global-receipts-head strong {
+  color: #172033;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.planning-global-receipts-head span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.planning-global-receipts-list {
+  display: grid;
+  gap: 12px;
+}
+
+.planning-global-receipt-row {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 1.35fr)
+    minmax(140px, .8fr)
+    minmax(170px, .85fr)
+    minmax(170px, .85fr)
+    minmax(160px, .8fr)
+    auto;
+  gap: 12px;
+  align-items: end;
+  padding: 12px 14px;
+  border: 1px solid #d9e2ec;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.planning-global-receipt-row > label {
+  display: grid;
+  gap: 6px;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.planning-global-receipt-row select,
+.planning-global-receipt-row input {
+  width: 100%;
+}
+
+.planning-global-receipt-availability {
+  display: grid;
+  gap: 3px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.planning-global-receipt-availability span {
+  color: #667085;
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.planning-global-receipt-availability strong {
+  color: #1e3a5f;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.planning-global-receipt-availability small {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.planning-global-receipt-remove {
+  width: 38px;
+  height: 38px;
+  align-self: center;
+  justify-self: center;
+  border: 1px solid #f3b4b4;
+  border-radius: 999px;
+  background: #fff5f5;
+  color: #dc2626;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.planning-global-receipt-remove:hover {
+  background: #fee2e2;
+}
+
+@media (max-width: 1180px) {
+  .planning-global-receipt-row {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+
+  .planning-global-receipt-remove {
+    justify-self: end;
+  }
+}
+
+@media (max-width: 720px) {
+  .planning-global-receipts {
+    padding: 14px;
+  }
+
+  .planning-global-receipts-head {
+    align-items: stretch;
+  }
+
+  .planning-global-receipts-head .secondary-button {
+    width: 100%;
+  }
+
+  .planning-global-receipt-row {
+    grid-template-columns: 1fr;
+  }
+
+  .planning-global-receipt-remove {
+    justify-self: end;
+  }
+}
+
+/* =========================================================
+   AJUSTE FINAL
+   MODAL "MATERIAIS SEM SALDO PARA PRODUZIR"
+   ========================================================= */
+
+/* Modal inteiro mais largo */
+.production-shortage-modal {
+  padding: 18px;
+}
+
+.production-shortage-modal .modal {
+  width: min(1380px, calc(100vw - 36px)) !important;
+  max-width: none !important;
+
+  max-height: calc(100vh - 36px);
+
+  overflow-x: hidden;
+  overflow-y: auto;
+
+  padding: 22px;
+}
+
+
+/* =========================================================
+   CONTEÚDO INTERNO
+   ========================================================= */
+
+.production-shortage-modal .planning-shortage-list {
+  width: 100%;
+  min-width: 0;
+
+  max-height: calc(100vh - 220px);
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  padding: 2px 8px 2px 2px;
+}
+
+
+/* Cada produção nunca força o modal para os lados */
+.production-shortage-modal .planning-shortage-card {
+  width: 100%;
+  min-width: 0;
+
+  padding: 18px;
+
+  border-radius: 10px;
+}
+
+
+/* =========================================================
+   PREVER CHEGADA
+   ========================================================= */
+
+.production-shortage-modal .planning-global-receipts {
+  width: 100%;
+  min-width: 0;
+
+  display: grid;
+  gap: 14px;
+
+  margin-bottom: 20px;
+  padding: 16px 18px;
+
+  border: 1px solid #d9e2ec;
+  border-radius: 10px;
+
+  background: #ffffff;
+
+  overflow: hidden;
+}
+
+
+/* Cabeçalho: texto à esquerda / botão à direita */
+.production-shortage-modal .planning-global-receipts-head {
+  width: 100%;
+  min-width: 0;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 18px;
+
+  flex-wrap: nowrap;
+}
+
+
+.production-shortage-modal
+.planning-global-receipts-head > div {
+  min-width: 0;
+
+  display: grid;
+  gap: 3px;
+}
+
+
+.production-shortage-modal
+.planning-global-receipts-head strong {
+  font-size: 15px;
+  font-weight: 900;
+}
+
+
+.production-shortage-modal
+.planning-global-receipts-head span {
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+
+/* Botão + Adicionar chegada */
+.production-shortage-modal
+.planning-global-receipts-head .secondary-button {
+  flex: 0 0 auto;
+
+  width: auto;
+  min-width: max-content;
+  max-width: 100%;
+
+  min-height: 42px;
+
+  padding: 0 18px;
+
+  white-space: nowrap;
+}
+
+
+/* =========================================================
+   LINHA DA CHEGADA
+   ========================================================= */
+
+.production-shortage-modal .planning-global-receipts-list {
+  width: 100%;
+  min-width: 0;
+
+  display: grid;
+  gap: 12px;
+}
+
+
+.production-shortage-modal .planning-global-receipt-row {
+  width: 100%;
+  min-width: 0;
+
+  display: grid;
+
+  /*
+     Insumo
+     Quantidade
+     Data
+     Local
+     Disponível
+     Excluir
+  */
+  grid-template-columns:
+    minmax(0, 1.45fr)
+    minmax(0, 0.85fr)
+    minmax(0, 1fr)
+    minmax(0, 1fr)
+    minmax(0, 0.95fr)
+    42px;
+
+  gap: 12px;
+
+  align-items: end;
+
+  padding: 12px 14px;
+
+  border: 1px solid #e1e7ee;
+  border-radius: 9px;
+
+  background: #ffffff;
+}
+
+
+/* MUITO IMPORTANTE:
+   impede inputs/selects de aumentarem a largura do grid */
+.production-shortage-modal
+.planning-global-receipt-row > * {
+  min-width: 0;
+}
+
+
+.production-shortage-modal
+.planning-global-receipt-row > label {
+  min-width: 0;
+
+  display: grid;
+  gap: 6px;
+}
+
+
+.production-shortage-modal
+.planning-global-receipt-row select,
+.production-shortage-modal
+.planning-global-receipt-row input {
+  width: 100%;
+  min-width: 0;
+
+  height: 42px;
+}
+
+
+/* Disponível para produção */
+.production-shortage-modal
+.planning-global-receipt-availability {
+  min-width: 0;
+  min-height: 42px;
+
+  display: grid;
+  align-content: center;
+
+  gap: 2px;
+
+  padding: 7px 10px;
+
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+
+  background: #f8fbff;
+}
+
+
+/* Botão vermelho X */
+.production-shortage-modal
+.planning-global-receipt-remove {
+  width: 38px;
+  min-width: 38px;
+
+  height: 38px;
+
+  align-self: center;
+  justify-self: center;
+
+  padding: 0;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 999px;
+}
+
+
+/* =========================================================
+   OPÇÕES DE CADA PRODUÇÃO
+   ========================================================= */
+
+.production-shortage-modal .planning-shortage-actions {
+  width: 100%;
+  min-width: 0;
+
+  display: grid;
+
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+
+  gap: 10px;
+}
+
+
+.production-shortage-modal
+.planning-shortage-actions label {
+  min-width: 0;
+
+  min-height: 72px;
+
+  padding: 12px;
+
+  justify-content: flex-start;
+}
+
+
+/* texto dos botões pode quebrar normalmente */
+.production-shortage-modal
+.planning-shortage-actions label span {
+  min-width: 0;
+
+  line-height: 1.15;
+
+  white-space: normal;
+}
+
+
+/* =========================================================
+   QUADRO DO FIO MÁQUINA
+   ========================================================= */
+
+.production-shortage-modal
+.planning-shortage-model-preview {
+  width: 100%;
+  min-width: 0;
+
+  grid-template-columns:
+    repeat(auto-fit, minmax(240px, 1fr));
+}
+
+
+.production-shortage-modal
+.planning-shortage-model-preview article {
+  min-width: 0;
+}
+
+
+/* =========================================================
+   RODAPÉ
+   ========================================================= */
+
+.production-shortage-modal .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+
+  gap: 10px;
+
+  margin-top: 20px;
+  padding-top: 16px;
+
+  border-top: 1px solid #e2e8f0;
+
+  background: #ffffff;
+}
+
+
+/* =========================================================
+   RESPONSIVO
+   ========================================================= */
+
+@media (max-width: 1180px) {
+
+  .production-shortage-modal .modal {
+    width: calc(100vw - 24px) !important;
+  }
+
+  .production-shortage-modal .planning-global-receipt-row {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+
+  .production-shortage-modal
+  .planning-global-receipt-remove {
+    justify-self: end;
+  }
+}
+
+
+@media (max-width: 820px) {
+
+  .production-shortage-modal
+  .planning-global-receipts-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .production-shortage-modal
+  .planning-global-receipts-head .secondary-button {
+    width: 100%;
+  }
+
+  .production-shortage-modal
+  .planning-shortage-actions {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}
+
+
+@media (max-width: 620px) {
+
+  .production-shortage-modal {
+    padding: 8px;
+  }
+
+  .production-shortage-modal .modal {
+    width: calc(100vw - 16px) !important;
+
+    padding: 16px;
+  }
+
+  .production-shortage-modal
+  .planning-global-receipt-row {
+    grid-template-columns: 1fr;
+  }
+
+  .production-shortage-modal
+  .planning-shortage-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================
+   PCP - FAIXAS 0 / 15 / 20 / META IDEAL
+   ========================================================= */
+
+.pcp-summary-card.zeroed {
+  border-left-color: #111827;
+  background: #f3f4f6;
+}
+
+.pcp-status-pill.zeroed {
+  color: #ffffff;
+  background: #111827;
+}
+
+.pcp-status-pill.ok {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.pcp-status-pill.unknown {
+  color: #475569;
+  background: #e2e8f0;
+}
+
+.pcp-row-zeroed td:first-child {
+  border-left:
+    5px solid #111827;
+}
+
+.pcp-row-ok td:first-child {
+  border-left:
+    5px solid #16a34a;
+}
+
+
+/* Cards da ordem recomendada */
+
+.pcp-recommendation-card.pcp-row-zeroed {
+  border-left-color: #111827;
+}
+
+.pcp-recommendation-card.pcp-row-critical {
+  border-left-color: #dc2626;
+}
+
+.pcp-recommendation-card.pcp-row-attention {
+  border-left-color: #f59e0b;
+}
+
+.pcp-recommendation-card.pcp-row-below-target {
+  border-left-color: #7c3aed;
+}
+
+.pcp-recommendation-card.pcp-row-ok {
+  border-left-color: #16a34a;
+}
+
+
+/* Calendário da Análise */
+
+.analysis-stock-alert.zeroed {
+  background: #111827;
+  color: #ffffff;
+}
+
+.analysis-stock-alert.critical {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.analysis-stock-alert.attention {
+  background: #f59e0b;
+  color: #111827;
+}
+
+.analysis-stock-alert.below-target {
+  background: #7c3aed;
+  color: #ffffff;
+}
+
+.analysis-stock-alert.ok {
+  background: #16a34a;
+  color: #ffffff;
+}
+
+
+/* Modal Estoque projetado */
+
+.planning-stock-summary-card.zeroed {
+  border-left:
+    4px solid #111827;
+
+  background: #f3f4f6;
+}
+
+.planning-stock-summary-card.critical {
+  border-left:
+    4px solid #dc2626;
+
+  background: #fff7f7;
+}
+
+.planning-stock-summary-card.attention {
+  border-left:
+    4px solid #f59e0b;
+
+  background: #fffbeb;
+}
+
+.planning-stock-summary-card.below-target {
+  border-left:
+    4px solid #7c3aed;
+
+  background: #f5f3ff;
+}
+
+.planning-stock-summary-card.ok {
+  border-left:
+    4px solid #16a34a;
+
+  background: #f0fdf4;
+}
+
+/* =========================================================
+   COMPRAS - AJUSTE LOTES / OBSERVAÇÃO
+   ========================================================= */
+
+/*
+ * Impede a tabela de espremer demais
+ * as colunas quando existem muitos campos.
+ */
+.purchase-launch-table-wrap table {
+  min-width: 1450px;
+}
+
+
+/* LOTES / UDs */
+.purchase-launch-table-wrap th:nth-child(9),
+.purchase-launch-table-wrap td:nth-child(9) {
+  width: 180px;
+  min-width: 180px;
+  max-width: 180px;
+
+  vertical-align: top;
+}
+
+
+/* OBSERVAÇÃO */
+.purchase-launch-table-wrap th:nth-child(10),
+.purchase-launch-table-wrap td:nth-child(10) {
+  width: 240px;
+  min-width: 240px;
+  max-width: 240px;
+
+  white-space: normal !important;
+
+  overflow-wrap: break-word;
+  word-break: normal;
+
+  line-height: 1.35;
+
+  vertical-align: top;
+}
+
+
+/* EDITAR */
+.purchase-launch-table-wrap th:nth-child(11),
+.purchase-launch-table-wrap td:nth-child(11) {
+  width: 80px;
+  min-width: 80px;
+
+  white-space: nowrap;
+
+  vertical-align: top;
+}
+
+
+/*
+ * Dentro da coluna de lotes,
+ * não deixa "Ver lotes" escapar para a observação.
+ */
+.purchase-lots-cell {
+  width: 100%;
+  min-width: 0;
+
+  display: grid;
+
+  gap: 7px;
+}
+
+
+.purchase-lots-cell-head {
+  width: 100%;
+
+  display: flex;
+
+  align-items: center;
+
+  justify-content: space-between;
+
+  gap: 8px;
+}
+
+
+.purchase-lots-cell-head strong {
+  min-width: 0;
+
+  white-space: nowrap;
+}
+
+
+.purchase-lots-view-button {
+  flex: 0 0 auto;
+
+  white-space: nowrap;
+}
+
+
+/*
+ * Prévia dos lotes fica somente
+ * dentro da coluna dela.
+ */
+.purchase-lots-preview {
+  width: 100%;
+
+  display: flex;
+
+  align-items: center;
+
+  flex-wrap: wrap;
+
+  gap: 5px;
+
+  overflow: hidden;
+}
+
+
+.purchase-lots-preview > span {
+  max-width: 72px;
+
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+}
+
+/* =========================================================
+   ESTOQUE - SALDO ATUAL + SALDO CONSIDERANDO PLANEJAMENTO
+   ========================================================= */
+
+.stock-balance-split {
+  display: grid;
+
+  grid-template-columns:
+    minmax(42px, 1fr)
+    1px
+    minmax(42px, 1fr);
+
+  align-items: center;
+
+  gap: 8px;
+
+  width: 100%;
+  min-width: 96px;
+
+  font-variant-numeric: tabular-nums;
+}
+
+
+.stock-balance-current {
+  text-align: right;
+
+  color: var(--petroleum-dark);
+
+  font-weight: 900;
+}
+
+
+.stock-balance-divider {
+  width: 1px;
+  height: 22px;
+
+  background:
+    rgba(100, 116, 139, .28);
+}
+
+
+.stock-balance-projected {
+  text-align: left;
+
+  color: #94a3b8;
+
+  font-size: 12px;
+
+  font-weight: 700;
+}
+
+/* =========================================================
+   CADASTRO - ESTOQUE MÍNIMO / MÁXIMO
+   ========================================================= */
+
+.registration-stock-limit-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.registration-stock-limit-field > span {
+  min-width: 42px;
+  padding: 10px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fbfc;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+
+/* =========================================================
+   PLANEJAMENTO - MODAL DE LIMITES
+   ========================================================= */
+
+.planning-stock-limit-dialog {
+  width: min(
+    1040px,
+    calc(100vw - 32px)
+  );
+
+  max-height:
+    calc(100vh - 32px);
+
+  display: grid;
+
+  grid-template-rows:
+    auto
+    minmax(0, 1fr);
+
+  gap: 14px;
+
+  overflow: hidden;
+}
+
+
+.planning-stock-limit-form {
+  min-height: 0;
+
+  display: grid;
+
+  gap: 16px;
+
+  overflow-y: auto;
+
+  padding-right: 4px;
+}
+
+
+.planning-stock-limit-violations {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      2,
+      minmax(0, 1fr)
+    );
+
+  gap: 12px;
+}
+
+
+.planning-stock-limit-violation {
+  display: grid;
+
+  gap: 12px;
+
+  padding: 14px;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-left:
+    4px solid
+    #f59e0b;
+
+  border-radius:
+    10px;
+
+  background:
+    #fffdf7;
+}
+
+
+.planning-stock-limit-violation.maximum {
+  border-left-color:
+    #7c3aed;
+
+  background:
+    #faf7ff;
+}
+
+
+.planning-stock-limit-violation-head {
+  display: flex;
+
+  align-items:
+    flex-start;
+
+  justify-content:
+    space-between;
+
+  gap: 12px;
+}
+
+
+.planning-stock-limit-violation-head
+> div {
+  display: grid;
+
+  gap: 4px;
+}
+
+
+.planning-stock-limit-violation-head span {
+  color:
+    #64748b;
+
+  font-size:
+    9px;
+
+  font-weight:
+    900;
+
+  letter-spacing:
+    .06em;
+}
+
+
+.planning-stock-limit-violation-head strong {
+  color:
+    var(--petroleum-dark);
+
+  font-size:
+    15px;
+}
+
+
+.planning-stock-limit-violation-head b {
+  padding:
+    4px 8px;
+
+  border-radius:
+    999px;
+
+  background:
+    #fff3cd;
+
+  color:
+    #92400e;
+
+  font-size:
+    9px;
+
+  white-space:
+    nowrap;
+}
+
+
+.planning-stock-limit-violation.maximum
+.planning-stock-limit-violation-head b {
+  background:
+    #f1e8ff;
+
+  color:
+    #6d28d9;
+}
+
+
+.planning-stock-limit-values {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      4,
+      minmax(0, 1fr)
+    );
+
+  gap: 8px;
+}
+
+
+.planning-stock-limit-values > div {
+  display: grid;
+
+  gap: 3px;
+
+  padding:
+    9px 10px;
+
+  border:
+    1px solid
+    #e2e8f0;
+
+  border-radius:
+    8px;
+
+  background:
+    rgba(
+      255,
+      255,
+      255,
+      .86
+    );
+}
+
+
+.planning-stock-limit-values span {
+  color:
+    #64748b;
+
+  font-size:
+    8px;
+
+  font-weight:
+    900;
+
+  text-transform:
+    uppercase;
+}
+
+
+.planning-stock-limit-values strong {
+  color:
+    #172033;
+
+  font-size:
+    12px;
+}
+
+
+.planning-stock-limit-violation p {
+  margin: 0;
+
+  color:
+    #64748b;
+
+  font-size:
+    11px;
+
+  line-height:
+    1.45;
+}
+
+
+.planning-stock-limit-suggestions {
+  display: grid;
+
+  gap: 12px;
+
+  padding: 14px;
+
+  border:
+    1px solid
+    #bfdbfe;
+
+  border-radius:
+    10px;
+
+  background:
+    #f8fbff;
+}
+
+
+.planning-stock-limit-suggestions h3 {
+  margin: 0;
+
+  color:
+    var(--petroleum-dark);
+
+  font-size:
+    15px;
+}
+
+
+.planning-stock-limit-suggestions p {
+  margin:
+    4px 0 0;
+
+  color:
+    #64748b;
+
+  font-size:
+    11px;
+}
+
+
+.planning-stock-limit-production-list {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      2,
+      minmax(0, 1fr)
+    );
+
+  gap: 10px;
+}
+
+
+.planning-stock-limit-production-row {
+  display: grid;
+
+  grid-template-columns:
+    minmax(0, 1fr)
+    minmax(190px, .7fr);
+
+  gap: 12px;
+
+  align-items:
+    center;
+
+  padding: 11px;
+
+  border:
+    1px solid
+    #dbe7f5;
+
+  border-radius:
+    9px;
+
+  background:
+    #ffffff;
+}
+
+
+.planning-stock-limit-production-row
+> span {
+  display: grid;
+
+  gap: 3px;
+}
+
+
+.planning-stock-limit-production-row strong {
+  color:
+    var(--petroleum-dark);
+
+  font-size:
+    12px;
+}
+
+
+.planning-stock-limit-production-row small {
+  color:
+    #64748b;
+
+  font-size:
+    9px;
+}
+
+
+.planning-stock-limit-production-row
+> div {
+  display: grid;
+
+  grid-template-columns:
+    minmax(0, 1fr)
+    auto;
+
+  gap: 7px;
+
+  align-items:
+    center;
+}
+
+
+.planning-stock-limit-production-row
+> div
+> span {
+  min-width:
+    38px;
+
+  padding:
+    9px 7px;
+
+  border:
+    1px solid
+    var(--line);
+
+  border-radius:
+    6px;
+
+  background:
+    #f8fafc;
+
+  color:
+    #64748b;
+
+  font-size:
+    10px;
+
+  font-weight:
+    800;
+
+  text-align:
+    center;
+}
+
+
+.planning-stock-limit-override {
+  border-color:
+    #f59e0b;
+
+  color:
+    #92400e;
+}
+
+
+@media (
+  max-width: 860px
+) {
+
+  .planning-stock-limit-violations,
+  .planning-stock-limit-production-list,
+  .planning-stock-limit-values {
+    grid-template-columns:
+      1fr;
+  }
+
+
+  .planning-stock-limit-production-row {
+    grid-template-columns:
+      1fr;
+  }
+
+}
+
+/* =========================================================
+   CADASTRO DE MATERIAL
+   MODAL GRANDE / HORIZONTAL
+   ========================================================= */
+
+.material-registration-modal {
+  width: min(1480px, 96vw) !important;
+  max-width: none !important;
+
+  height: auto;
+  max-height: calc(100vh - 32px);
+
+  padding: 22px 26px;
+
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+
+/* =========================================================
+   FORMULÁRIO PRINCIPAL
+   ========================================================= */
+
+.material-registration-modal .material-form {
+  width: 100%;
+
+  display: grid;
+
+  grid-template-columns:
+    minmax(240px, 1.35fr)
+    minmax(170px, 0.8fr)
+    minmax(170px, 0.8fr)
+    minmax(170px, 0.8fr);
+
+  gap: 16px;
+
+  align-items: end;
+}
+
+
+/*
+ * Qualquer bloco wide ocupa
+ * toda a largura do formulário.
+ */
+.material-registration-modal
+.material-form > .wide-field:not(.checkbox-line) {
+  grid-column: 1 / -1;
+}
+
+
+/* =========================================================
+   ESTOQUE MÍNIMO / MÁXIMO
+   ========================================================= */
+
+.material-registration-modal
+.material-stock-limits {
+  grid-column: 1 / -1;
+
+  display: grid;
+
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+
+  gap: 16px;
+
+  width: 100%;
+
+  margin-top: 2px;
+}
+
+
+.material-registration-modal
+.material-stock-limit-card {
+  min-width: 0;
+
+  display: grid;
+
+  gap: 12px;
+
+  padding: 14px 16px;
+
+  border: 1px solid #d7dee7;
+
+  border-radius: 8px;
+
+  background: #f8fafc;
+}
+
+
+.material-registration-modal
+.material-stock-limit-heading {
+  display: flex;
+
+  align-items: center;
+
+  gap: 10px;
+
+  min-height: 28px;
+
+  padding-bottom: 9px;
+
+  border-bottom: 1px solid #e5e9ef;
+}
+
+
+.material-registration-modal
+.material-stock-limit-heading strong {
+  color: var(--petroleum-dark);
+
+  font-size: 14px;
+
+  font-weight: 800;
+
+  white-space: nowrap;
+}
+
+
+.material-registration-modal
+.material-stock-limit-heading span {
+  color: var(--muted);
+
+  font-size: 11px;
+
+  font-weight: 600;
+}
+
+
+/*
+ * Quantidade   ↔   Peso
+ */
+.material-registration-modal
+.material-stock-limit-values {
+  display: grid;
+
+  grid-template-columns:
+    minmax(160px, 1fr)
+    38px
+    minmax(160px, 1fr);
+
+  gap: 12px;
+
+  align-items: end;
+}
+
+
+.material-registration-modal
+.material-stock-limit-control {
+  min-width: 0;
+
+  display: grid;
+
+  gap: 6px;
+}
+
+
+.material-registration-modal
+.material-stock-limit-control > span {
+  color: var(--muted);
+
+  font-size: 10px;
+
+  font-weight: 800;
+
+  text-transform: uppercase;
+}
+
+
+.material-registration-modal
+.material-stock-limit-input {
+  min-width: 0;
+
+  display: grid;
+
+  grid-template-columns:
+    minmax(0, 1fr)
+    48px;
+
+  gap: 6px;
+
+  align-items: center;
+}
+
+
+.material-registration-modal
+.material-stock-limit-input input {
+  width: 100%;
+
+  min-width: 0;
+
+  height: 40px;
+}
+
+
+.material-registration-modal
+.material-stock-limit-unit {
+  width: 48px;
+
+  height: 40px;
+
+  display: flex;
+
+  align-items: center;
+
+  justify-content: center;
+
+  border: 1px solid var(--line);
+
+  border-radius: 6px;
+
+  background: #ffffff;
+
+  color: var(--muted);
+
+  font-size: 11px;
+
+  font-weight: 800;
+}
+
+
+.material-registration-modal
+.material-stock-limit-conversion {
+  width: 38px;
+
+  height: 40px;
+
+  display: flex;
+
+  align-items: center;
+
+  justify-content: center;
+
+  color: #98a2b3;
+
+  font-size: 19px;
+
+  font-weight: 900;
+}
+
+
+.material-registration-modal
+.material-stock-limit-input input:disabled {
+  background: #f1f5f9;
+
+  color: #98a2b3;
+
+  cursor: not-allowed;
+}
+
+
+/* =========================================================
+   CHECKBOXES
+   ========================================================= */
+
+/*
+ * Os dois ficam na mesma linha.
+ */
+.material-registration-modal
+.checkbox-line.wide-field {
+  grid-column: span 2;
+
+  min-height: 42px;
+
+  margin: 0;
+}
+
+
+/* =========================================================
+   CÓDIGOS ATRELADOS
+   ========================================================= */
+
+.material-registration-modal
+.material-form > label.wide-field {
+  grid-column: 1 / -1;
+}
+
+
+/* =========================================================
+   MODELOS DE PRODUÇÃO
+   ========================================================= */
+
+.material-registration-modal
+.consumed-selector-block {
+  grid-column: 1 / -1;
+
+  width: 100%;
+}
+
+
+.material-registration-modal
+.production-models-target {
+  width: 100%;
+}
+
+
+.material-registration-modal
+.production-model-card {
+  width: 100%;
+
+  padding: 14px;
+}
+
+
+.material-registration-modal
+.production-model-card-header {
+  grid-template-columns:
+    minmax(0, 1fr)
+    auto;
+}
+
+
+.material-registration-modal
+.material-selector-list {
+  grid-template-columns:
+    repeat(4, minmax(180px, 1fr));
+
+  gap: 8px 14px;
+
+  max-height: 170px;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+
+/*
+ * Materiais consumidos:
+ * aproveita melhor a largura nova.
+ */
+.material-registration-modal
+.consumed-material-header,
+.material-registration-modal
+.consumed-material-row {
+  grid-template-columns:
+    minmax(0, 1fr)
+    minmax(180px, 260px);
+}
+
+
+/* =========================================================
+   BOTÕES INFERIORES
+   ========================================================= */
+
+.material-registration-modal
+.form-actions {
+  grid-column: 1 / -1;
+
+  display: flex;
+
+  align-items: center;
+
+  gap: 10px;
+
+  padding-top: 4px;
+}
+
+
+/* =========================================================
+   TELAS INTERMEDIÁRIAS
+   ========================================================= */
+
+@media (max-width: 1150px) {
+
+  .material-registration-modal {
+    width: calc(100vw - 24px) !important;
+  }
+
+
+  .material-registration-modal
+  .material-form {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+
+
+  .material-registration-modal
+  .material-stock-limits {
+    grid-template-columns: 1fr;
+  }
+
+
+  .material-registration-modal
+  .checkbox-line.wide-field {
+    grid-column: span 1;
+  }
+
+
+  .material-registration-modal
+  .material-selector-list {
+    grid-template-columns:
+      repeat(3, minmax(160px, 1fr));
+  }
+
+}
+
+
+/* =========================================================
+   TELAS PEQUENAS
+   ========================================================= */
+
+@media (max-width: 760px) {
+
+  .material-registration-modal {
+    width: calc(100vw - 16px) !important;
+
+    padding: 18px;
+  }
+
+
+  .material-registration-modal
+  .material-form {
+    grid-template-columns: 1fr;
+  }
+
+
+  .material-registration-modal
+  .checkbox-line.wide-field {
+    grid-column: 1 / -1;
+  }
+
+
+  .material-registration-modal
+  .material-stock-limit-values {
+    grid-template-columns: 1fr;
+  }
+
+
+  .material-registration-modal
+  .material-stock-limit-conversion {
+    width: 100%;
+
+    height: 22px;
+  }
+
+
+  .material-registration-modal
+  .material-selector-list {
+    grid-template-columns:
+      repeat(2, minmax(140px, 1fr));
+  }
+
+}

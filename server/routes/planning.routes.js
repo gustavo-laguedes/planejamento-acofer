@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { requireDb } from '../db.js';
 import { buildPlan, buildStoredAutomaticPlanningSnapshot, rescheduleSavedPlan } from '../../services/planning.service.js';
+import {
+  loadCurrentStockContext
+} from './stock.routes.js';
 import { createPlanningPdf } from '../../services/pdf.service.js';
 import { requirePermission } from './middleware.js';
 import { recordAuditLog } from '../audit.js';
@@ -152,8 +155,30 @@ function validateManualScheduleForSave(draft, plan, context, payload = {}) {
       const minimumQuantity = Number(material.minimum_quantity ?? material.minimumQuantity);
       return Number.isFinite(minimumQuantity) ? [{ materialId: String(material.id), minimumQuantity }] : [];
     }),
-    stockLocations: [
-      { locationId: '__default__' },
+       stockLocations: [
+      {
+        locationId:
+          '__default__'
+      },
+
+      ...(
+        context.locations
+        || []
+      )
+        .map(location => ({
+          locationId:
+            String(
+              location?.id
+              ?? location?.locationId
+              ?? location?.location_id
+              ?? ''
+            )
+        }))
+        .filter(
+          item =>
+            item.locationId
+        ),
+
       ...(context.inventoryRows || []).map(row => ({
         materialId: String(row.material_id),
         locationId: String(row.location_id),
@@ -215,41 +240,259 @@ function validateManualScheduleForSave(draft, plan, context, payload = {}) {
   return transaction;
 }
 
-function currentValidationStock(context = {}) {
-  return (context.materials || []).map(material => {
-    const codes = new Set((material.codes || []).map(code => String(code).trim().toLowerCase()));
-    const snapshotQuantity = (context.stockRows || []).reduce((sum, row) => {
-      const productCode = String(row.product_code || '').trim().toLowerCase();
-      const oldProductCode = String(row.old_product_code || '').trim().toLowerCase();
-      return codes.has(productCode) || codes.has(oldProductCode)
-        ? sum + Number(row.fiscal_balance_unit || 0) + Number(row.error_balance_unit || 0)
-        : sum;
-    }, 0);
-    const correctionQuantity = (context.correctionRows || [])
-      .filter(row => String(row.material_id) === String(material.id))
-      .reduce((sum, row) => sum + Number(row.correction_qty || 0), 0);
-    return { materialId: String(material.id), quantity: snapshotQuantity + correctionQuantity, unit: material.primary_unit || '' };
-  });
+function currentValidationStock(
+  context = {}
+) {
+
+  const currentRows =
+    (context.stockRows || [])
+      .filter(
+        row =>
+          row &&
+          (
+            'currentQty' in row
+            ||
+            'current_qty' in row
+          )
+      );
+
+    if (currentRows.length) {
+    const materialsById =
+      new Map(
+        (context.materials || [])
+          .map(material => [
+            String(material.id),
+            material
+          ])
+      );
+
+    const byMaterialLocation =
+      new Map();
+
+    for (const row of currentRows) {
+      const materialId =
+        String(
+          row.materialId ??
+          row.material_id ??
+          ''
+        ).trim();
+
+      const locationId =
+        String(
+          row.locationId ??
+          row.location_id ??
+          '__default__'
+        ).trim()
+        || '__default__';
+
+      if (!materialId) {
+        continue;
+      }
+
+      const rawQuantity =
+        Number(
+          row.currentQty ??
+          row.current_qty ??
+          0
+        );
+
+      const quantity =
+        Number.isFinite(rawQuantity)
+          ? Math.max(rawQuantity, 0)
+          : 0;
+
+      const key =
+        `${materialId}\u0000${locationId}`;
+
+      const current =
+        byMaterialLocation.get(key)
+        || {
+          materialId,
+          locationId,
+          quantity: 0,
+          unit:
+            materialsById
+              .get(materialId)
+              ?.primary_unit
+            || row.unit
+            || ''
+        };
+
+      current.quantity += quantity;
+
+      byMaterialLocation.set(
+        key,
+        current
+      );
+    }
+
+    return [
+      ...byMaterialLocation.values()
+    ];
+  }
+
+  /*
+   * Fallback antigo.
+   */
+  return (
+    context.materials || []
+  ).map(
+    material => {
+
+      const codes =
+        new Set(
+          (material.codes || [])
+            .map(
+              code =>
+                String(code)
+                  .trim()
+                  .toLowerCase()
+            )
+        );
+
+      const snapshotQuantity =
+        (context.stockRows || [])
+          .reduce(
+            (sum, row) => {
+
+              const productCode =
+                String(
+                  row.product_code
+                  || ''
+                )
+                  .trim()
+                  .toLowerCase();
+
+              const oldProductCode =
+                String(
+                  row.old_product_code
+                  || ''
+                )
+                  .trim()
+                  .toLowerCase();
+
+              return (
+                codes.has(productCode)
+                ||
+                codes.has(
+                  oldProductCode
+                )
+              )
+                ? sum
+                  +
+                  Number(
+                    row.fiscal_balance_unit
+                    || 0
+                  )
+                  +
+                  Number(
+                    row.error_balance_unit
+                    || 0
+                  )
+                : sum;
+            },
+            0
+          );
+
+      const correctionQuantity =
+        (context.correctionRows || [])
+          .filter(
+            row =>
+              String(
+                row.material_id
+              )
+              ===
+              String(material.id)
+          )
+          .reduce(
+            (sum, row) =>
+              sum +
+              Number(
+                row.correction_qty
+                || 0
+              ),
+            0
+          );
+
+      return {
+        materialId:
+          String(material.id),
+
+                quantity:
+          Math.max(
+            snapshotQuantity
+            +
+            correctionQuantity,
+            0
+          ),
+
+        unit:
+          material.primary_unit
+          || ''
+      };
+    }
+  );
 }
 
-function planningStockProjectionContext(context = {}) {
-  const stock = buildPlanningOpeningStock({
-    materials: context.materials || [],
-    locations: context.locations || [],
-    stockRows: context.stockRows || [],
-    correctionRows: context.correctionRows || []
-  });
+
+function planningStockProjectionContext(
+  context = {}
+) {
+
+  const stock =
+    buildPlanningOpeningStock({
+      materials:
+        context.materials || [],
+
+      locations:
+        context.locations || [],
+
+      stockRows:
+        context.stockRows || [],
+
+      correctionRows:
+        context.correctionRows || []
+    });
+
+
+  const projectedStock =
+    context.planningMode
+      === 'theoretical'
+      ? stock.map(
+          item => ({
+            ...item,
+            quantity: 0
+          })
+        )
+      : stock;
+
+
   return {
     stockContext: {
-      source: 'stock.materials-overview.totalLocationsQty',
-      stock,
-      materials: stock
+      source:
+        context.planningMode
+        === 'theoretical'
+          ? 'planning.theoretical.zero-stock'
+          : 'stock.current.totalLocationsQty',
+
+      stock:
+        projectedStock,
+
+      materials:
+        projectedStock
     },
-    demandContext: buildPlanningDemandContext({
-      materials: context.materials || [],
-      stockRows: context.stockRows || [],
-      businessDays: context.businessDays
-    })
+
+    demandContext:
+      buildPlanningDemandContext({
+        materials:
+          context.materials || [],
+
+        stockRows:
+          context.stockRows || [],
+
+        businessDays:
+          context.businessDays
+      })
   };
 }
 
@@ -568,78 +811,521 @@ function operationPeriod(operationsValue, fallbackStartDate = null, fallbackEndD
   };
 }
 
-async function planningContext(db, payload = {}) {
-  const materialId = Number(payload.materialId);
-  const materialCode = String(payload.materialCode || '').trim();
-  const scheduleStartDate = normalizeDateOnly(payload.planningStartDate, payload.selectedDate, payload.startDate);
-  const scheduleEndDate = normalizeDateOnly(payload.planningEndDate, payload.endDate, scheduleStartDate ? addDateDays(scheduleStartDate, 120) : null);
-  const [materials, inputs, stockRows, inventoryRows, correctionRows, productionRows, matrixRows, locations, machineRows, existingPlans, importRows] = await Promise.all([
-    db`SELECT * FROM materials WHERE active = true ORDER BY name`,
-    db`SELECT * FROM material_inputs`,
-    db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit, sales_unit FROM stock_snapshot`,
-    db`
-      SELECT DISTINCT ON (material_id, location_id)
-             material_id, location_id, adjustment_qty, updated_at
-      FROM stock_location_adjustments
-      ORDER BY material_id, location_id, updated_at DESC, id DESC
-    `,
-    db`
-      SELECT DISTINCT ON (material_id)
-             material_id, correction_qty, updated_at
-      FROM stock_material_corrections
-      ORDER BY material_id, updated_at DESC, id DESC
-    `,
-    db`SELECT material_id, quantity FROM production_launches WHERE material_id IS NOT NULL`,
-    db`SELECT * FROM productivity_matrix WHERE active = true ORDER BY updated_at DESC`,
-    db`SELECT * FROM locations WHERE active = true ORDER BY name`,
-    db`SELECT * FROM machines WHERE active = true ORDER BY name`,
-    scheduleStartDate && scheduleEndDate
-      ? db`
-          SELECT id, code, operations
-          FROM production_plans
-          WHERE status <> 'canceled'
-            AND start_date <= ${scheduleEndDate}
-            AND end_date >= ${scheduleStartDate}
-            AND (${payload.planId || null}::bigint IS NULL OR id <> ${payload.planId || null})
-        `
-      : Promise.resolve([]),
-    db`
-      SELECT business_days
-      FROM import_history
-      WHERE status = 'success'
-      ORDER BY created_at DESC
-      LIMIT 1
-    `
-  ]);
-  const materialsById = new Map(materials.map(material => [String(material.id), material]));
-  const locationsById = new Map(locations.map(location => [String(location.id), location]));
-  const inputsByMaterialId = new Map();
-  for (const input of inputs) {
-    const key = String(input.material_id);
-    if (!inputsByMaterialId.has(key)) inputsByMaterialId.set(key, []);
-    inputsByMaterialId.get(key).push(input);
+function normalizePlanningMode(
+  value
+) {
+  return (
+    String(value || '')
+      .trim()
+      .toLowerCase()
+    ===
+    'theoretical'
+  )
+    ? 'theoretical'
+    : 'real';
+}
+
+
+function planningBusinessDaysFromCurrentStock(
+  currentStock = {}
+) {
+
+  const starts = [];
+  const ends = [];
+
+  for (
+    const row
+    of currentStock.rows || []
+  ) {
+
+    for (
+      const detail
+      of row.details || []
+    ) {
+
+      if (
+        detail.type !== 'sales'
+      ) {
+        continue;
+      }
+
+      const start =
+        normalizeDateOnly(
+          detail.periodStart
+        );
+
+      const end =
+        normalizeDateOnly(
+          detail.periodEnd
+        );
+
+      if (start) {
+        starts.push(start);
+      }
+
+      if (end) {
+        ends.push(end);
+      }
+    }
   }
-  const material = materialId
-    ? materialsById.get(String(materialId))
-    : materials.find(item =>
-        item.name === payload.materialName
-        || (Array.isArray(item.codes) && item.codes.some(code => String(code) === materialCode))
-      );
-  const existingOperations = existingPlans.flatMap(plan =>
-    normalizeJsonArray(plan.operations).map((operation, index) => ({
-      ...operation,
-      operationId: `plan:${plan.id}:${operation.operationId || operation.materialId || index}`,
-      planningCode: plan.code || plan.id
-    }))
+
+
+  const lastStart =
+    normalizeDateOnly(
+      currentStock
+        .lastImport
+        ?.period_start
+    );
+
+  const lastEnd =
+    normalizeDateOnly(
+      currentStock
+        .lastImport
+        ?.period_end
+    );
+
+  if (lastStart) {
+    starts.push(lastStart);
+  }
+
+  if (lastEnd) {
+    ends.push(lastEnd);
+  }
+
+
+  if (
+    !starts.length
+    ||
+    !ends.length
+  ) {
+    return Number(
+      currentStock
+        .lastImport
+        ?.business_days
+      || 0
+    );
+  }
+
+
+  const start =
+    starts.sort()[0];
+
+  const end =
+    ends
+      .sort()
+      .at(-1);
+
+
+  return businessDaysBetween(
+    addDateDays(
+      start,
+      -1
+    ),
+    end
   );
-  return { material, materials, materialsById, inputsByMaterialId, locations, locationsById, machineRows, stockRows, inventoryRows, correctionRows, productionRows, matrixRows, existingOperations, businessDays: Number(importRows[0]?.business_days || 0) };
+}
+
+
+function planningLegacyStockRowsFromCurrent(
+  currentStock = {}
+) {
+
+  return (
+    currentStock.rows || []
+  ).map(
+    row => ({
+      establishment:
+        row.locationCode
+        ||
+        row.locationName
+        ||
+        '',
+
+      product_code:
+        Array.isArray(
+          row.materialCodes
+        )
+          ? row.materialCodes[0]
+            || ''
+          : '',
+
+      old_product_code:
+        '',
+
+      fiscal_balance_unit:
+        Number(
+          row.currentQty || 0
+        ),
+
+      error_balance_unit:
+        0,
+
+      sales_unit:
+        Number(
+          row.movementTotals
+            ?.salesQty
+          || 0
+        )
+    })
+  );
+}
+
+async function planningContext(
+  db,
+  payload = {}
+) {
+
+  const materialId =
+    Number(
+      payload.materialId
+    );
+
+  const materialCode =
+    String(
+      payload.materialCode
+      || ''
+    ).trim();
+
+
+  const planningMode =
+    normalizePlanningMode(
+      payload.planningMode
+    );
+
+
+  const scheduleStartDate =
+    normalizeDateOnly(
+      payload.planningStartDate,
+      payload.selectedDate,
+      payload.startDate
+    );
+
+
+  const scheduleEndDate =
+    normalizeDateOnly(
+      payload.planningEndDate,
+      payload.endDate,
+
+      scheduleStartDate
+        ? addDateDays(
+            scheduleStartDate,
+            120
+          )
+        : null
+    );
+
+
+  const [
+    materials,
+    inputs,
+    currentStock,
+    matrixRows,
+    machineRows,
+    existingPlans
+  ] =
+    await Promise.all([
+
+      db`
+        SELECT *
+        FROM materials
+        WHERE active = true
+        ORDER BY name
+      `,
+
+      db`
+        SELECT *
+        FROM material_inputs
+      `,
+
+      loadCurrentStockContext(
+        db,
+        {
+          excludePlanId:
+            payload.planId
+            || null
+        }
+      ),
+
+      db`
+        SELECT *
+        FROM productivity_matrix
+        WHERE active = true
+        ORDER BY updated_at DESC
+      `,
+
+      db`
+        SELECT *
+        FROM machines
+        WHERE active = true
+        ORDER BY name
+      `,
+
+      /*
+       * REAL:
+       * respeita planejamentos reais
+       * já existentes no calendário.
+       *
+       * TEÓRICO:
+       * cenário isolado.
+       */
+      planningMode === 'real'
+      &&
+      scheduleStartDate
+      &&
+      scheduleEndDate
+
+        ? db`
+            SELECT
+              id,
+              code,
+              operations
+
+            FROM production_plans
+
+            WHERE status <> 'canceled'
+
+              AND start_date
+                  <= ${scheduleEndDate}
+
+              AND end_date
+                  >= ${scheduleStartDate}
+
+              AND (
+                ${payload.planId || null}::bigint
+                IS NULL
+
+                OR id <>
+                   ${payload.planId || null}
+              )
+          `
+
+        : Promise.resolve([])
+    ]);
+
+
+  const locations =
+    currentStock.locations
+    || [];
+
+
+  /*
+   * No teórico mantemos a estrutura
+   * material/local, mas zeramos o saldo.
+   */
+  const stockRows =
+    planningMode ===
+    'theoretical'
+
+      ? (
+          currentStock.rows || []
+        ).map(
+          row => ({
+            ...row,
+
+            currentQty:
+              0,
+
+            movementTotals: {
+              ...(row.movementTotals || {}),
+
+              productionReserveQty:
+                0
+            }
+          })
+        )
+
+      : (
+          currentStock.rows || []
+        );
+
+
+  const materialsById =
+    new Map(
+      materials.map(
+        material => [
+          String(material.id),
+          material
+        ]
+      )
+    );
+
+
+  const locationsById =
+    new Map(
+      locations.map(
+        location => [
+          String(location.id),
+          location
+        ]
+      )
+    );
+
+
+  const inputsByMaterialId =
+    new Map();
+
+
+  for (
+    const input
+    of inputs
+  ) {
+
+    const key =
+      String(
+        input.material_id
+      );
+
+    if (
+      !inputsByMaterialId
+        .has(key)
+    ) {
+      inputsByMaterialId
+        .set(
+          key,
+          []
+        );
+    }
+
+    inputsByMaterialId
+      .get(key)
+      .push(input);
+  }
+
+
+  const material =
+    materialId
+
+      ? materialsById
+          .get(
+            String(materialId)
+          )
+
+      : materials.find(
+          item =>
+            item.name
+            ===
+            payload.materialName
+
+            ||
+
+            (
+              Array.isArray(
+                item.codes
+              )
+
+              &&
+              item.codes.some(
+                code =>
+                  String(code)
+                  ===
+                  materialCode
+              )
+            )
+        );
+
+
+  const existingOperations =
+    existingPlans.flatMap(
+      plan =>
+        normalizeJsonArray(
+          plan.operations
+        ).map(
+          (
+            operation,
+            index
+          ) => ({
+            ...operation,
+
+            operationId:
+              `plan:${plan.id}:${
+                operation.operationId
+                ||
+                operation.materialId
+                ||
+                index
+              }`,
+
+            planningCode:
+              plan.code
+              ||
+              plan.id
+          })
+        )
+    );
+
+
+  /*
+   * Compatibilidade com o validador
+   * do calendário manual.
+   */
+  const inventoryRows =
+    stockRows.map(
+      row => ({
+        material_id:
+          row.materialId,
+
+        location_id:
+          row.locationId,
+
+        adjustment_qty:
+          Number(
+            row.currentQty
+            || 0
+          )
+      })
+    );
+
+
+  return {
+    planningMode,
+
+    material,
+    materials,
+    materialsById,
+    inputsByMaterialId,
+
+    locations,
+    locationsById,
+
+    machineRows,
+
+    stockRows,
+    inventoryRows,
+
+    correctionRows:
+      [],
+
+    productionRows:
+      [],
+
+    matrixRows,
+
+    existingOperations,
+
+    businessDays:
+      planningBusinessDaysFromCurrentStock(
+        currentStock
+      )
+  };
 }
 
 router.post('/simulate', async (req, res, next) => {
   try {
     const db = requireDb();
     const context = await planningContext(db, req.body);
-    res.json({ ...buildPlan(req.body, context), ...planningStockProjectionContext(context) });
+    res.json({
+  ...buildPlan(
+    req.body,
+    context
+  ),
+
+  planningMode:
+    context.planningMode,
+
+  ...planningStockProjectionContext(
+    context
+  )
+});
   } catch (error) {
     next(error);
   }
@@ -649,9 +1335,45 @@ router.post('/plans', requirePermission('planning:write'), async (req, res, next
   try {
     const db = requireDb();
     const context = await planningContext(db, req.body);
+    /*
+ * Proteção temporária.
+ *
+ * Nesta etapa cenários teóricos
+ * ainda não entram no banco.
+ */
+if (
+  context.planningMode
+  === 'theoretical'
+) {
+  return res
+    .status(409)
+    .json({
+      error:
+        'O salvamento de cenários teóricos será habilitado na próxima etapa.'
+    });
+}
     const builtPlan = buildPlan(req.body, context);
-    const stockShortages = collectStockShortages(builtPlan.tree);
-    const stockAuthorization = stockAuthorizationPayload(req, stockShortages);
+    const stockShortages =
+  context.planningMode
+  === 'real'
+
+    ? collectStockShortages(
+        builtPlan.tree
+      )
+
+    : [];
+
+
+const stockAuthorization =
+  context.planningMode
+  === 'real'
+
+    ? stockAuthorizationPayload(
+        req,
+        stockShortages
+      )
+
+    : null;
     const plan = attachStockAuthorization(builtPlan, stockAuthorization);
     const planningStartDate = normalizeDateOnly(
       req.body.planningStartDate,
@@ -1335,7 +2057,25 @@ router.get('/analysis/stock-alerts', async (req, res, next) => {
   try {
     const startDate = isValidDateOnly(req.query.start) ? dateOnlyValue(req.query.start) : null;
     const endDate = isValidDateOnly(req.query.end) ? dateOnlyValue(req.query.end) : null;
-    const minimumDays = Number(req.query.minimumDays || 0);
+    const minimumDays =
+  Number(
+    req.query.minimumDays || 0
+  );
+
+const criticalDays =
+  Number(
+    req.query.criticalDays || 15
+  );
+
+const attentionDays =
+  Number(
+    req.query.attentionDays || 20
+  );
+
+const idealDays =
+  Number(
+    req.query.idealDays || 45
+  );
     if (!startDate || !endDate || startDate > endDate) {
       return res.status(400).json({ error: 'Período dos alertas de estoque inválido.' });
     }
@@ -1347,40 +2087,95 @@ router.get('/analysis/stock-alerts', async (req, res, next) => {
     const productionStartDate = startDate < today ? startDate : today;
     const productionEndDate = endDate > today ? endDate : today;
     const db = requireDb();
-    const [materials, locations, stockRows, adjustmentRows, correctionRows, importRows, productionRows] = await Promise.all([
-      db`SELECT id, name, codes, permits_sales FROM materials WHERE active = true AND permits_sales <> false ORDER BY name`,
-      db`SELECT id, code, name FROM locations WHERE active = true`,
-      db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit, sales_unit FROM stock_snapshot`,
-      db`
-        SELECT DISTINCT ON (material_id, location_id)
-               material_id, location_id, adjustment_qty
-        FROM stock_location_adjustments
-        ORDER BY material_id, location_id, updated_at DESC, id DESC
-      `,
-      db`
-        SELECT DISTINCT ON (material_id)
-               material_id, correction_qty
-        FROM stock_material_corrections
-        ORDER BY material_id, updated_at DESC, id DESC
-      `,
-      db`
-        SELECT id, created_at, business_days
-        FROM import_history
-        WHERE status = 'success'
-        ORDER BY created_at DESC
-        LIMIT 1
-      `,
-      db`
-        SELECT d.planned_date, d.material_name, d.material_code, SUM(d.planned_qty) AS planned_qty
-        FROM production_plan_days d
-        JOIN production_plans p ON p.id = d.plan_id
-        WHERE p.status <> 'canceled'
-          AND d.planned_qty > 0
-          AND d.planned_date >= ${productionStartDate}
-          AND d.planned_date <= ${productionEndDate}
-        GROUP BY d.planned_date, d.material_name, d.material_code
-      `
-    ]);
+    const [
+  materials,
+  currentStock,
+  productionRows
+] =
+  await Promise.all([
+
+    db`
+      SELECT
+        id,
+        name,
+        codes,
+        permits_sales
+
+      FROM materials
+
+      WHERE active = true
+        AND permits_sales <> false
+
+      ORDER BY name
+    `,
+
+    loadCurrentStockContext(
+      db
+    ),
+
+    db`
+      SELECT
+        d.planned_date,
+        d.material_name,
+        d.material_code,
+        SUM(d.planned_qty)
+          AS planned_qty
+
+      FROM production_plan_days d
+
+      JOIN production_plans p
+        ON p.id = d.plan_id
+
+      WHERE p.status <> 'canceled'
+
+        AND d.planned_qty > 0
+
+        AND d.planned_date
+            >= ${productionStartDate}
+
+        AND d.planned_date
+            <= ${productionEndDate}
+
+      GROUP BY
+        d.planned_date,
+        d.material_name,
+        d.material_code
+    `
+  ]);
+
+
+const locations =
+  currentStock.locations
+  || [];
+
+
+const stockRows =
+  planningLegacyStockRowsFromCurrent(
+    currentStock
+  );
+
+
+const adjustmentRows =
+  [];
+
+
+const correctionRows =
+  [];
+
+
+const importRows =
+  currentStock.lastImport
+
+    ? [{
+        ...currentStock.lastImport,
+
+        business_days:
+          planningBusinessDaysFromCurrentStock(
+            currentStock
+          )
+      }]
+
+    : [];
 
     const productionByDateCode = new Map();
     const productionByDateName = new Map();
@@ -1430,39 +2225,310 @@ router.get('/analysis/stock-alerts', async (req, res, next) => {
     });
 
     const alerts = {};
-    for (let date = startDate; date <= endDate; date = addDateDays(date, 1)) {
-      const criticalMaterials = [];
-      for (const base of projectionBases) {
-        if (!base.hasCurrentStock) continue;
-        const estimatedStock = date >= today
-          ? projectedFutureStock(base.currentStock, date, today, base.codes, base.material.name, base.salesPerDay, productionByDateCode, productionByDateName)
-          : projectedPastStock(base.currentStock, date, today, base.codes, base.material.name, base.salesPerDay, productionByDateCode, productionByDateName);
-        const durationDays = stockProjectionDurationDays(estimatedStock, base.salesPerDay);
-        const isCritical = base.salesPerDay
-          ? Number.isFinite(durationDays) && durationDays <= minimumDays
-          : Number.isFinite(estimatedStock) && estimatedStock <= 0;
-        if (!isCritical) continue;
-        criticalMaterials.push({
-          material_id: base.material.id,
-          material_name: base.material.name,
-          material_codes: base.codes,
-          estimated_stock: estimatedStock,
-          sales_per_day: base.salesPerDay,
-          duration_days: durationDays
-        });
-      }
-      if (criticalMaterials.length) {
-        alerts[date] = {
-          criticalCount: criticalMaterials.length,
-          materials: criticalMaterials
-        };
+
+for (
+  let date = startDate;
+  date <= endDate;
+  date = addDateDays(
+    date,
+    1
+  )
+) {
+  const groups = {
+    zeroed: [],
+    critical: [],
+    attention: [],
+    belowTarget: []
+  };
+
+  for (
+    const base
+    of projectionBases
+  ) {
+    if (
+      !base.hasCurrentStock
+    ) {
+      continue;
+    }
+
+    const estimatedStock =
+      date >= today
+
+        ? projectedFutureStock(
+            base.currentStock,
+            date,
+            today,
+            base.codes,
+            base.material.name,
+            base.salesPerDay,
+            productionByDateCode,
+            productionByDateName
+          )
+
+        : projectedPastStock(
+            base.currentStock,
+            date,
+            today,
+            base.codes,
+            base.material.name,
+            base.salesPerDay,
+            productionByDateCode,
+            productionByDateName
+          );
+
+    const durationDays =
+      stockProjectionDurationDays(
+        estimatedStock,
+        base.salesPerDay
+      );
+
+    let statusKey =
+      null;
+
+    /*
+     * Sem venda/dia estimada:
+     * só conseguimos afirmar que zerou
+     * quando o saldo chegou em zero.
+     */
+    if (
+      !base.salesPerDay
+    ) {
+      if (
+        Number.isFinite(
+          estimatedStock
+        )
+        &&
+        estimatedStock <= 0
+      ) {
+        statusKey =
+          'zeroed';
       }
     }
+
+    /*
+     * Com venda/dia estimada,
+     * classificamos pela cobertura.
+     */
+    else if (
+      Number.isFinite(
+        durationDays
+      )
+    ) {
+      if (
+        estimatedStock <= 0
+        ||
+        durationDays <= 0
+      ) {
+        statusKey =
+          'zeroed';
+      }
+
+      else if (
+        durationDays
+          <= criticalDays
+      ) {
+        statusKey =
+          'critical';
+      }
+
+      else if (
+        durationDays
+          <= attentionDays
+      ) {
+        statusKey =
+          'attention';
+      }
+
+      else if (
+        durationDays
+          < idealDays
+      ) {
+        statusKey =
+          'belowTarget';
+      }
+    }
+
+    /*
+     * >= meta ideal = OK.
+     *
+     * Não precisa entrar no objeto
+     * de alertas do calendário.
+     */
+    if (
+      !statusKey
+    ) {
+      continue;
+    }
+
+    groups[
+      statusKey
+    ].push({
+      material_id:
+        base.material.id,
+
+      material_name:
+        base.material.name,
+
+      material_codes:
+        base.codes,
+
+      estimated_stock:
+        estimatedStock,
+
+      sales_per_day:
+        base.salesPerDay,
+
+      duration_days:
+        durationDays
+    });
+  }
+
+  const zeroedCount =
+    groups.zeroed.length;
+
+  const criticalCount =
+    groups.critical.length;
+
+  const attentionCount =
+    groups.attention.length;
+
+  const belowTargetCount =
+    groups.belowTarget.length;
+
+  const count =
+    zeroedCount
+    + criticalCount
+    + attentionCount
+    + belowTargetCount;
+
+  if (
+    count <= 0
+  ) {
+    continue;
+  }
+
+  alerts[
+    date
+  ] = {
+    count,
+
+    zeroedCount,
+
+    criticalCount,
+
+    attentionCount,
+
+    belowTargetCount,
+
+    /*
+     * Mantemos materials por
+     * compatibilidade com qualquer
+     * consumidor antigo.
+     */
+    materials: [
+      ...groups.zeroed,
+      ...groups.critical,
+      ...groups.attention,
+      ...groups.belowTarget
+    ],
+
+    items: [
+      {
+        key:
+          'zeroed',
+
+        label:
+          'Zerado',
+
+        count:
+          zeroedCount,
+
+        materials:
+          groups.zeroed.map(
+            item =>
+              item.material_name
+          )
+      },
+
+      {
+        key:
+          'critical',
+
+        label:
+          'Crítico',
+
+        count:
+          criticalCount,
+
+        materials:
+          groups.critical.map(
+            item =>
+              item.material_name
+          )
+      },
+
+      {
+        key:
+          'attention',
+
+        label:
+          'Atenção',
+
+        count:
+          attentionCount,
+
+        materials:
+          groups.attention.map(
+            item =>
+              item.material_name
+          )
+      },
+
+      {
+        key:
+          'below-target',
+
+        label:
+          'Abaixo da meta',
+
+        count:
+          belowTargetCount,
+
+        materials:
+          groups.belowTarget.map(
+            item =>
+              item.material_name
+          )
+      }
+    ].filter(
+      item =>
+        item.count > 0
+    )
+  };
+}
 
     const latestImport = importRows[0]
       ? { id: importRows[0].id, created_at: importRows[0].created_at, business_days: importRows[0].business_days }
       : null;
-    res.json({ start: startDate, end: endDate, minimumDays, latestImport, alerts });
+    res.json({
+  start:
+    startDate,
+
+  end:
+    endDate,
+
+  minimumDays,
+
+  criticalDays,
+
+  attentionDays,
+
+  idealDays,
+
+  latestImport,
+
+  alerts
+});
   } catch (error) {
     next(error);
   }
@@ -1477,40 +2543,93 @@ router.get('/analysis/stock-projection', async (req, res, next) => {
     const projectionStartDate = targetDate >= today ? today : targetDate;
     const projectionEndDate = targetDate >= today ? targetDate : today;
     const db = requireDb();
-    const [materials, locations, stockRows, adjustmentRows, correctionRows, importRows, productionRows] = await Promise.all([
-      db`SELECT id, name, codes, permits_sales FROM materials WHERE active = true AND permits_sales <> false ORDER BY name`,
-      db`SELECT id, code, name FROM locations WHERE active = true`,
-      db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit, sales_unit FROM stock_snapshot`,
-      db`
-        SELECT DISTINCT ON (material_id, location_id)
-               material_id, location_id, adjustment_qty
-        FROM stock_location_adjustments
-        ORDER BY material_id, location_id, updated_at DESC, id DESC
-      `,
-      db`
-        SELECT DISTINCT ON (material_id)
-               material_id, correction_qty
-        FROM stock_material_corrections
-        ORDER BY material_id, updated_at DESC, id DESC
-      `,
-      db`
-        SELECT business_days
-        FROM import_history
-        WHERE status = 'success'
-        ORDER BY created_at DESC
-        LIMIT 1
-      `,
-      db`
-        SELECT d.planned_date, d.material_name, d.material_code, SUM(d.planned_qty) AS planned_qty
-        FROM production_plan_days d
-        JOIN production_plans p ON p.id = d.plan_id
-        WHERE p.status <> 'canceled'
-          AND d.planned_qty > 0
-          AND d.planned_date >= ${projectionStartDate}
-          AND d.planned_date <= ${projectionEndDate}
-        GROUP BY d.planned_date, d.material_name, d.material_code
-      `
-    ]);
+    const [
+  materials,
+  currentStock,
+  productionRows
+] =
+  await Promise.all([
+
+    db`
+      SELECT
+        id,
+        name,
+        codes,
+        permits_sales
+
+      FROM materials
+
+      WHERE active = true
+        AND permits_sales <> false
+
+      ORDER BY name
+    `,
+
+    loadCurrentStockContext(
+      db
+    ),
+
+    db`
+      SELECT
+        d.planned_date,
+        d.material_name,
+        d.material_code,
+        SUM(d.planned_qty)
+          AS planned_qty
+
+      FROM production_plan_days d
+
+      JOIN production_plans p
+        ON p.id = d.plan_id
+
+      WHERE p.status <> 'canceled'
+
+        AND d.planned_qty > 0
+
+        AND d.planned_date
+            >= ${projectionStartDate}
+
+        AND d.planned_date
+            <= ${projectionEndDate}
+
+      GROUP BY
+        d.planned_date,
+        d.material_name,
+        d.material_code
+    `
+  ]);
+
+
+const locations =
+  currentStock.locations
+  || [];
+
+
+const stockRows =
+  planningLegacyStockRowsFromCurrent(
+    currentStock
+  );
+
+
+const adjustmentRows =
+  [];
+
+
+const correctionRows =
+  [];
+
+
+const importRows =
+  currentStock.lastImport
+
+    ? [{
+        business_days:
+          planningBusinessDaysFromCurrentStock(
+            currentStock
+          )
+      }]
+
+    : [];
 
     const chainProductionByCode = new Map();
     const chainProductionByName = new Map();

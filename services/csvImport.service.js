@@ -1,5 +1,7 @@
 import { parse } from 'csv-parse/sync';
 import { requireDb } from '../server/db.js';
+import { aggregateImportedSales } from './stockBalance.service.js';
+import { businessDaysInclusive } from './workingDays.service.js';
 
 const NASAJON_COLUMNS = {
   establishment: 0,
@@ -65,17 +67,15 @@ function toNumber(value) {
 
 function validateNasajonHeader(headers) {
   const required = [
-    ['estabelecimento', NASAJON_COLUMNS.establishment],
-    ['produto - codigo', NASAJON_COLUMNS.product_code],
-    ['saldo fiscal (unidade padrao)', NASAJON_COLUMNS.fiscal_balance_unit],
-    ['saldo erros (unidade padrao)', NASAJON_COLUMNS.error_balance_unit],
-    ['vendas (unidade padrao)', NASAJON_COLUMNS.sales_unit]
+    [['estabelecimento'], NASAJON_COLUMNS.establishment],
+    [['produto - codigo', 'codigo do produto', 'codigo produto'], NASAJON_COLUMNS.product_code],
+    [['vendas (unidade padrao)'], NASAJON_COLUMNS.sales_unit]
   ];
 
-  for (const [expected, index] of required) {
+  for (const [accepted, index] of required) {
     if (!headers[index]) throw new Error(`CSV Nasajon sem a coluna obrigatoria na posicao ${index + 1}.`);
-    if (normalizeHeaderKey(headers[index]) !== expected) {
-      throw new Error(`Layout CSV Nasajon invalido na coluna ${index + 1}: esperado "${expected}", recebido "${headers[index]}".`);
+    if (!accepted.includes(normalizeHeaderKey(headers[index]))) {
+      throw new Error(`Layout CSV Nasajon invalido na coluna ${index + 1}: esperado "${accepted[0]}", recebido "${headers[index]}".`);
     }
   }
 }
@@ -132,9 +132,17 @@ async function recordMaterialBalances(tx, importId) {
   `;
 }
 
+function detectCsvDelimiter(buffer) {
+  const firstLine = String(buffer || '').split(/\r?\n/, 1)[0] || '';
+  const semicolonCount = (firstLine.match(/;/g) || []).length;
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  return semicolonCount > commaCount ? ';' : ',';
+}
+
 export function parseNasajonCsv(buffer) {
   const rows = parse(buffer, {
     bom: true,
+    delimiter: detectCsvDelimiter(buffer),
     skip_empty_lines: true,
     trim: true,
     relax_column_count: true
@@ -154,29 +162,144 @@ function userId(user) {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-export async function importStockCsv({ buffer, filename, user }) {
+function normalizeDate(value) {
+  const date = String(value || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
+}
+
+function formatPeriodDate(value) {
+  const date = normalizeDate(value);
+
+  if (!date) return '-';
+
+  const [year, month, day] = date.split('-');
+
+  return `${day}/${month}/${year}`;
+}
+
+async function findOverlappingImport(
+  db,
+  periodStart,
+  periodEnd
+) {
+  const [existing] = await db`
+    SELECT
+      id,
+      filename,
+      status,
+      period_start,
+      period_end
+    FROM import_history
+    WHERE period_start IS NOT NULL
+      AND period_end IS NOT NULL
+      AND status IN ('processing', 'success')
+      AND period_start <= CAST(${periodEnd} AS date)
+      AND period_end >= CAST(${periodStart} AS date)
+    ORDER BY period_start ASC, created_at ASC
+    LIMIT 1
+  `;
+
+  return existing || null;
+}
+
+export async function importStockCsv({ buffer, filename, user, periodStart, periodEnd }) {
   const db = requireDb();
+  const normalizedPeriodStart = normalizeDate(periodStart);
+  const normalizedPeriodEnd = normalizeDate(periodEnd);
+  if (!normalizedPeriodStart || !normalizedPeriodEnd) {
+    const error = new Error('Informe o periodo inicial e final da importacao.');
+    error.status = 400;
+    throw error;
+  }
+  if (normalizedPeriodStart > normalizedPeriodEnd) {
+    const error = new Error('O periodo inicial nao pode ser posterior ao periodo final.');
+    error.status = 400;
+    throw error;
+  }
+
+  const overlappingImport =
+  await findOverlappingImport(
+    db,
+    normalizedPeriodStart,
+    normalizedPeriodEnd
+  );
+
+if (overlappingImport) {
+  const existingStart =
+    formatPeriodDate(
+      overlappingImport.period_start
+    );
+
+  const existingEnd =
+    formatPeriodDate(
+      overlappingImport.period_end
+    );
+
+  const error = new Error(
+    `Este periodo conflita com uma importacao ja existente: ` +
+    `${existingStart} ate ${existingEnd}. ` +
+    `Arquivo: ${overlappingImport.filename}. ` +
+    `A importacao foi cancelada para evitar duplicidade de vendas.`
+  );
+
+  error.status = 409;
+  throw error;
+}
+
+  const businessDays = businessDaysInclusive(
+  normalizedPeriodStart,
+  normalizedPeriodEnd
+);
+
   const records = parseNasajonCsv(buffer);
 
   const [history] = await db`
-    INSERT INTO import_history (filename, status, started_at, user_id, user_name)
-    VALUES (${filename}, 'processing', now(), ${userId(user)}, ${userName(user)})
+    INSERT INTO import_history (
+  filename,
+  status,
+  started_at,
+  user_id,
+  user_name,
+  period_start,
+  period_end,
+  business_days
+)
+VALUES (
+  ${filename},
+  'processing',
+  now(),
+  ${userId(user)},
+  ${userName(user)},
+  ${normalizedPeriodStart},
+  ${normalizedPeriodEnd},
+  ${businessDays}
+)
     RETURNING id
   `;
 
   try {
     await db.begin(async tx => {
-      await tx`TRUNCATE TABLE stock_snapshot RESTART IDENTITY`;
-
-      const batchSize = 500;
-      for (let index = 0; index < records.length; index += batchSize) {
-        const batch = records.slice(index, index + batchSize).map(row => normalizeRow(row, history.id));
-        if (!batch.length) continue;
-        const insert = buildInsert(batch);
-        await tx.unsafe(insert.sql, insert.values);
+      const materials = await tx`SELECT id, name, codes FROM materials WHERE active = true`;
+      const locations = await tx`SELECT id, code, name FROM locations WHERE active = true`;
+      const sales = aggregateImportedSales({
+        records: records.map(row => normalizeRow(row, history.id)),
+        materials,
+        locations
+      });
+      for (const row of sales.rows) {
+        await tx`
+          INSERT INTO stock_import_sales_history (
+            import_id, material_id, location_id, period_start, period_end, sales_qty, product_codes
+          )
+          VALUES (
+            ${history.id}, ${row.materialId}, ${row.locationId}, ${normalizedPeriodStart}, ${normalizedPeriodEnd},
+            ${row.salesQty}, ${row.productCodes}
+          )
+          ON CONFLICT (import_id, material_id, location_id)
+          DO UPDATE SET sales_qty = EXCLUDED.sales_qty,
+                        product_codes = EXCLUDED.product_codes
+        `;
       }
-
-      await recordMaterialBalances(tx, history.id);
 
       await tx`
         UPDATE import_history

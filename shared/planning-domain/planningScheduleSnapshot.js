@@ -1,3 +1,5 @@
+import { normalizePlanningMachineName } from '../planning-schedule/planningMachineOrder.js';
+
 export function buildTimelineOperations(result) {
   const current = Array.isArray(result?.calendarOperations)
     ? result.calendarOperations
@@ -12,14 +14,32 @@ export function buildTimelineOperations(result) {
 }
 
 export function selectProductionCalendarMachines(result, registeredMachines = []) {
-  if (registeredMachines.length) return registeredMachines;
   const machineSources = [
+    registeredMachines,
     result?.machines,
     result?.summary?.machines,
     result?.machineOptions,
     result?.summary?.machineOptions
   ];
-  return machineSources.find(source => Array.isArray(source) && source.length) || [];
+  const selected = [];
+  const keys = new Set();
+  const addMachine = machine => {
+    if (!machine) return;
+    const id = String(machine.machineId ?? machine.machine_id ?? machine.id ?? '').trim();
+    const name = String(machine.machineName ?? machine.machine_name ?? machine.name ?? '').trim();
+    const machineKeys = [
+      id ? `id:${id}` : '',
+      name ? `name:${normalizePlanningMachineName(name)}` : ''
+    ].filter(Boolean);
+    if (machineKeys.some(key => keys.has(key))) return;
+    selected.push(machine);
+    machineKeys.forEach(key => keys.add(key));
+  };
+  machineSources.forEach(source => {
+    if (!Array.isArray(source)) return;
+    source.forEach(addMachine);
+  });
+  return selected;
 }
 
 export function resolveProductionCalendarPlanningId(result, { draftPlanningCode, lastPayloadPlanningCode } = {}) {

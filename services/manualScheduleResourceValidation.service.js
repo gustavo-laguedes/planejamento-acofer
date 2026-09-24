@@ -80,6 +80,8 @@ function normalizeAllocation(allocation, index) {
   const unit = String(allocation?.unit ?? allocation?.outputUnit ?? allocation?.plannedUnit ?? '');
   const peopleValue = allocation?.peopleCount ?? allocation?.people_count;
   const peopleCount = peopleValue === undefined || peopleValue === null || peopleValue === '' ? 0 : Number(peopleValue);
+  const capacityValue = allocation?.capacityPercent ?? allocation?.capacity_percent;
+  const capacityPercent = capacityValue === undefined || capacityValue === null || capacityValue === '' ? null : Number(capacityValue);
   return {
     allocationId,
     machineId: String(allocation?.machineId ?? allocation?.machine_id ?? allocation?.machineName ?? ''),
@@ -91,6 +93,7 @@ function normalizeAllocation(allocation, index) {
     end,
     valid: start !== null && end !== null && end > start,
     peopleCount: Number.isFinite(peopleCount) && peopleCount >= 0 ? peopleCount : 0,
+    capacityPercent: Number.isFinite(capacityPercent) ? capacityPercent : null,
     configurationKey: [materialId, materialCode, unit].map(value => value.trim().toLowerCase()).join('|')
   };
 }
@@ -385,8 +388,9 @@ function buildTeamProjection({ allocations, shifts, dailyTeamOverrides, teamOver
   allocations.filter(item => item.valid).forEach(allocation => {
     const intervals = shiftIntervalsBetween(shifts, allocation.start, allocation.end);
     intervals.forEach(shiftInterval => {
-      const start = Math.max(allocation.start, shiftInterval.start);
-      const end = Math.min(allocation.end, shiftInterval.end);
+      const fullProductiveDay = Number(allocation.capacityPercent) >= 100;
+      const start = fullProductiveDay ? shiftInterval.start : Math.max(allocation.start, shiftInterval.start);
+      const end = fullProductiveDay ? shiftInterval.end : Math.min(allocation.end, shiftInterval.end);
       if (start >= end) return;
       const date = minuteFields(shiftInterval.start).date;
       const key = `${date}|${shiftInterval.shiftId}`;

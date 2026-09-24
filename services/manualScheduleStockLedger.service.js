@@ -3,6 +3,7 @@ const MINUTES_PER_DAY = 24 * 60;
 
 const EVENT_PRIORITY = {
   INITIAL_STOCK: 1,
+  PLANNED_RECEIPT: 2,
   TRANSPORT_ARRIVAL: 2,
   PRODUCTION_AVAILABLE: 3,
   COMMITMENT_RELEASE: 4,
@@ -161,6 +162,7 @@ export function buildManualScheduleStockLedger({
   normalizedAllocations,
   normalizedDependencies,
   normalizedTransports,
+  normalizedPlannedReceipts = [],
   productiveSegments,
   stock,
   stockMinimums,
@@ -270,8 +272,32 @@ export function buildManualScheduleStockLedger({
     });
   });
 
-  normalizedDependencies.forEach(dependency => noteUnit(dependency.materialId, dependency.unit, `dependency:${dependency.dependencyId}`));
-  normalizedTransports.forEach(transport => noteUnit(transport.materialId, transport.unit, `transport:${transport.transportId}`));
+    normalizedDependencies.forEach(
+    dependency =>
+      noteUnit(
+        dependency.materialId,
+        dependency.unit,
+        `dependency:${dependency.dependencyId}`
+      )
+  );
+
+  normalizedTransports.forEach(
+    transport =>
+      noteUnit(
+        transport.materialId,
+        transport.unit,
+        `transport:${transport.transportId}`
+      )
+  );
+
+  normalizedPlannedReceipts.forEach(
+    receipt =>
+      noteUnit(
+        receipt.materialId,
+        receipt.unit,
+        `planned-receipt:${receipt.receiptId}`
+      )
+  );
 
   const intents = [];
   const addIntent = intent => intents.push({ ...intent, allocationIds: unique(intent.allocationIds || []), parentOperationIds: unique(intent.parentOperationIds || []), dependencyIds: unique(intent.dependencyIds || []) });
@@ -305,6 +331,129 @@ export function buildManualScheduleStockLedger({
     });
   });
 
+    normalizedPlannedReceipts.forEach(
+    (receipt, index) => {
+      const point =
+        Number(
+          receipt?.availablePoint
+        );
+
+      const materialId =
+        String(
+          receipt?.materialId
+          ?? ''
+        );
+
+      const locationId =
+        String(
+          receipt?.locationId
+          ?? DEFAULT_LOCATION_ID
+        )
+        || DEFAULT_LOCATION_ID;
+
+      const quantity =
+        Number(
+          receipt?.quantity
+        );
+
+      const receiptId =
+        String(
+          receipt?.receiptId
+          ?? `planned-receipt-${index + 1}`
+        );
+
+      if (
+        !Number.isFinite(point)
+        || !materialId
+        || !(quantity > epsilon)
+      ) {
+        diagnostics.push(
+          stockDiagnostic(
+            'INVALID_STOCK_CONFIGURATION',
+            {
+              materialId,
+              locationId,
+
+              message:
+                `A entrada prevista ${receiptId} não possui data, material ou quantidade válidos.`,
+
+              details: {
+                receiptId,
+                quantity:
+                  receipt?.quantity,
+
+                availableDate:
+                  receipt?.availableDate
+              }
+            }
+          )
+        );
+
+        return;
+      }
+
+      if (
+        configuredLocations.size
+        && !configuredLocations.has(
+          locationId
+        )
+      ) {
+        diagnostics.push(
+          stockDiagnostic(
+            'STOCK_LOCATION_MISMATCH',
+            {
+              materialId,
+              locationId,
+
+              message:
+                unconfiguredStockLocationMessage(
+                  locationId,
+                  receipt
+                ),
+
+              details: {
+                receiptId,
+
+                configuredLocations:
+                  [...configuredLocations]
+                    .sort()
+              }
+            }
+          )
+        );
+      }
+
+      relevantPoints.add(
+        point
+      );
+
+      addIntent({
+        type:
+          'PLANNED_RECEIPT',
+
+        point,
+
+        materialId,
+
+        locationId,
+
+        quantity,
+
+        receiptId,
+
+        unit:
+          receipt?.unit
+          || null,
+
+        allocationIds: [],
+
+        parentOperationIds: [],
+
+        dependencyIds: []
+      });
+    }
+  );
+
   const transportsById = new Map();
   normalizedTransports.forEach(transport => {
     if (transportsById.has(transport.transportId)) {
@@ -317,9 +466,71 @@ export function buildManualScheduleStockLedger({
     transportsById.set(transport.transportId, transport);
     const producerIds = new Set(transport.producerParentOperationIds);
     const profiles = outputProfiles.filter(profile => profile.materialId === transport.materialId && (!producerIds.size || producerIds.has(profile.parentOperationId)));
-    const dispatchPoint = transport.explicitStart ?? pointForQuantity(profiles, transport.quantity, epsilon);
-    const arrivalPoint = transport.explicitEnd ?? (dispatchPoint === null ? null : dispatchPoint + transport.durationMinutes);
-    if (dispatchPoint === null || arrivalPoint === null || !(arrivalPoint > dispatchPoint) || !Number.isFinite(transport.quantity) || transport.quantity <= epsilon) {
+        const dispatchPoint =
+      transport.explicitStart
+      ?? pointForQuantity(
+        profiles,
+        transport.quantity,
+        epsilon
+      );
+
+    /*
+     * MANUAL-05:
+     *
+     * availabilityMode=start
+     * libera o saldo no destino no mesmo
+     * instante em que o transporte começa.
+     *
+     * O intervalo start -> end continua
+     * existindo para representação logística.
+     */
+        const arrivalPoint =
+      transport.availabilityMode === 'day-start'
+        ? civilDayNumber(
+            transport.startDate
+          ) * MINUTES_PER_DAY
+        : transport.availabilityMode === 'start'
+          ? dispatchPoint
+          : (
+              transport.explicitEnd
+              ?? (
+                dispatchPoint === null
+                  ? null
+                  : dispatchPoint
+                    + transport.durationMinutes
+              )
+            );
+
+    const invalidAvailabilityPoint =
+      transport.availabilityMode === 'day-start'
+        ? (
+            arrivalPoint === null
+            || dispatchPoint === null
+            || !Number.isFinite(arrivalPoint)
+          )
+        : transport.availabilityMode === 'start'
+          ? (
+              arrivalPoint === null
+              || dispatchPoint === null
+              || arrivalPoint
+                < dispatchPoint
+            )
+          : (
+              arrivalPoint === null
+              || dispatchPoint === null
+              || !(
+                arrivalPoint
+                > dispatchPoint
+              )
+            );
+
+    if (
+      invalidAvailabilityPoint
+      || !Number.isFinite(
+        transport.quantity
+      )
+      || transport.quantity <= epsilon
+    ) {
       diagnostics.push(stockDiagnostic('INVALID_STOCK_CONFIGURATION', {
         materialId: transport.materialId, locationId: transport.sourceLocation || DEFAULT_LOCATION_ID,
         message: `O transporte ${transport.transportId} não possui intervalo ou quantidade válidos.`, details: { transportId: transport.transportId }
@@ -409,7 +620,22 @@ export function buildManualScheduleStockLedger({
   const recordEvent = (ledger, intent, before, after, details = {}) => {
     eventSequence += 1;
     const point = pointFields(intent.point);
-    const signature = JSON.stringify([point.timestampKey, intent.type, ledger.materialId, ledger.locationId, normalizeBoundary(intent.quantity || 0, precision), intent.allocationIds, intent.dependencyIds, intent.transportId || null, eventSequence]);
+        const signature =
+      JSON.stringify([
+        point.timestampKey,
+        intent.type,
+        ledger.materialId,
+        ledger.locationId,
+        normalizeBoundary(
+          intent.quantity || 0,
+          precision
+        ),
+        intent.allocationIds,
+        intent.dependencyIds,
+        intent.transportId || null,
+        intent.receiptId || null,
+        eventSequence
+      ]);
     const event = {
       eventId: `stock-event:${stableHash(signature)}`,
       ...point,
@@ -422,7 +648,14 @@ export function buildManualScheduleStockLedger({
       allocationIds: unique(intent.allocationIds || []),
       parentOperationIds: unique(intent.parentOperationIds || []),
       dependencyIds: unique(intent.dependencyIds || []),
-      transportId: intent.transportId || null,
+            transportId:
+        intent.transportId
+        || null,
+
+      receiptId:
+        intent.receiptId
+        || null,
+
       details
     };
     ledger.events.push(event);

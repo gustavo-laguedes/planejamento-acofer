@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import {
   applyDraftMove,
+  buildManualScheduleUnallocationPlan,
+  createManualScheduleAllocation,
   createManualScheduleDraft,
+  removeManualScheduleAllocations,
   validateManualScheduleDraft
 } from '../services/manualScheduleDraft.service.js';
 
@@ -79,6 +82,24 @@ function move(sourceDraft, options = {}) {
 
 function byId(sourceDraft, allocationId) {
   return sourceDraft.allocations.find(item => item.allocationId === allocationId);
+}
+
+{
+  const sameVisualSlot = [
+    allocation({ allocationId: 'daily-a', quantity: 220, unit: 'un', date: '2026-07-20', machineId: 'MT-100', materialId: 'Q-138', maxDailyCapacity: 220, capacityPercent: 100, peopleCount: 3 }),
+    allocation({ allocationId: 'daily-b', quantity: 180, unit: 'un', date: '2026-07-20', machineId: 'MT-100', materialId: 'Q-138', maxDailyCapacity: 220, capacityPercent: 81.82, peopleCount: 3 })
+  ];
+  const consolidated = createManualScheduleDraft({ allocations: sameVisualSlot, machines });
+  assert.equal(consolidated.allocations.length, 1, 'comportamento historico padrao continua consolidando slots compativeis');
+  const preserved = createManualScheduleDraft({ allocations: sameVisualSlot, machines, preserveAllocationRows: true });
+  assert.deepEqual(
+    preserved.allocations.map(item => [item.allocationId, item.quantity, item.capacityPercent, item.sourceAllocationIds]),
+    [
+      ['daily-a', 220, 100, ['daily-a']],
+      ['daily-b', 180, 81.82, ['daily-b']]
+    ],
+    'baseline automatico deve preservar uma linha manipulavel por allocation diaria'
+  );
 }
 
 function parentTotals(sourceDraft) {
@@ -452,10 +473,24 @@ function domainResult(result) {
       options: { allocationId: 'click-empty', targetDate: '2026-07-21', targetMachineId: 'MT-100' }
     },
     {
-      source: draft([
-        allocation({ allocationId: 'click-merge-a', materialId: 'CA60-5.0', quantity: 5000, date: '2026-07-16', maxDailyCapacity: 7000 }),
-        allocation({ allocationId: 'click-merge-b', materialId: 'CA60-5.0', quantity: 1000, date: '2026-07-17', maxDailyCapacity: 7000 })
-      ]),
+     source: draft([
+  allocation({
+    allocationId: 'click-merge-a',
+    materialId: 'CA60-5.0',
+    quantity: 5000,
+    date: '2026-07-16',
+    maxDailyCapacity: 7000,
+    capacityPercent: 71.43
+  }),
+  allocation({
+    allocationId: 'click-merge-b',
+    materialId: 'CA60-5.0',
+    quantity: 1000,
+    date: '2026-07-17',
+    maxDailyCapacity: 7000,
+    capacityPercent: 14.29
+  })
+]),
       options: { allocationId: 'click-merge-b', targetDate: '2026-07-16', targetMachineId: 'M1', confirmMerge: true }
     },
     {
@@ -601,6 +636,940 @@ function domainResult(result) {
   assert.equal(authorized.allocations.length, 2);
   assert.equal(byId(authorized, 'complete-over-br70').isCapacityOverride, true);
   assertIntegrity(authorized, overCapacity);
+}
+
+{
+  const emptyManualDraft = createManualScheduleDraft({
+    planningId: 'PLAN-MANUAL-02B',
+    baseSimulationId: 'SIM-MANUAL-02B',
+    machines,
+    allocations: []
+  });
+  const material = {
+    operationId: 'op-ca60-manual',
+    materialId: 'CA60',
+    materialCode: 'CA60',
+    materialName: 'CA60',
+    productionId: 'production-manual',
+    productionIndex: 0,
+    productionTitle: 'Produção manual',
+    remainingQty: 10,
+    unit: 'kg'
+  };
+  const created = createManualScheduleAllocation(emptyManualDraft, {
+    material,
+    date: '2026-07-22',
+    machineId: 'M1',
+    peopleCount: 4,
+    capacityPercent: 100,
+    machines,
+    matrixRows,
+    dailyMinutes: 528,
+    now: '2026-07-01T12:00:00.000Z'
+  });
+  assert.equal(created.allocations.length, 1);
+  assert.equal(created.allocations[0].parentOperationId, 'op-ca60-manual');
+  assert.equal(created.allocations[0].machineId, 'M1');
+  assert.equal(created.allocations[0].date, '2026-07-22');
+  assert.equal(created.allocations[0].quantity, 6);
+  assert.equal(created.allocations[0].capacityPercent, 100);
+  assert.equal(created.allocations[0].maxDailyCapacity, 6);
+  assert.equal(created.allocations[0].peopleCount, 4);
+  assert.equal(created.allocations[0].source, 'manual');
+  assert.equal(created.allocations[0].isCapacityOverride, false);
+  assert.equal(validateManualScheduleDraft(created, { machines }).valid, true);
+
+  const overloaded = captureError(() => createManualScheduleAllocation(
+  emptyManualDraft,
+  {
+    material,
+    date: '2026-07-22',
+    machineId: 'M1',
+    peopleCount: 4,
+    capacityPercent: 150,
+    machines,
+    matrixRows,
+    dailyMinutes: 528,
+    now: '2026-07-01T12:00:00.000Z'
+  }
+), 'CAPACITY_EXCEEDED');
+
+assert.match(overloaded.message, /capacidade/i);
+
+  const exceedsRemaining = captureError(() => createManualScheduleAllocation(emptyManualDraft, {
+    material: { ...material, remainingQty: 5 },
+    date: '2026-07-22',
+    machineId: 'M1',
+    peopleCount: 4,
+    capacityPercent: 100,
+    machines,
+    matrixRows,
+    dailyMinutes: 528,
+    now: '2026-07-01T12:00:00.000Z'
+  }), 'QUANTITY_EXCEEDS_REMAINING');
+  assert.match(exceedsRemaining.message, /restante/i);
+}
+
+// MANUAL-04A.
+// Desalocação intencional remove somente
+// as allocations solicitadas.
+{
+  const source = draft([
+    allocation({
+      allocationId: 'unalloc-a',
+      parentOperationId: '0:BOB',
+      quantity: 5
+    }),
+
+    allocation({
+      allocationId: 'unalloc-b',
+      parentOperationId: '0:LONG',
+      quantity: 3,
+      date: '2026-07-17'
+    })
+  ]);
+
+  const before =
+    JSON.stringify(source);
+
+  const result =
+    removeManualScheduleAllocations(
+      source,
+      {
+        allocationIds: [
+          'unalloc-a'
+        ],
+
+        machines,
+
+        now:
+          '2026-07-01T12:00:00.000Z'
+      }
+    );
+
+  assert.deepEqual(
+    result.allocations.map(
+      item =>
+        item.allocationId
+    ),
+    [
+      'unalloc-b'
+    ]
+  );
+
+  assert.equal(
+    result.lastManualAction.type,
+    'REMOVE_MANUAL_ALLOCATIONS'
+  );
+
+  assert.deepEqual(
+    result.lastManualAction
+      .allocationIds,
+    [
+      'unalloc-a'
+    ]
+  );
+
+  assert.equal(
+    result.dirty,
+    true
+  );
+
+  assert.equal(
+    JSON.stringify(source),
+    before,
+    'desalocação não pode mutar o draft anterior'
+  );
+
+  assert.equal(
+    validateManualScheduleDraft(
+      result,
+      {
+        machines
+      }
+    ).valid,
+    true
+  );
+}
+
+
+// MANUAL-04A.
+// Allocation inexistente deve recusar
+// e preservar o snapshot anterior.
+{
+  const source = draft([
+    allocation({
+      allocationId:
+        'unalloc-existing',
+
+      parentOperationId:
+        '0:BOB',
+
+      quantity:
+        5
+    })
+  ]);
+
+  const before =
+    JSON.stringify(source);
+
+  const error =
+    captureError(
+      () =>
+        removeManualScheduleAllocations(
+          source,
+          {
+            allocationIds: [
+              'unalloc-missing'
+            ],
+
+            machines
+          }
+        ),
+
+      'ALLOCATION_NOT_FOUND'
+    );
+
+  assertRollback(
+    source,
+    before,
+    error
+  );
+}
+
+
+// MANUAL-04A.
+// Cascata remove somente sucessores
+// que realmente ficam inválidos.
+{
+  const operations = [
+    {
+      operationId:
+        'group:BOB',
+
+      productionIndex:
+        0,
+
+      productionBreakdown: [
+        {
+          operationId:
+            '0:BOB',
+
+          productionIndex:
+            0,
+
+          quantity:
+            100
+        }
+      ],
+
+      dependencyRequirements:
+        []
+    },
+
+    {
+      operationId:
+        'group:LONG',
+
+      productionIndex:
+        0,
+
+      productionBreakdown: [
+        {
+          operationId:
+            '0:LONG',
+
+          productionIndex:
+            0,
+
+          quantity:
+            100
+        }
+      ],
+
+      dependencyRequirements: [
+        {
+          materialId:
+            'BOB',
+
+          requiredQuantity:
+            50
+        }
+      ]
+    },
+
+    {
+      operationId:
+        'group:TRANS',
+
+      productionIndex:
+        0,
+
+      productionBreakdown: [
+        {
+          operationId:
+            '0:TRANS',
+
+          productionIndex:
+            0,
+
+          quantity:
+            100
+        }
+      ],
+
+      dependencyRequirements: [
+        {
+          materialId:
+            'BOB',
+
+          requiredQuantity:
+            50
+        }
+      ]
+    },
+
+    {
+      operationId:
+        'group:MALHA',
+
+      productionIndex:
+        0,
+
+      productionBreakdown: [
+        {
+          operationId:
+            '0:MALHA',
+
+          productionIndex:
+            0,
+
+          quantity:
+            100
+        }
+      ],
+
+      dependencyRequirements: [
+        {
+          materialId:
+            'LONG',
+
+          requiredQuantity:
+            50
+        },
+
+        {
+          materialId:
+            'TRANS',
+
+          requiredQuantity:
+            50
+        }
+      ]
+    }
+  ];
+
+  const source = draft([
+    allocation({
+      allocationId:
+        'cascade-bob',
+
+      parentOperationId:
+        '0:BOB',
+
+      materialId:
+        'BOB',
+
+      quantity:
+        5,
+
+      date:
+        '2026-07-16'
+    }),
+
+    allocation({
+      allocationId:
+        'cascade-long',
+
+      parentOperationId:
+        '0:LONG',
+
+      materialId:
+        'LONG',
+
+      quantity:
+        3,
+
+      date:
+        '2026-07-17'
+    }),
+
+    allocation({
+      allocationId:
+        'cascade-trans',
+
+      parentOperationId:
+        '0:TRANS',
+
+      materialId:
+        'TRANS',
+
+      quantity:
+        3,
+
+      date:
+        '2026-07-17'
+    }),
+
+    allocation({
+      allocationId:
+        'cascade-malha',
+
+      parentOperationId:
+        '0:MALHA',
+
+      materialId:
+        'MALHA',
+
+      quantity:
+        2,
+
+      date:
+        '2026-07-18'
+    })
+  ]);
+
+  /*
+   * Aqui simulamos a resposta do nosso
+   * validador cronológico real.
+   *
+   * Tirou Bobina:
+   * LONG fica inválida.
+   *
+   * Tirou LONG:
+   * MALHA fica inválida.
+   *
+   * TRANS continua sustentada e portanto
+   * deve permanecer.
+   */
+  const validateCandidate =
+    candidate => {
+      const ids =
+        new Set(
+          candidate.allocations
+            .map(
+              item =>
+                item.allocationId
+            )
+        );
+
+      const errors =
+        [];
+
+      if (
+        !ids.has('cascade-bob')
+        && ids.has(
+          'cascade-long'
+        )
+      ) {
+        errors.push({
+          code:
+            'STOCK_COMMITMENT_SHORTAGE',
+
+          blocking:
+            true,
+
+          allocationIds: [
+            'cascade-long'
+          ],
+
+          parentOperationIds: [
+            '0:BOB',
+            '0:LONG'
+          ]
+        });
+      }
+
+      if (
+        !ids.has(
+          'cascade-long'
+        )
+        && ids.has(
+          'cascade-malha'
+        )
+      ) {
+        errors.push({
+          code:
+            'STOCK_COMMITMENT_SHORTAGE',
+
+          blocking:
+            true,
+
+          allocationIds: [
+            'cascade-malha'
+          ],
+
+          parentOperationIds: [
+            '0:LONG',
+            '0:MALHA'
+          ]
+        });
+      }
+
+      return errors.length
+        ? {
+            accepted:
+              false,
+
+            draft:
+              candidate,
+
+            blockingIssues:
+              errors,
+
+            validation: {
+              errors
+            }
+          }
+
+        : {
+            accepted:
+              true,
+
+            draft: {
+              ...candidate,
+
+              validation: {
+                valid:
+                  true
+              }
+            },
+
+            blockingIssues:
+              [],
+
+            validation: {
+              errors:
+                []
+            }
+          };
+    };
+
+  const plan =
+    buildManualScheduleUnallocationPlan(
+      source,
+      {
+        allocationId:
+          'cascade-bob',
+
+        operations,
+
+        machines,
+
+        validateCandidate,
+
+        now:
+          '2026-07-01T12:00:00.000Z'
+      }
+    );
+
+  assert.equal(
+    plan.accepted,
+    true
+  );
+
+  assert.deepEqual(
+    plan.cascadeAllocationIds,
+    [
+      'cascade-long',
+      'cascade-malha'
+    ]
+  );
+
+  assert.deepEqual(
+    plan.draft.allocations
+      .map(
+        item =>
+          item.allocationId
+      )
+      .sort(),
+
+    [
+      'cascade-trans'
+    ]
+  );
+}
+
+
+// MANUAL-04A.
+// Se o saldo restante ainda sustenta parte
+// da produção sucessora, preserva o que der
+// e tira primeiro a allocation mais tardia.
+{
+  const operations = [
+    {
+      operationId:
+        'group:BOB',
+
+      productionIndex:
+        0,
+
+      productionBreakdown: [
+        {
+          operationId:
+            '0:BOB',
+
+          productionIndex:
+            0,
+
+          quantity:
+            100
+        }
+      ],
+
+      dependencyRequirements:
+        []
+    },
+
+    {
+      operationId:
+        'group:LONG',
+
+      productionIndex:
+        0,
+
+      productionBreakdown: [
+        {
+          operationId:
+            '0:LONG',
+
+          productionIndex:
+            0,
+
+          quantity:
+            100
+        }
+      ],
+
+      dependencyRequirements: [
+        {
+          materialId:
+            'BOB',
+
+          requiredQuantity:
+            50
+        }
+      ]
+    }
+  ];
+
+  const source = draft([
+    allocation({
+      allocationId:
+        'keep-bob',
+
+      parentOperationId:
+        '0:BOB',
+
+      materialId:
+        'BOB',
+
+      quantity:
+        5,
+
+      date:
+        '2026-07-16'
+    }),
+
+    allocation({
+      allocationId:
+        'keep-long-early',
+
+      parentOperationId:
+        '0:LONG',
+
+      materialId:
+        'LONG',
+
+      quantity:
+        3,
+
+      date:
+        '2026-07-17'
+    }),
+
+    allocation({
+      allocationId:
+        'keep-long-late',
+
+      parentOperationId:
+        '0:LONG',
+
+      materialId:
+        'LONG',
+
+      quantity:
+        3,
+
+      date:
+        '2026-07-18'
+    })
+  ]);
+
+  const validateCandidate =
+    candidate => {
+      const ids =
+        new Set(
+          candidate.allocations
+            .map(
+              item =>
+                item.allocationId
+            )
+        );
+
+      /*
+       * Sem a Bobina, as duas Longitudinais
+       * juntas não cabem no saldo.
+       *
+       * Uma sozinha ainda cabe.
+       */
+      if (
+        !ids.has('keep-bob')
+        && ids.has(
+          'keep-long-early'
+        )
+        && ids.has(
+          'keep-long-late'
+        )
+      ) {
+        const error = {
+          code:
+            'STOCK_COMMITMENT_SHORTAGE',
+
+          blocking:
+            true,
+
+          allocationIds: [
+            'keep-long-early',
+            'keep-long-late'
+          ],
+
+          parentOperationIds: [
+            '0:BOB',
+            '0:LONG'
+          ]
+        };
+
+        return {
+          accepted:
+            false,
+
+          draft:
+            candidate,
+
+          blockingIssues: [
+            error
+          ],
+
+          validation: {
+            errors: [
+              error
+            ]
+          }
+        };
+      }
+
+      return {
+        accepted:
+          true,
+
+        draft:
+          candidate,
+
+        blockingIssues:
+          [],
+
+        validation: {
+          errors:
+            []
+        }
+      };
+    };
+
+  const plan =
+    buildManualScheduleUnallocationPlan(
+      source,
+      {
+        allocationId:
+          'keep-bob',
+
+        operations,
+
+        machines,
+
+        validateCandidate
+      }
+    );
+
+  assert.equal(
+    plan.accepted,
+    true
+  );
+
+  /*
+   * Tem que remover a produção de 18/07,
+   * preservando a mais antiga de 17/07.
+   */
+  assert.deepEqual(
+    plan.cascadeAllocationIds,
+    [
+      'keep-long-late'
+    ]
+  );
+
+  assert.deepEqual(
+    plan.draft.allocations
+      .map(
+        item =>
+          item.allocationId
+      )
+      .sort(),
+
+    [
+      'keep-long-early'
+    ]
+  );
+}
+
+// MANUAL-05A.
+// Transporte manual pertence ao draft
+// como entidade própria e libera no início.
+{
+  const source =
+    createManualScheduleDraft({
+      planningId:
+        'PLAN-MANUAL-05',
+
+      baseSimulationId:
+        'SIM-MANUAL-05',
+
+      allocations:
+        [],
+
+      transports: [
+        {
+          transportId:
+            'transport-1',
+
+          materialId:
+            'BOB-34',
+
+          materialCode:
+            'BOB-34',
+
+          materialName:
+            'CA60 3,4 Bobina',
+
+          quantity:
+            7000,
+
+          unit:
+            'kg',
+
+          sourceLocation:
+            'MATRIZ',
+
+          targetLocation:
+            'FEITAL',
+
+          startDate:
+            '2026-09-11',
+
+          endDate:
+            '2026-09-14',
+
+          availabilityMode:
+            'start'
+        }
+      ],
+
+      machines
+    });
+
+  assert.equal(
+    source.allocations.length,
+    0
+  );
+
+  assert.equal(
+    source.transports.length,
+    1
+  );
+
+  const transport =
+    source.transports[0];
+
+  assert.equal(
+    transport.transportId,
+    'transport-1'
+  );
+
+  assert.equal(
+    transport.materialId,
+    'BOB-34'
+  );
+
+  assert.equal(
+    transport.quantity,
+    7000
+  );
+
+  assert.equal(
+    transport.sourceLocation,
+    'MATRIZ'
+  );
+
+  assert.equal(
+    transport.targetLocation,
+    'FEITAL'
+  );
+
+  assert.equal(
+    transport.startDate,
+    '2026-09-11'
+  );
+
+  assert.equal(
+    transport.endDate,
+    '2026-09-14'
+  );
+
+  assert.equal(
+    transport.startTime,
+    '00:00'
+  );
+
+  assert.equal(
+    transport.endTime,
+    '23:59'
+  );
+
+  assert.equal(
+    transport.availabilityMode,
+    'start'
+  );
+
+  assert.ok(
+    transport.durationMinutes > 0
+  );
+
+  assert.equal(
+    validateManualScheduleDraft(
+      source,
+      { machines }
+    ).valid,
+    true
+  );
 }
 
 console.log('manualScheduleDraft.service.test.js ok');

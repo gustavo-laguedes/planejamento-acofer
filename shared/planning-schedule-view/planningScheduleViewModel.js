@@ -27,6 +27,21 @@ function roundPercent(value) {
   return Number.isFinite(number) ? Number(number.toFixed(2)) : null;
 }
 
+function dailyCapacityValue(allocation = {}) {
+  const candidates = [
+    allocation.nominalDailyCapacity,
+    allocation.maxDailyCapacity,
+    allocation.capacityMaxPerDay,
+    allocation.dailyMaxCapacity,
+    allocation.maximumDailyQuantity
+  ];
+  for (const value of candidates) {
+    const number = numberOrNull(value);
+    if (number !== null && number > 0) return number;
+  }
+  return null;
+}
+
 function timeMinutes(value) {
   const match = /^(\d{1,2}):(\d{2})/.exec(String(value || ''));
   if (!match) return Number.MAX_SAFE_INTEGER;
@@ -114,6 +129,11 @@ function planningScheduleTask(allocation = {}) {
   if (!allocationId) return null;
   const date = stringOrNull(allocation.date ?? allocation.startDate);
   const endDate = stringOrNull(allocation.endDate) || date;
+  const quantity = numberOrNull(allocation.quantity);
+  const nominalDailyCapacity = dailyCapacityValue(allocation);
+  const capacityPercent = quantity !== null && nominalDailyCapacity !== null
+    ? roundPercent((quantity / nominalDailyCapacity) * 100)
+    : numberOrNull(allocation.capacityPercent);
   const presentation = {
     productionTitle: stringOrNull(allocation.productionTitle),
     stage: allocation.productionStage ?? null,
@@ -144,10 +164,11 @@ function planningScheduleTask(allocation = {}) {
       date: endDate,
       time: stringOrNull(allocation.endTime)
     },
-    quantity: numberOrNull(allocation.quantity),
+    quantity,
     unit: stringOrNull(allocation.unit),
     durationMinutes: numberOrNull(allocation.durationMinutes),
-    capacityPercent: numberOrNull(allocation.capacityPercent),
+    capacityPercent,
+    nominalDailyCapacity,
     startCapacityPercent: numberOrNull(allocation.startCapacityPercent),
     endCapacityPercent: numberOrNull(allocation.endCapacityPercent),
     peopleCount: numberOrNull(allocation.peopleCount),
@@ -163,12 +184,24 @@ function planningScheduleTask(allocation = {}) {
  * The source is copied once and never mutated or promoted back to productive state.
  */
 export function buildPlanningScheduleViewModel(snapshot = {}) {
-  const resources = (Array.isArray(snapshot.machines) ? snapshot.machines : [])
+  const sourceResources = (Array.isArray(snapshot.machines) ? snapshot.machines : [])
     .map(planningScheduleResource)
     .filter(Boolean);
   const rawTasks = (Array.isArray(snapshot.allocations) ? snapshot.allocations : [])
     .map(planningScheduleTask)
     .filter(Boolean);
+  const resources = [...sourceResources];
+  const resourceIds = new Set(resources.map(resource => String(resource.id)));
+  rawTasks.forEach(task => {
+    const id = stringOrNull(task.resourceId);
+    if (!id || resourceIds.has(id)) return;
+    resources.push({
+      id,
+      name: String(task.machineName ?? id),
+      order: resources.length
+    });
+    resourceIds.add(id);
+  });
   const intraday = applyIntradayCapacityOffsets(rawTasks);
   const model = {
     contractVersion: PLANNING_SCHEDULE_VIEW_CONTRACT_VERSION,

@@ -26,6 +26,26 @@ function uniqueStrings(values) {
   return [...new Set((Array.isArray(values) ? values : []).map(text).filter(Boolean))];
 }
 
+function addDateDays(value, days) {
+  const date =
+    new Date(
+      `${text(value).slice(0, 10)}T00:00:00Z`
+    );
+
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  date.setUTCDate(
+    date.getUTCDate()
+    + Number(days || 0)
+  );
+
+  return date
+    .toISOString()
+    .slice(0, 10);
+}
+
 export function stableStringify(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
@@ -99,11 +119,118 @@ export function normalizePersistedAllocation(allocation = {}, index = 0) {
   return normalized;
 }
 
+function normalizePersistedPlannedReceipt(
+  receipt = {},
+  index = 0
+) {
+  const arrivalDate =
+    text(
+      receipt.arrivalDate
+      ?? receipt.date
+    ).slice(0, 10);
+
+  const availableDate =
+    text(
+      receipt.availableDate
+    ).slice(0, 10)
+    || addDateDays(
+      arrivalDate,
+      1
+    );
+
+  const normalized = {
+    ...clone(receipt),
+
+    receiptId:
+      text(
+        receipt.receiptId
+        || receipt.id
+        || `planned-receipt-${index + 1}`
+      ),
+
+    receiptType:
+      'planned-purchase',
+
+    materialId:
+      text(
+        receipt.materialId
+        ?? receipt.material_id
+      ),
+
+    materialCode:
+      text(
+        receipt.materialCode
+        ?? receipt.material_code
+      ),
+
+    materialName:
+      text(
+        receipt.materialName
+        ?? receipt.material_name
+      ),
+
+    locationId:
+      text(
+        receipt.locationId
+        ?? receipt.location_id
+        ?? receipt.targetLocation
+        ?? receipt.targetLocationId
+      ),
+
+    locationName:
+      text(
+        receipt.locationName
+        ?? receipt.location_name
+      ),
+
+    quantity:
+      number(receipt.quantity),
+
+    unit:
+      text(receipt.unit),
+
+    arrivalDate,
+
+    availableDate,
+
+    productionModelName:
+      text(
+        receipt.productionModelName
+      ),
+
+    sourceShortageKey:
+      text(
+        receipt.sourceShortageKey
+      ),
+
+    source:
+      'manual'
+  };
+
+  for (
+    const field of DERIVED_DRAFT_FIELDS
+  ) {
+    delete normalized[field];
+  }
+
+  return normalized;
+}
+
 export function validateManualScheduleContract(draft) {
   const errors = [];
   if (!draft || typeof draft !== 'object' || Array.isArray(draft)) errors.push('Draft manual ausente ou inválido.');
   if (draft && !SUPPORTED_MANUAL_SCHEDULE_VERSIONS.has(Number(draft.version))) errors.push(MANUAL_SCHEDULE_INCOMPATIBLE_MESSAGE);
-  if (draft && !Array.isArray(draft.allocations)) errors.push('Allocations do calendário manual ausentes.');
+    if (draft && !Array.isArray(draft.allocations)) errors.push('Allocations do calendário manual ausentes.');
+
+  if (
+    draft?.plannedReceipts !== undefined
+    && !Array.isArray(draft.plannedReceipts)
+  ) {
+    errors.push(
+      'Entradas previstas do calendário manual inválidas.'
+    );
+  }
+
   const ids = new Set();
   for (const allocation of draft?.allocations || []) {
     const id = text(allocation?.allocationId);
@@ -114,6 +241,62 @@ export function validateManualScheduleContract(draft) {
     if (!TIME_PATTERN.test(text(allocation?.startTime)) || !TIME_PATTERN.test(text(allocation?.endTime))) errors.push(`Horário inválido na allocation ${id || '?'}.`);
     if (!(number(allocation?.quantity) > 0)) errors.push(`Quantidade inválida na allocation ${id || '?'}.`);
   }
+
+    const receiptIds =
+    new Set();
+
+  for (
+    const receipt
+    of draft?.plannedReceipts || []
+  ) {
+    const id =
+      text(receipt?.receiptId);
+
+    if (!id) {
+      errors.push(
+        'Entrada prevista sem receiptId.'
+      );
+    } else if (receiptIds.has(id)) {
+      errors.push(
+        `Entrada prevista duplicada: ${id}.`
+      );
+    }
+
+    receiptIds.add(id);
+
+    if (!text(receipt?.materialId)) {
+      errors.push(
+        `Material ausente na entrada prevista ${id || '?'}.`
+      );
+    }
+
+    if (!text(receipt?.locationId)) {
+      errors.push(
+        `Local ausente na entrada prevista ${id || '?'}.`
+      );
+    }
+
+    if (!(number(receipt?.quantity) > 0)) {
+      errors.push(
+        `Quantidade inválida na entrada prevista ${id || '?'}.`
+      );
+    }
+
+    if (
+      !DATE_PATTERN.test(
+        text(receipt?.arrivalDate)
+      )
+      ||
+      !DATE_PATTERN.test(
+        text(receipt?.availableDate)
+      )
+    ) {
+      errors.push(
+        `Data inválida na entrada prevista ${id || '?'}.`
+      );
+    }
+  }
+  
   return { valid: errors.length === 0, errors };
 }
 
@@ -124,15 +307,31 @@ export function serializeManualScheduleDraft({
   settings = {},
   now = new Date()
 } = {}) {
-  const timestamp = now instanceof Date ? now.toISOString() : String(now);
-  const allocations = (draft?.allocations || []).map(normalizePersistedAllocation);
+    const timestamp =
+    now instanceof Date
+      ? now.toISOString()
+      : String(now);
+
+  const allocations =
+    (draft?.allocations || [])
+      .map(normalizePersistedAllocation);
+
+  const plannedReceipts =
+    (draft?.plannedReceipts || [])
+      .map(
+        normalizePersistedPlannedReceipt
+      );
+
   const persisted = {
     version: MANUAL_SCHEDULE_CONTRACT_VERSION,
     draftId: text(draft?.draftId) || `manual-draft:${fnv1a(`${timestamp}:${allocations.length}`)}`,
     planningId: planningId === null || planningId === undefined ? null : text(planningId),
     baseSimulationId: draft?.baseSimulationId === null || draft?.baseSimulationId === undefined ? null : text(draft.baseSimulationId),
     baseSimulationHash: manualScheduleBaseHash(baseSimulation),
-    allocations,
+        allocations,
+
+    plannedReceipts,
+
     constraints: clone(Array.isArray(draft?.constraints) ? draft.constraints : []),
     frozenThrough: clone(draft?.frozenThrough || null),
     schedulerState: clone(draft?.schedulerState || { workItems: [], operationRevisions: [] }),
@@ -167,7 +366,18 @@ export function normalizePersistedManualScheduleDraft(value) {
   const draft = {
     ...clone(parsed),
     version: MANUAL_SCHEDULE_CONTRACT_VERSION,
-    allocations: (parsed.allocations || []).map(normalizePersistedAllocation),
+        allocations:
+      (parsed.allocations || [])
+        .map(
+          normalizePersistedAllocation
+        ),
+
+    plannedReceipts:
+      (parsed.plannedReceipts || [])
+        .map(
+          normalizePersistedPlannedReceipt
+        ),
+
     constraints: clone(Array.isArray(parsed.constraints) ? parsed.constraints : []),
     frozenThrough: clone(parsed.frozenThrough || null),
     schedulerState: clone(parsed.schedulerState || { workItems: [], operationRevisions: [] }),

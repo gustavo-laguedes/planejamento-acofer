@@ -14,6 +14,7 @@ export const TAB_PERMISSIONS = {
   commercialCalendar: 'commercial:calendar',
   tracking: 'productivity:read',
   stock: 'stock:read',
+  restricted: 'restricted:read',
   production: 'launches:read',
   history: 'launches:read',
   dashboardReports: 'productivity:read',
@@ -44,7 +45,8 @@ const OPERATIONAL_TABS = [
 export const ROLE_TABS = {
   [ROLES.SUPER_ADMIN]: [
     ...OPERATIONAL_TABS,
-    'audit'
+    'audit',
+    'restricted'
   ],
   [ROLES.DIRETOR]: [
     ...OPERATIONAL_TABS,
@@ -78,6 +80,7 @@ const OPERATIONAL_PERMISSIONS = [
 export const ROLE_PERMISSIONS = {
   [ROLES.SUPER_ADMIN]: [
     ...OPERATIONAL_PERMISSIONS,
+    'restricted:read',
     'users:manage',
     'log:read'
   ],
@@ -122,6 +125,10 @@ export function canAccess(user, permission) {
 
 export function canAccessTab(user, tabId) {
   return (ROLE_TABS[normalizeRole(user?.role)] || []).includes(tabId);
+}
+
+export function canAccessRestrictedArea(user) {
+  return normalizeRole(user?.role) === ROLES.SUPER_ADMIN;
 }
 
 export function visibleTabsForUser(user, tabs) {

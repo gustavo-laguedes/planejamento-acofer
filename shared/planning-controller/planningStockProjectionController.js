@@ -1,5 +1,11 @@
 import { projectPlanningStockByDay } from '../../services/planningStockProjection.service.js';
 
+const PLANNING_STOCK_CRITICAL_DAYS =
+  15;
+
+const PLANNING_STOCK_ATTENTION_DAYS =
+  20;
+
 export function getPlanningStockProjectionDay(projection, selectedDate) {
   const date = String(selectedDate || '').slice(0, 10);
   const day = (projection?.days || []).find(item => String(item?.date) === date) || null;
@@ -9,19 +15,108 @@ export function getPlanningStockProjectionDay(projection, selectedDate) {
   } : null;
 }
 
-function planningStockPcpStatus(item, { minimumDays = null, idealDays = null } = {}) {
-  const closingStock = Number(item?.closingStock);
-  const coverageDays = Number(item?.coverageDays);
-  if (closingStock < 0 || item?.status === 'NEGATIVE' || item?.status === 'CRITICAL' || (minimumDays && Number.isFinite(coverageDays) && coverageDays <= minimumDays * 0.5)) {
-    return { key: 'critical', label: 'Crítico', className: 'critical' };
+function planningStockPcpStatus(
+  item,
+  {
+    idealDays = null
+  } = {}
+) {
+  const closingStock =
+    Number(
+      item?.closingStock
+    );
+
+  const coverageDays =
+    Number(
+      item?.coverageDays
+    );
+
+  if (
+    closingStock <= 0
+    ||
+    item?.status === 'NEGATIVE'
+    ||
+    (
+      Number.isFinite(
+        coverageDays
+      )
+      &&
+      coverageDays <= 0
+    )
+  ) {
+    return {
+      key: 'zeroed',
+      label: 'Zerado',
+      className: 'zeroed'
+    };
   }
-  if (minimumDays && Number.isFinite(coverageDays) && coverageDays <= minimumDays * 1.2) {
-    return { key: 'production-alert', label: 'Alerta de produção', className: 'production-alert' };
+
+  if (
+    Number.isFinite(
+      coverageDays
+    )
+    &&
+    coverageDays
+      <= PLANNING_STOCK_CRITICAL_DAYS
+  ) {
+    return {
+      key: 'critical',
+      label: 'Crítico',
+      className: 'critical'
+    };
   }
-  if (Number.isFinite(coverageDays) && Number.isFinite(Number(idealDays)) && coverageDays < Number(idealDays)) {
-    return { key: 'below-target', label: 'Abaixo da meta', className: 'below-target' };
+
+  if (
+    Number.isFinite(
+      coverageDays
+    )
+    &&
+    coverageDays
+      <= PLANNING_STOCK_ATTENTION_DAYS
+  ) {
+    return {
+      key: 'attention',
+      label: 'Atenção',
+      className: 'attention'
+    };
   }
-  return { key: 'ok', label: 'OK', className: 'planned' };
+
+  if (
+    Number.isFinite(
+      coverageDays
+    )
+    &&
+    Number.isFinite(
+      Number(idealDays)
+    )
+    &&
+    coverageDays
+      < Number(idealDays)
+  ) {
+    return {
+      key: 'below-target',
+      label: 'Abaixo da meta',
+      className: 'below-target'
+    };
+  }
+
+  if (
+    !Number.isFinite(
+      coverageDays
+    )
+  ) {
+    return {
+      key: 'unknown',
+      label: 'Sem estimativa',
+      className: 'unknown'
+    };
+  }
+
+  return {
+    key: 'ok',
+    label: 'OK',
+    className: 'ok'
+  };
 }
 
 export function buildPlanningStockModalModel(projection, selectedDate, materialCatalog = [], {
@@ -67,42 +162,270 @@ export function buildPlanningStockModalModel(projection, selectedDate, materialC
     productionMaterials,
     salesAlerts: day.alerts.filter(alert => salesIds.has(String(alert.materialId))),
     salesSummary: {
-      materialCount: salesMaterials.length,
-      negativeCount: salesMaterials.filter(item => item.status === 'NEGATIVE').length,
-      criticalCount: salesMaterials.filter(item => item.pcpStatus?.key === 'critical').length,
-      warningCount: salesMaterials.filter(item => item.status === 'WARNING').length,
-      productionAlertCount: salesMaterials.filter(item => item.pcpStatus?.key === 'production-alert').length,
-      belowTargetCount: salesMaterials.filter(item => item.pcpStatus?.key === 'below-target').length
-    }
+  materialCount:
+    salesMaterials.length,
+
+  negativeCount:
+    salesMaterials
+      .filter(
+        item =>
+          item.status === 'NEGATIVE'
+      )
+      .length,
+
+  zeroedCount:
+    salesMaterials
+      .filter(
+        item =>
+          item.pcpStatus?.key
+          === 'zeroed'
+      )
+      .length,
+
+  criticalCount:
+    salesMaterials
+      .filter(
+        item =>
+          item.pcpStatus?.key
+          === 'critical'
+      )
+      .length,
+
+  attentionCount:
+    salesMaterials
+      .filter(
+        item =>
+          item.pcpStatus?.key
+          === 'attention'
+      )
+      .length,
+
+  warningCount:
+    salesMaterials
+      .filter(
+        item =>
+          item.status === 'WARNING'
+      )
+      .length,
+
+  productionAlertCount:
+    0,
+
+  belowTargetCount:
+    salesMaterials
+      .filter(
+        item =>
+          item.pcpStatus?.key
+          === 'below-target'
+      )
+      .length,
+
+  okCount:
+    salesMaterials
+      .filter(
+        item =>
+          item.pcpStatus?.key
+          === 'ok'
+      )
+      .length
+}
   };
 }
 
-export function buildPlanningStockCalendarAlert(projection, selectedDate, materialCatalog = [], options = {}) {
-  const day = buildPlanningStockModalModel(projection, selectedDate, materialCatalog, options);
-  if (!day) return null;
-  const groups = (day.salesMaterials || []).reduce((counts, item) => {
-    if (item.pcpStatus?.key === 'critical') {
-      counts.critical += 1;
-    } else if (item.pcpStatus?.key === 'production-alert') {
-      counts.productionAlert += 1;
-    } else if (item.pcpStatus?.key === 'below-target') {
-      counts.belowTarget += 1;
-    }
-    return counts;
-  }, { critical: 0, productionAlert: 0, belowTarget: 0 });
+export function buildPlanningStockCalendarAlert(
+  projection,
+  selectedDate,
+  materialCatalog = [],
+  options = {}
+) {
+  const day =
+    buildPlanningStockModalModel(
+      projection,
+      selectedDate,
+      materialCatalog,
+      options
+    );
+
+  if (!day) {
+    return null;
+  }
+
+  const catalogById =
+    new Map(
+      (
+        Array.isArray(
+          materialCatalog
+        )
+          ? materialCatalog
+          : []
+      ).map(
+        material => [
+          String(
+            material?.id
+            ?? material?.materialId
+            ?? ''
+          ),
+          material
+        ]
+      )
+    );
+
+  const groups =
+    (
+      day.salesMaterials || []
+    ).reduce(
+      (
+        result,
+        item
+      ) => {
+        const status =
+          item.pcpStatus?.key;
+
+        const target =
+          status === 'zeroed'
+            ? result.zeroed
+            : status === 'critical'
+              ? result.critical
+              : status === 'attention'
+                ? result.attention
+                : status === 'below-target'
+                  ? result.belowTarget
+                  : null;
+
+        if (!target) {
+          return result;
+        }
+
+        target.count += 1;
+
+        const catalogMaterial =
+          catalogById.get(
+            String(
+              item?.materialId
+              ?? ''
+            )
+          ) || {};
+
+        const materialName =
+          String(
+            item?.materialName
+            ?? item?.name
+            ?? catalogMaterial?.name
+            ?? catalogMaterial?.material_name
+            ?? item?.materialId
+            ?? ''
+          ).trim();
+
+        if (
+          materialName
+          &&
+          !target.materials.includes(
+            materialName
+          )
+        ) {
+          target.materials.push(
+            materialName
+          );
+        }
+
+        return result;
+      },
+      {
+        zeroed: {
+          count: 0,
+          materials: []
+        },
+
+        critical: {
+          count: 0,
+          materials: []
+        },
+
+        attention: {
+          count: 0,
+          materials: []
+        },
+
+        belowTarget: {
+          count: 0,
+          materials: []
+        }
+      }
+    );
+
   const items = [
-    { key: 'critical', label: 'Crítico', count: groups.critical },
-    { key: 'production-alert', label: 'Alerta de produção', count: groups.productionAlert },
-    { key: 'below-target', label: 'Abaixo da meta', count: groups.belowTarget }
-  ].filter(item => item.count > 0);
-  const count = items.reduce((sum, item) => sum + item.count, 0);
-  return count > 0 ? {
-    count,
-    criticalCount: groups.critical,
-    productionAlertCount: groups.productionAlert,
-    belowTargetCount: groups.belowTarget,
-    items
-  } : null;
+    {
+      key: 'zeroed',
+      label: 'Zerado',
+      count:
+        groups.zeroed.count,
+      materials:
+        groups.zeroed.materials
+    },
+
+    {
+      key: 'critical',
+      label: 'Crítico',
+      count:
+        groups.critical.count,
+      materials:
+        groups.critical.materials
+    },
+
+    {
+      key: 'attention',
+      label: 'Atenção',
+      count:
+        groups.attention.count,
+      materials:
+        groups.attention.materials
+    },
+
+    {
+      key: 'below-target',
+      label: 'Abaixo da meta',
+      count:
+        groups.belowTarget.count,
+      materials:
+        groups.belowTarget.materials
+    }
+  ].filter(
+    item =>
+      item.count > 0
+  );
+
+  const count =
+    items.reduce(
+      (
+        sum,
+        item
+      ) =>
+        sum + item.count,
+      0
+    );
+
+  return count > 0
+    ? {
+        count,
+
+        zeroedCount:
+          groups.zeroed.count,
+
+        criticalCount:
+          groups.critical.count,
+
+        attentionCount:
+          groups.attention.count,
+
+        productionAlertCount:
+          0,
+
+        belowTargetCount:
+          groups.belowTarget.count,
+
+        items
+      }
+    : null;
 }
 
 export function buildPlanningStockProjection({

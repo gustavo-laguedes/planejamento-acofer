@@ -36,7 +36,10 @@ assert.equal(existsSync(new URL('../shared/production-calendar/ProductionCalenda
 assert.match(planningSource, /openProductionCalendarExclusiveView/);
 assert.match(planningSource, /function expandProductionCalendarHorizon\(\{ days \} = \{\}\)/);
 assert.match(planningSource, /visibleEndDate:\s*addProductionCalendarDays\(currentEndDate,\s*dayCount\)/);
+assert.match(planningSource, /const validationDaysByDate = new Map/);
+assert.match(planningSource, /fillProductionCalendarDayRange\(baseDays\)\.map/);
 assert.match(planningSource, /refreshTimelineOnly\(\)/);
+assert.match(planningSource, /planningScheduleRendererHost\?\.focusAllocation\?\.\(createdAllocationId\)/);
 assert.match(ganttSource, /\[7,\s*15,\s*30\]\.forEach\(dayCount/);
 assert.match(ganttSource, /onRequestExpandHorizon\(\{\s*days:\s*Number/);
 assert.doesNotMatch(planningSource, /\bProductionCalendar\(\{/);

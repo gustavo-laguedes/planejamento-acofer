@@ -11,7 +11,13 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 
 router.post('/csv', requirePermission('imports:write'), upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Arquivo CSV não enviado.' });
-    const result = await importStockCsv({ buffer: req.file.buffer, filename: req.file.originalname, user: req.user });
+    const result = await importStockCsv({
+      buffer: req.file.buffer,
+      filename: req.file.originalname,
+      user: req.user,
+      periodStart: req.body.periodStart,
+      periodEnd: req.body.periodEnd
+    });
     const db = requireDb();
     await recordAuditLog(db, {
       user: req.user,
@@ -30,7 +36,8 @@ router.get('/', requirePermission('log:read'), async (req, res, next) => {
   try {
     const db = requireDb();
     const rows = await db`
-      SELECT id, filename, total_rows, status, error_message, started_at, finished_at, created_at, user_id, user_name
+      SELECT id, filename, total_rows, status, error_message, started_at, finished_at, created_at,
+             user_id, user_name, period_start, period_end, business_days
       FROM import_history
       ORDER BY created_at DESC
       LIMIT 100

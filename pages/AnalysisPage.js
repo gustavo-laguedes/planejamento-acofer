@@ -5,7 +5,8 @@ import { nextSortDirection, sortTableRows } from '../shared/DataTable.js';
 import { setInternalError, setInternalLoading } from '../shared/InternalLoading.js';
 import { canAccess } from '../shared/rbac.js';
 import { PcpStatusPill } from '../shared/StatusPill.js';
-import { holidayForDate } from '../services/workingDays.service.js';
+import { businessDaysInclusive, holidayForDate } from '../services/workingDays.service.js';
+import { AnalysisCalculationsPanel } from './AnalysisCalculations.js';
 
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 const MONTH_FORMAT = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -19,14 +20,28 @@ const PCP_IDEAL_OVERRIDES_STORAGE_KEY = 'acofer.analysis.pcpIdealDaysByMaterial'
 const PCP_PRIORITY_STORAGE_KEY = 'acofer.analysis.pcpPriorities';
 const PLANNING_DRAFT_KEY = 'planejamento_acofer_planning_draft_v2';
 const COMMERCIAL_PINS_STORAGE_KEY = 'acofer.commercial.materialPins.v1';
-const PCP_STATUS_WEIGHT = { critical: 0, attention: 1, productionAlert: 2, belowTarget: 3, planned: 4, outOfRadar: 5, unknown: 6 };
+const PCP_ZERO_DAYS = 0;
+const PCP_CRITICAL_DAYS = 15;
+const PCP_ATTENTION_DAYS = 20;
+const PCP_DEFAULT_IDEAL_DAYS = 45;
+
+const PCP_STATUS_WEIGHT = {
+  zeroed: 0,
+  critical: 1,
+  attention: 2,
+  belowTarget: 3,
+  planned: 4,
+  ok: 5,
+  unknown: 6
+};
+
 const PCP_GROUP_WEIGHT = {
-  criticalOpen: 0,
-  criticalPartial: 1,
-  attentionOpen: 2,
-  attentionPartial: 3,
-  productionAlertOpen: 4,
-  productionAlertPartial: 5,
+  zeroedOpen: 0,
+  zeroedPartial: 1,
+  criticalOpen: 2,
+  criticalPartial: 3,
+  attentionOpen: 4,
+  attentionPartial: 5,
   belowTargetOpen: 6,
   belowTargetPartial: 7,
   planned: 8,
@@ -161,11 +176,19 @@ function writePcpPriorities(priorities) {
 }
 
 function readPcpIdealDays(minimumDays) {
-  const fallback = Math.round(Number(minimumDays || 0) * 1.5);
+  const fallback = PCP_DEFAULT_IDEAL_DAYS;
   const value = String(localStorage.getItem(PCP_IDEAL_DAYS_KEY) || '').trim();
-  if (!/^\d+$/.test(value)) return fallback;
+
+  if (!/^\d+$/.test(value)) {
+    return fallback;
+  }
+
   const days = Number(value);
-  return Number.isInteger(days) && days > 0 ? days : fallback;
+
+  return Number.isInteger(days)
+    && days > PCP_ATTENTION_DAYS
+      ? days
+      : fallback;
 }
 
 function writePcpIdealDays(days) {
@@ -248,6 +271,186 @@ function currentStockDurationDays(row) {
   return Math.max(balance, 0) / salesPerDay;
 }
 
+function pcpImportDateKey(value) {
+  const text = String(value || '').slice(0, 10);
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(text)
+    ? text
+    : '';
+}
+
+function pcpImportPeriod(rows = [], lastImport = null) {
+  const periods = [];
+
+  for (const row of rows) {
+    for (const detail of row.details || []) {
+      if (detail.type !== 'sales') continue;
+
+      const start =
+        pcpImportDateKey(
+          detail.periodStart
+        );
+
+      const end =
+        pcpImportDateKey(
+          detail.periodEnd
+        );
+
+      if (start && end) {
+        periods.push({
+          start,
+          end
+        });
+      }
+    }
+  }
+
+  const lastStart =
+    pcpImportDateKey(
+      lastImport?.period_start ||
+      lastImport?.periodStart
+    );
+
+  const lastEnd =
+    pcpImportDateKey(
+      lastImport?.period_end ||
+      lastImport?.periodEnd
+    );
+
+  if (lastStart && lastEnd) {
+    periods.push({
+      start: lastStart,
+      end: lastEnd
+    });
+  }
+
+  if (!periods.length) {
+    return null;
+  }
+
+  return {
+    start: periods.reduce(
+      (minimum, item) =>
+        item.start < minimum
+          ? item.start
+          : minimum,
+      periods[0].start
+    ),
+
+    end: periods.reduce(
+      (maximum, item) =>
+        item.end > maximum
+          ? item.end
+          : maximum,
+      periods[0].end
+    )
+  };
+}
+
+function pcpStockRowsFromCurrent(context = {}) {
+  const rows =
+    Array.isArray(context.rows)
+      ? context.rows
+      : [];
+
+  const period =
+    pcpImportPeriod(
+      rows,
+      context.lastImport
+    );
+
+  const businessDays =
+    period
+      ? businessDaysInclusive(
+          period.start,
+          period.end
+        )
+      : 0;
+
+  const grouped =
+    new Map();
+
+  for (const row of rows) {
+    const materialId =
+      String(row.materialId || '');
+
+    if (!materialId) {
+      continue;
+    }
+
+    if (!grouped.has(materialId)) {
+      grouped.set(
+        materialId,
+        {
+          material: {
+            id: row.materialId,
+            name: row.materialName || '-',
+
+            permitsSales:
+              row.permitsSales !== false,
+
+            primary_unit:
+              row.unit || ''
+          },
+
+          codes:
+            Array.isArray(row.materialCodes)
+              ? row.materialCodes
+              : [],
+
+          totalLocationsQty: 0,
+          salesPeriodQty: 0
+        }
+      );
+    }
+
+    const item =
+      grouped.get(materialId);
+
+    item.totalLocationsQty +=
+      Number(
+        row.currentQty || 0
+      );
+
+    item.salesPeriodQty +=
+      Number(
+        row.movementTotals?.salesQty || 0
+      );
+
+    if (row.permitsSales === false) {
+      item.material.permitsSales =
+        false;
+    }
+  }
+
+  return [...grouped.values()]
+    .map(row => {
+      const permitsSales =
+        row.material.permitsSales !== false;
+
+      const salesPerDayQty =
+        permitsSales &&
+        businessDays > 0 &&
+        row.salesPeriodQty > 0
+          ? row.salesPeriodQty /
+            businessDays
+          : null;
+
+      return {
+        ...row,
+
+        salesPerDayQty,
+
+        salesBlocked:
+          !permitsSales,
+
+        salesNotEstimated:
+          permitsSales &&
+          !(salesPerDayQty > 0)
+      };
+    });
+}
+
 function roundStockDurationForDisplay(value) {
   const days = Number(value);
   if (!Number.isFinite(days)) return null;
@@ -269,24 +472,86 @@ function futureStockDurationDays(row, plannedRemainingQty = 0) {
   return Math.max(balance, 0) / salesPerDay;
 }
 
-function pcpStatusForDuration(durationDays, minimumDays) {
-  if (!Number.isFinite(durationDays)) return { key: 'unknown', label: 'Sem estimativa', className: 'unknown' };
-  if (durationDays <= minimumDays * 0.5) return { key: 'critical', label: 'Crítico', className: 'critical' };
-  if (durationDays <= minimumDays) return { key: 'attention', label: 'Atenção', className: 'attention' };
-  if (durationDays <= minimumDays * 1.2) return { key: 'productionAlert', label: 'Alerta de produção', className: 'production-alert' };
-  return { key: 'outOfRadar', label: 'Fora do radar', className: 'out-of-radar' };
+function pcpStatusForDuration(durationDays) {
+  if (!Number.isFinite(durationDays)) {
+    return {
+      key: 'unknown',
+      label: 'Sem estimativa',
+      className: 'unknown'
+    };
+  }
+
+  if (durationDays <= PCP_ZERO_DAYS) {
+    return {
+      key: 'zeroed',
+      label: 'Zerado',
+      className: 'zeroed'
+    };
+  }
+
+  if (durationDays <= PCP_CRITICAL_DAYS) {
+    return {
+      key: 'critical',
+      label: 'Crítico',
+      className: 'critical'
+    };
+  }
+
+  if (durationDays <= PCP_ATTENTION_DAYS) {
+    return {
+      key: 'attention',
+      label: 'Atenção',
+      className: 'attention'
+    };
+  }
+
+  return {
+    key: 'outOfRadar',
+    label: 'Fora do radar',
+    className: 'out-of-radar'
+  };
 }
 
 function plannedPcpStatus() {
-  return { key: 'planned', label: 'Planejado', className: 'planned' };
+  return {
+    key: 'planned',
+    label: 'Planejado',
+    className: 'planned'
+  };
 }
 
-function pcpStatusForIdealTarget(baseStatus, durationDays, idealDays) {
-  if (baseStatus?.key !== 'outOfRadar') return baseStatus;
-  if (Number.isFinite(durationDays) && Number.isFinite(Number(idealDays)) && durationDays < Number(idealDays)) {
-    return { key: 'belowTarget', label: 'Abaixo da meta', className: 'below-target' };
+function pcpStatusForIdealTarget(
+  baseStatus,
+  durationDays,
+  idealDays
+) {
+  if (
+    baseStatus?.key !== 'outOfRadar'
+  ) {
+    return baseStatus;
   }
-  return baseStatus;
+
+  if (
+    Number.isFinite(durationDays)
+    &&
+    Number.isFinite(
+      Number(idealDays)
+    )
+    &&
+    durationDays < Number(idealDays)
+  ) {
+    return {
+      key: 'belowTarget',
+      label: 'Abaixo da meta',
+      className: 'below-target'
+    };
+  }
+
+  return {
+    key: 'ok',
+    label: 'OK',
+    className: 'ok'
+  };
 }
 
 function materialKey(row) {
@@ -475,27 +740,73 @@ function pcpSuggestionForIdealDays(row, idealDays) {
 }
 
 function idealOverrideForKey(overrides, key) {
-  const value = Number(overrides?.[key]);
-  return Number.isInteger(value) && value > 0 ? value : null;
+  const value =
+    Number(
+      overrides?.[key]
+    );
+
+  return Number.isInteger(value)
+    &&
+    value > PCP_ATTENTION_DAYS
+      ? value
+      : null;
 }
 
 function pcpCoverageGroup(row) {
-  if (row.status.key === 'planned') return 'planned';
-  const suffix = Number(row.plannedRemainingQty || 0) > 0 ? 'Partial' : 'Open';
-  if (row.baseStatus?.key === 'critical') return `critical${suffix}`;
-  if (row.baseStatus?.key === 'attention') return `attention${suffix}`;
-  if (row.baseStatus?.key === 'productionAlert') return `productionAlert${suffix}`;
-  if (row.baseStatus?.key === 'belowTarget') return `belowTarget${suffix}`;
+  if (
+    row.status.key === 'planned'
+  ) {
+    return 'planned';
+  }
+
+  const suffix =
+    Number(
+      row.plannedRemainingQty || 0
+    ) > 0
+      ? 'Partial'
+      : 'Open';
+
+  if (
+    row.baseStatus?.key === 'zeroed'
+  ) {
+    return `zeroed${suffix}`;
+  }
+
+  if (
+    row.baseStatus?.key === 'critical'
+  ) {
+    return `critical${suffix}`;
+  }
+
+  if (
+    row.baseStatus?.key === 'attention'
+  ) {
+    return `attention${suffix}`;
+  }
+
+  if (
+    row.baseStatus?.key === 'belowTarget'
+  ) {
+    return `belowTarget${suffix}`;
+  }
+
   return 'other';
 }
 
 function buildPcpRows(stockRows = [], minimumDays, matrixRows = [], priorities = {}, idealDays = minimumDays * 1.5, idealOverrides = {}, plannedBalances = new Map()) {
   return stockRows
-    .filter(row => row.salesBlocked !== true)
-    .map(row => {
+  .filter(
+    row =>
+      row.salesBlocked !== true &&
+      row.material?.permitsSales !== false
+  )
+  .map(row => {
       const key = materialKey(row);
       const durationDays = currentStockDurationDays(row);
-      const baseStatus = pcpStatusForDuration(durationDays, minimumDays);
+      const baseStatus =
+  pcpStatusForDuration(
+    durationDays
+  );
       const productivity = bestProductivityForMaterial(matrixRows, row);
       const rowIdealDays = idealOverrideForKey(idealOverrides, key) || idealDays;
       const plannedBalance = plannedBalanceForStockRow(plannedBalances, row);
@@ -506,7 +817,8 @@ function buildPcpRows(stockRows = [], minimumDays, matrixRows = [], priorities =
         && suggestion.grossTargetQty > 0
         && plannedRemainingQty >= suggestion.grossTargetQty;
       const actionStatus = pcpStatusForIdealTarget(baseStatus, durationDays, rowIdealDays);
-      const status = fullyPlanned ? plannedPcpStatus() : actionStatus;
+      const status =
+  actionStatus;
       return {
         ...row,
         key,
@@ -555,7 +867,7 @@ function recalculatePcpRowsForIdealDays(rows = [], idealDays, idealOverrides = {
       baseTargetQty: suggestion.baseTargetQty,
       thresholdStatus: row.thresholdStatus || row.baseStatus,
       baseStatus: actionStatus,
-      status: fullyPlanned ? plannedPcpStatus() : actionStatus,
+      status: actionStatus,
       targetQty: suggestion.targetQty,
       productionDays: suggestion.productionDays,
       salesDuringProductionQty: suggestion.salesDuringProductionQty,
@@ -801,10 +1113,40 @@ function sendPcpRowsToPlanning(rows) {
     lastPayload: null,
     currentSimulation: null
   }));
-  sessionStorage.setItem('planejamento_active_tab', 'planning');
+    sessionStorage.setItem('planejamento_active_tab', 'planning');
   sessionStorage.setItem('planejamento_planning_tab', 'simulation');
-  window.dispatchEvent(new CustomEvent('planejamento:toast', { detail: `${selectedRows.length} produção(ões) enviadas ao rascunho do Planejamento.` }));
-  window.dispatchEvent(new CustomEvent('planejamento:navigate'));
+  sessionStorage.setItem('planejamento_pcp_auto_simulate', '1');
+
+  const url = new URL(window.location.href);
+
+  url.searchParams.set(
+    'tab',
+    'planning'
+  );
+
+  window.history.replaceState(
+    null,
+    '',
+    url.pathname
+    + url.search
+    + url.hash
+  );
+
+  window.dispatchEvent(
+    new CustomEvent(
+      'planejamento:toast',
+      {
+        detail:
+          `${selectedRows.length} produção(ões) enviadas ao rascunho do Planejamento.`
+      }
+    )
+  );
+
+  window.dispatchEvent(
+    new CustomEvent(
+      'planejamento:navigate'
+    )
+  );
 }
 
 function normalizeText(value) {
@@ -1300,14 +1642,53 @@ export function AnalysisPage(options = {}) {
   if (commercialMode) {
     page.querySelector('h1').textContent = 'Comercial';
   }
-  const assistantPanel = document.createElement('div');
-  assistantPanel.className = 'panel analysis-assistant-panel';
-  assistantPanel.innerHTML = '<div class="analysis-assistant-target"></div>';
-  if (!commercialMode) page.appendChild(assistantPanel);
-  const analysisTabs = [
-    { id: 'assistant', label: 'Assistente PCP' },
-    { id: 'calendar', label: 'Calendário' }
-  ];
+  const assistantPanel =
+  document.createElement(
+    'div'
+  );
+
+assistantPanel.className =
+  'panel analysis-assistant-panel';
+
+assistantPanel.innerHTML =
+  '<div class="analysis-assistant-target"></div>';
+
+if (!commercialMode) {
+  page.appendChild(
+    assistantPanel
+  );
+}
+
+
+const calculationsPanel =
+  !commercialMode
+    ? AnalysisCalculationsPanel()
+    : null;
+
+
+if (calculationsPanel) {
+  page.appendChild(
+    calculationsPanel.element
+  );
+}
+
+
+const analysisTabs = [
+  {
+    id: 'assistant',
+    label: 'Assistente PCP'
+  },
+
+  {
+    id: 'calendar',
+    label: 'Calendário'
+  },
+
+  {
+    id: 'calculations',
+    label: 'Cálculos'
+  }
+];
   let activeInternalTab = commercialMode ? 'calendar' : sessionStorage.getItem('planejamento_analysis_tab') || 'assistant';
   if (!analysisTabs.some(tab => tab.id === activeInternalTab)) activeInternalTab = 'assistant';
   const panel = page.querySelector('.analysis-panel');
@@ -1399,17 +1780,144 @@ export function AnalysisPage(options = {}) {
   }
 
   function stockAlertTitle(alert) {
-    if (!alert) return '';
-    const count = Number(alert.criticalCount ?? alert.count ?? 0);
-    return `${count} materiais abaixo do estoque mínimo`;
+  if (!alert) {
+    return '';
   }
 
-  function stockAlertIcon(date, extraClass = '') {
-    const alert = stockAlertForDate(date);
-    if (!alert) return '';
-    const titleText = stockAlertTitle(alert);
-    return `<span class="analysis-stock-alert${extraClass ? ` ${extraClass}` : ''}" title="${escapeHtml(titleText)}" aria-label="${escapeHtml(titleText)}">!</span>`;
+  const parts = [
+    [
+      'Zerado',
+      Number(
+        alert.zeroedCount || 0
+      )
+    ],
+
+    [
+      'Crítico',
+      Number(
+        alert.criticalCount
+        ?? alert.count
+        ?? 0
+      )
+    ],
+
+    [
+      'Atenção',
+      Number(
+        alert.attentionCount || 0
+      )
+    ],
+
+    [
+      'Abaixo da meta',
+      Number(
+        alert.belowTargetCount || 0
+      )
+    ]
+  ]
+    .filter(
+      (
+        [
+          ,
+          count
+        ]
+      ) =>
+        Number.isFinite(count)
+        &&
+        count > 0
+    )
+    .map(
+      (
+        [
+          label,
+          count
+        ]
+      ) =>
+        `${label}: ${count}`
+    );
+
+  return parts.length
+    ? parts.join(' · ')
+    : 'Estoque: OK';
+}
+
+function stockAlertSeverity(alert) {
+  if (
+    Number(
+      alert?.zeroedCount || 0
+    ) > 0
+  ) {
+    return 'zeroed';
   }
+
+  if (
+    Number(
+      alert?.criticalCount
+      ?? alert?.count
+      ?? 0
+    ) > 0
+  ) {
+    return 'critical';
+  }
+
+  if (
+    Number(
+      alert?.attentionCount || 0
+    ) > 0
+  ) {
+    return 'attention';
+  }
+
+  if (
+    Number(
+      alert?.belowTargetCount || 0
+    ) > 0
+  ) {
+    return 'below-target';
+  }
+
+  return 'ok';
+}
+
+function stockAlertIcon(
+  date,
+  extraClass = ''
+) {
+  const alert =
+    stockAlertForDate(
+      date
+    );
+
+  if (!alert) {
+    return '';
+  }
+
+  const titleText =
+    stockAlertTitle(
+      alert
+    );
+
+  const severity =
+    stockAlertSeverity(
+      alert
+    );
+
+  return `
+    <span
+      class="analysis-stock-alert ${escapeHtml(
+        severity
+      )}${
+        extraClass
+          ? ` ${extraClass}`
+          : ''
+      }"
+      title="${escapeHtml(titleText)}"
+      aria-label="${escapeHtml(titleText)}"
+    >
+      !
+    </span>
+  `;
+}
 
   function commercialPinsForDate(date) {
     return currentCommercialPins.filter(pin => pin.date === date);
@@ -1420,11 +1928,45 @@ export function AnalysisPage(options = {}) {
   }
 
   function stockAlertsMap(alerts = {}) {
-    return new Map(Object.entries(alerts).map(([date, alert]) => [date, {
-      ...alert,
-      criticalCount: Number(alert.criticalCount ?? alert.count ?? 0)
-    }]));
-  }
+  return new Map(
+    Object.entries(alerts)
+      .map(
+        (
+          [
+            date,
+            alert
+          ]
+        ) => [
+          date,
+          {
+            ...alert,
+
+            zeroedCount:
+              Number(
+                alert.zeroedCount || 0
+              ),
+
+            criticalCount:
+              Number(
+                alert.criticalCount
+                ?? alert.count
+                ?? 0
+              ),
+
+            attentionCount:
+              Number(
+                alert.attentionCount || 0
+              ),
+
+            belowTargetCount:
+              Number(
+                alert.belowTargetCount || 0
+              )
+          }
+        ]
+      )
+  );
+}
 
   function stockImportCacheKey(latestImport) {
     if (!latestImport) return 'none';
@@ -1436,7 +1978,19 @@ export function AnalysisPage(options = {}) {
     if (commercialMode || !minimumDays) return new Map();
     const cacheKey = stockAlertsCacheKey(range, minimumDays);
     if (stockAlertsCache.has(cacheKey)) return stockAlertsCache.get(cacheKey);
-    const result = await api(`/planning/analysis/stock-alerts?start=${range.start}&end=${range.end}&minimumDays=${encodeURIComponent(minimumDays)}`);
+    const idealDays =
+  readPcpIdealDays(
+    minimumDays
+  );
+
+const result =
+  await api(
+    `/planning/analysis/stock-alerts?start=${range.start}&end=${range.end}`
+    + `&minimumDays=${encodeURIComponent(minimumDays)}`
+    + `&criticalDays=${PCP_CRITICAL_DAYS}`
+    + `&attentionDays=${PCP_ATTENTION_DAYS}`
+    + `&idealDays=${encodeURIComponent(idealDays)}`
+  );
     const alerts = stockAlertsMap(result.alerts || {});
     const responseImportKey = stockImportCacheKey(result.latestImport);
     latestStockImportKey = responseImportKey;
@@ -1549,22 +2103,127 @@ export function AnalysisPage(options = {}) {
   }
 
   function renderInternalTab() {
-    if (!commercialMode) {
-      const tab = analysisTabs.find(item => item.id === activeInternalTab) || analysisTabs[0];
-      page.querySelector('.page-header h1').textContent = `Análise / ${tab.label}`;
-      sessionStorage.setItem('planejamento_analysis_tab', activeInternalTab);
-    }
-    panel.hidden = activeInternalTab !== 'calendar';
-    if (assistantPanel) assistantPanel.hidden = activeInternalTab !== 'assistant';
-    if (activeInternalTab === 'assistant') loadPcpAssistant().catch(error => {
-      if (assistantTarget) setInternalError(assistantTarget, error.message || 'Não foi possível carregar o Assistente PCP.');
-    });
+  if (!commercialMode) {
+    const tab =
+      analysisTabs.find(
+        item =>
+          item.id === activeInternalTab
+      )
+      || analysisTabs[0];
+
+    page
+      .querySelector(
+        '.page-header h1'
+      )
+      .textContent =
+        `Análise / ${tab.label}`;
+
+    sessionStorage.setItem(
+      'planejamento_analysis_tab',
+      activeInternalTab
+    );
   }
 
+
+  /*
+   * CALENDÁRIO
+   */
+  panel.hidden =
+    activeInternalTab
+    !==
+    'calendar';
+
+
+  /*
+   * ASSISTENTE PCP
+   */
+  if (assistantPanel) {
+    assistantPanel.hidden =
+      activeInternalTab
+      !==
+      'assistant';
+  }
+
+
+  /*
+   * CÁLCULOS
+   */
+  if (calculationsPanel) {
+    calculationsPanel
+      .element
+      .hidden =
+        activeInternalTab
+        !==
+        'calculations';
+  }
+
+
+  /*
+   * CARREGA PCP
+   */
+  if (
+    activeInternalTab
+    ===
+    'assistant'
+  ) {
+    loadPcpAssistant()
+      .catch(
+        error => {
+          if (
+            assistantTarget
+          ) {
+            setInternalError(
+              assistantTarget,
+
+              error.message
+              ||
+              'Não foi possível carregar o Assistente PCP.'
+            );
+          }
+        }
+      );
+  }
+
+
+  /*
+   * CARREGA CÁLCULOS
+   */
+  if (
+    activeInternalTab
+    ===
+    'calculations'
+  ) {
+    calculationsPanel
+      ?.load();
+  }
+}
+
   function renderPcpAssistant(allRows, minimumDays) {
-    const rows = sortPcpRows(allRows.filter(row => row.status.key !== 'outOfRadar'));
-    const recommendationRows = rows.filter(row => Number(row.targetQty) > 0).slice(0, 5);
-    const counts = allRows.reduce((total, row) => {
+    const rows =
+  sortPcpRows(
+    allRows.filter(
+      row =>
+        Number.isFinite(
+          row.durationDays
+        ) &&
+        Number.isFinite(
+          Number(row.idealDays)
+        ) &&
+        row.durationDays <
+  Number(row.idealDays)
+    )
+  );
+
+const recommendationRows =
+  rows
+    .filter(
+      row =>
+        Number(row.targetQty) > 0
+    )
+    .slice(0, 5);
+
+const counts =
+  rows.reduce((total, row) => {
       total[row.status.key] = (total[row.status.key] || 0) + 1;
       return total;
     }, {});
@@ -1573,20 +2232,88 @@ export function AnalysisPage(options = {}) {
     assistantTarget.innerHTML = `
       <div class="pcp-assistant">
         <div class="pcp-summary-grid">
-          <article class="pcp-summary-card critical"><span>Críticos</span><strong>${counts.critical || 0}</strong></article>
-          <article class="pcp-summary-card attention"><span>Atenção</span><strong>${counts.attention || 0}</strong></article>
-          <article class="pcp-summary-card production-alert"><span>Alerta de produção</span><strong>${counts.productionAlert || 0}</strong></article>
-          <article class="pcp-summary-card below-target"><span>Abaixo da meta</span><strong>${counts.belowTarget || 0}</strong></article>
-          <article class="pcp-summary-card target">
-            <label for="pcp-ideal-days">Meta ideal (dias)</label>
-            <input id="pcp-ideal-days" class="pcp-ideal-days-input" type="number" min="1" step="1" value="${escapeHtml(idealDays)}" data-pcp-ideal-days />
-          </article>
-        </div>
-        <section class="pcp-rules-strip">
-          <span>Estoque mínimo: <strong>${formatNumber(minimumDays, 0, 0)} dias úteis</strong></span>
-          <span>Faixa de alerta: <strong>${formatNumber(minimumDays * 0.5, 0, 0)} a ${formatNumber(minimumDays * 1.2, 0, 0)} dias</strong></span>
-          <span>Meta ideal: <strong>${formatNumber(idealDays, 0, 0)} dias úteis</strong></span>
-        </section>
+  <article class="pcp-summary-card zeroed">
+    <span>Zerados</span>
+    <strong>${counts.zeroed || 0}</strong>
+  </article>
+
+  <article class="pcp-summary-card critical">
+    <span>Críticos</span>
+    <strong>${counts.critical || 0}</strong>
+  </article>
+
+  <article class="pcp-summary-card attention">
+    <span>Atenção</span>
+    <strong>${counts.attention || 0}</strong>
+  </article>
+
+  <article class="pcp-summary-card below-target">
+    <span>Abaixo da meta</span>
+    <strong>${counts.belowTarget || 0}</strong>
+  </article>
+
+  <article class="pcp-summary-card target">
+    <label for="pcp-ideal-days">
+      Meta ideal (dias)
+    </label>
+
+    <input
+      id="pcp-ideal-days"
+      class="pcp-ideal-days-input"
+      type="number"
+      min="21"
+      step="1"
+      value="${escapeHtml(idealDays)}"
+      data-pcp-ideal-days
+    />
+  </article>
+</div>
+
+<section class="pcp-rules-strip">
+  <span>
+    Zerado:
+    <strong>0 dias</strong>
+  </span>
+
+  <span>
+    Crítico:
+    <strong>
+      1 a ${PCP_CRITICAL_DAYS} dias
+    </strong>
+  </span>
+
+  <span>
+    Atenção:
+    <strong>
+      ${PCP_CRITICAL_DAYS + 1}
+      a
+      ${PCP_ATTENTION_DAYS} dias
+    </strong>
+  </span>
+
+  <span>
+    Abaixo da meta:
+    <strong>
+      ${PCP_ATTENTION_DAYS + 1}
+      a
+      ${Math.max(
+        PCP_ATTENTION_DAYS + 1,
+        idealDays - 1
+      )} dias
+    </strong>
+  </span>
+
+  <span>
+    Meta ideal:
+    <strong>
+      ${formatNumber(
+        idealDays,
+        0,
+        0
+      )} dias ou mais
+    </strong>
+  </span>
+</section>
         <section class="pcp-recommendation">
           <div class="pcp-recommendation-header">
             <h3>Ordem recomendada</h3>
@@ -1659,7 +2386,7 @@ export function AnalysisPage(options = {}) {
                   <td class="pcp-date-cell">${escapeHtml(stockEndLabel)}</td>
                   <td>
                     <label class="pcp-row-ideal-control">
-                      <input class="pcp-row-ideal-input" type="number" min="1" step="1" value="${escapeHtml(row.idealDays)}" data-pcp-row-ideal="${escapeHtml(row.key)}" aria-label="Meta ideal de ${escapeHtml(row.material?.name || '')}" />
+                      <input class="pcp-row-ideal-input" type="number" min="21" step="1" value="${escapeHtml(row.idealDays)}" data-pcp-row-ideal="${escapeHtml(row.key)}" aria-label="Meta ideal de ${escapeHtml(row.material?.name || '')}" />
                       <span>dias</span>
                     </label>
                   </td>
@@ -1686,15 +2413,32 @@ export function AnalysisPage(options = {}) {
       assistantTarget.innerHTML = '<div class="empty-state">Configure o estoque mínimo em dias na tela Estoque para visualizar o Assistente PCP.</div>';
       return;
     }
-    const [overview, matrixRows, plannedBalance] = await Promise.all([
-      api('/stock/materials-overview'),
-      api('/productivity'),
-      api('/planning/analysis/planned-balance')
-    ]);
+    const [overview, matrixRows, plannedBalance] =
+  await Promise.all([
+    api('/stock/current'),
+    api('/productivity'),
+    api('/planning/analysis/planned-balance')
+  ]);
     const priorities = readPcpPriorities();
     const idealDays = readPcpIdealDays(minimumDays);
     const idealOverrides = readPcpIdealOverrides();
-    currentPcpRows = buildPcpRows(overview.rows || [], minimumDays, matrixRows || [], priorities, idealDays, idealOverrides, plannedBalanceMap(plannedBalance.rows || []));
+    const stockRows =
+  pcpStockRowsFromCurrent(
+    overview
+  );
+
+currentPcpRows =
+  buildPcpRows(
+    stockRows,
+    minimumDays,
+    matrixRows || [],
+    priorities,
+    idealDays,
+    idealOverrides,
+    plannedBalanceMap(
+      plannedBalance.rows || []
+    )
+  );
     renderPcpAssistant(currentPcpRows, minimumDays);
   }
 
@@ -1714,7 +2458,13 @@ export function AnalysisPage(options = {}) {
 
   function applyPcpGlobalIdealDaysInput(input, { render = true } = {}) {
     const value = Number(String(input.value || '').trim());
-    if (!Number.isInteger(value) || value <= 0) return;
+    if (
+  !Number.isInteger(value)
+  ||
+  value <= PCP_ATTENTION_DAYS
+) {
+  return;
+}
     const selectedKeys = selectedPcpRowsFromTable().map(row => row.key);
     writePcpIdealDays(value);
     writePcpIdealOverrides({});
@@ -1734,7 +2484,11 @@ export function AnalysisPage(options = {}) {
     const value = String(input.value || '').trim();
     if (value === '') {
       delete overrides[input.dataset.pcpRowIdeal];
-    } else if (/^\d+$/.test(value) && Number(value) > 0) {
+    } else if (
+  /^\d+$/.test(value)
+  &&
+  Number(value) > PCP_ATTENTION_DAYS
+) {
       overrides[input.dataset.pcpRowIdeal] = Number(value);
     } else {
       return;

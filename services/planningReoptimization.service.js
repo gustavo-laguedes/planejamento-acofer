@@ -1349,7 +1349,17 @@ function pastFingerprint(allocations, cutoff) {
     .sort((left, right) => String(left.allocationId).localeCompare(String(right.allocationId))));
 }
 
-function validationContext(baseline, calendar, stockContext, candidateDraft) {
+function validationContext(
+  baseline,
+  calendar,
+  stockContext,
+  candidateDraft
+) {
+  const skipStockValidation =
+    baseline?.skipStockValidation === true
+    ||
+    stockContext?.skipStockValidation === true;
+
   return {
     draft: candidateDraft,
     shifts: baseline.shifts || calendar.shifts.map(shift => ({ shiftId: shift.shiftId, label: shift.label, startTime: minutesTime(shift.start), endTime: minutesTime(shift.end), teamAvailable: shift.teamAvailable })),
@@ -1361,9 +1371,38 @@ function validationContext(baseline, calendar, stockContext, candidateDraft) {
     transports: baseline.transports || [],
     minimumStartRatio: 1,
     dependencyCompletionBufferMinutes: number(baseline.dependencyCompletionBufferMinutes, 60),
-    stock: stockContext.stock ?? baseline.stock ?? [],
-    stockMinimums: stockContext.stockMinimums ?? baseline.stockMinimums ?? [],
-    stockLocations: stockContext.stockLocations ?? baseline.stockLocations ?? [],
+    stock:
+  skipStockValidation
+    ? undefined
+    : (
+        stockContext.stock
+        ??
+        baseline.stock
+        ??
+        []
+      ),
+
+stockMinimums:
+  skipStockValidation
+    ? undefined
+    : (
+        stockContext.stockMinimums
+        ??
+        baseline.stockMinimums
+        ??
+        []
+      ),
+
+stockLocations:
+  skipStockValidation
+    ? undefined
+    : (
+        stockContext.stockLocations
+        ??
+        baseline.stockLocations
+        ??
+        []
+      ),
     setupMinutes: number(baseline.setupMinutes),
     dailyTeamOverrides: candidateDraft.dailyTeamOverrides || {},
     setupRules: baseline.setupRules || [],

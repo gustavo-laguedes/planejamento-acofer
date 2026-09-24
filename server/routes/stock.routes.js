@@ -4,12 +4,17 @@ import { businessDaysInclusive } from '../../services/workingDays.service.js';
 import { requirePermission, requireSuperAdmin } from './middleware.js';
 import { auditUser, recordAuditLog } from '../audit.js';
 import { resolveMaterialStockMetrics } from '../../services/materialStockMetrics.service.js';
+import { buildStockBalances } from '../../services/stockBalance.service.js';
 
 const router = Router();
 
 function toNumber(value) {
   const number = Number(value || 0);
   return Number.isFinite(number) ? number : 0;
+}
+
+function roundPurchaseQty(value, digits = 6) {
+  return Number(toNumber(value).toFixed(digits));
 }
 
 function normalizeText(value) {
@@ -152,6 +157,271 @@ async function buildInventoryTemplate(db) {
   };
 }
 
+export async function loadCurrentStockContext(
+  db,
+  { excludePlanId = null } = {}
+) {
+    const [materials, locations, inventories, productionLaunches, transports, materialPurchases, sales, plannedRows, materialInputs, lastImportRows] = await Promise.all([
+   db`
+  SELECT id, name, codes, primary_unit, permits_sales, active
+  FROM materials
+  WHERE active = true
+  ORDER BY name
+`,
+    db`
+      SELECT id, code, name, active
+      FROM locations
+      WHERE active = true
+      ORDER BY code NULLS LAST, name
+    `,
+    db`
+      SELECT i.inventory_count_id, i.material_id, i.location_id, i.counted_qty, c.created_at
+      FROM inventory_count_items i
+      JOIN inventory_counts c ON c.id = i.inventory_count_id
+      JOIN materials m ON m.id = i.material_id
+      JOIN locations l ON l.id = i.location_id
+      WHERE m.active = true
+        AND l.active = true
+      ORDER BY c.created_at DESC, c.id DESC, i.id DESC
+    `,
+    db`
+      SELECT
+  p.id,
+  p.production_date,
+  p.material_id,
+  p.quantity,
+  p.primary_unit,
+  p.production_model_name,
+  p.consumed_inputs,
+  p.machine_name,
+  p.created_at,
+  p.location_name,
+  COALESCE(
+    p.location_id,
+    machine_location.location_id
+  ) AS location_id
+FROM production_launches p
+      LEFT JOIN LATERAL (
+        SELECT m.location_id
+        FROM machines m
+        WHERE LOWER(TRIM(m.name)) = LOWER(TRIM(p.machine_name))
+        ORDER BY m.active DESC, m.id
+        LIMIT 1
+      ) machine_location ON true
+      WHERE LOWER(TRIM(COALESCE(p.status, ''))) NOT IN ('canceled', 'cancelled', 'cancelado', 'cancelada')
+        AND p.quantity > 0
+    `,
+        db`
+      SELECT id, transport_date, material_id, origin_location_id, destination_location_id,
+             quantity, invoice_number, notes, created_at
+      FROM stock_transport_records
+      WHERE LOWER(TRIM(COALESCE(status, 'active'))) NOT IN ('canceled', 'cancelled', 'cancelado', 'cancelada')
+        AND quantity > 0
+    `,
+    db`
+      SELECT i.id,
+             p.purchase_date,
+             i.material_id,
+             i.location_id,
+             i.stock_quantity AS quantity,
+             p.invoice_number,
+             p.certificate_number,
+             p.supplier,
+             p.created_at
+      FROM purchase_items i
+      JOIN purchase_records p ON p.id = i.purchase_id
+      WHERE i.stock_quantity > 0
+    `,
+    db`
+      SELECT s.import_id, s.material_id, s.location_id, s.period_start, s.period_end,
+             s.sales_qty, s.product_codes, s.created_at
+      FROM stock_import_sales_history s
+      JOIN import_history h ON h.id = s.import_id
+      WHERE h.status = 'success'
+    `,
+   
+    db`
+      WITH active_plans AS (
+        SELECT *
+        FROM production_plans
+        WHERE LOWER(
+          TRIM(
+            COALESCE(status, '')
+          )
+        ) NOT IN (
+          'canceled',
+          'cancelled',
+          'cancelado',
+          'cancelada',
+          'deleted',
+          'excluido',
+          'inactive',
+          'inativo'
+        )
+          AND (
+            ${excludePlanId}::bigint IS NULL
+            OR id <> ${excludePlanId}
+          )
+      ),
+
+      daily_plans AS (
+        SELECT
+          d.planned_date,
+          d.material_name,
+          d.material_code,
+          d.machine_name,
+          d.planned_unit,
+          SUM(d.planned_qty) AS planned_qty
+        FROM production_plan_days d
+        JOIN active_plans p
+          ON p.id = d.plan_id
+        WHERE d.planned_qty > 0
+        GROUP BY
+          d.planned_date,
+          d.material_name,
+          d.material_code,
+          d.machine_name,
+          d.planned_unit
+      ),
+
+      legacy_fallback AS (
+        SELECT
+          p.start_date AS planned_date,
+          p.material_name,
+          p.material_code,
+          p.machine_name,
+          p.planned_unit,
+          SUM(p.planned_qty) AS planned_qty
+        FROM active_plans p
+        WHERE p.planned_qty > 0
+          AND NOT EXISTS (
+            SELECT 1
+            FROM production_plan_days d
+            WHERE d.plan_id = p.id
+              AND d.planned_qty > 0
+          )
+        GROUP BY
+          p.start_date,
+          p.material_name,
+          p.material_code,
+          p.machine_name,
+          p.planned_unit
+      ),
+
+      planned AS (
+        SELECT *
+        FROM daily_plans
+
+        UNION ALL
+
+        SELECT *
+        FROM legacy_fallback
+      )
+
+      SELECT
+        p.planned_date,
+        material_match.id AS material_id,
+        machine_location.location_id,
+        SUM(p.planned_qty) AS planned_qty
+
+      FROM planned p
+
+      JOIN LATERAL (
+        SELECT m.id
+
+        FROM materials m
+
+        WHERE m.active = true
+          AND (
+            LOWER(
+              TRIM(m.name)
+            )
+            =
+            LOWER(
+              TRIM(p.material_name)
+            )
+
+            OR (
+              NULLIF(
+                TRIM(p.material_code),
+                ''
+              ) IS NOT NULL
+
+              AND p.material_code
+                = ANY(m.codes)
+            )
+          )
+
+        ORDER BY m.id
+
+        LIMIT 1
+      ) material_match
+        ON true
+
+      LEFT JOIN LATERAL (
+        SELECT m.location_id
+
+        FROM machines m
+
+        WHERE LOWER(
+          TRIM(m.name)
+        )
+        =
+        LOWER(
+          TRIM(p.machine_name)
+        )
+
+        ORDER BY
+          m.active DESC,
+          m.id
+
+        LIMIT 1
+      ) machine_location
+        ON true
+
+      WHERE
+        machine_location.location_id
+        IS NOT NULL
+
+      GROUP BY
+        p.planned_date,
+        material_match.id,
+        machine_location.location_id
+    `,
+   
+    db`
+      SELECT material_id, input_material_id, qty_per_output, production_model_name
+      FROM material_inputs
+    `,
+    db`
+      SELECT id, filename, status, total_rows, finished_at, created_at,
+             period_start, period_end, business_days
+      FROM import_history
+      WHERE status = 'success'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `
+  ]);
+
+  const rows = buildStockBalances({
+    materials,
+    locations: sortLocations(locations),
+    inventories,
+        productionLaunches,
+    transports,
+    materialPurchases,
+    sales,
+    plannedRows,
+    materialInputs
+  });
+
+  return {
+    locations: sortLocations(locations),
+    rows,
+    lastImport: lastImportRows[0] || null
+  };
+}
+
 async function ensureManualLaunchTables(db) {
   await db`
     CREATE TABLE IF NOT EXISTS stock_transport_records (
@@ -254,6 +524,31 @@ router.get('/summary', async (req, res, next) => {
       LIMIT 1
     `;
     res.json({ totals, byEstablishment, lastImport: lastImport || null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/current', requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    const context = await loadCurrentStockContext(db);
+    res.json(context);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/current/:materialId/:locationId', requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const db = requireDb();
+    const context = await loadCurrentStockContext(db);
+    const row = context.rows.find(item => (
+      String(item.materialId) === String(req.params.materialId)
+      && String(item.locationId) === String(req.params.locationId)
+    ));
+    if (!row) return res.status(404).json({ error: 'Saldo nao encontrado.' });
+    res.json({ ...row, lastImport: context.lastImport });
   } catch (error) {
     next(error);
   }
@@ -808,57 +1103,1047 @@ router.delete('/manual-transports/:id', requirePermission('launches:write'), req
   }
 });
 
-router.get('/material-purchases', requirePermission('launches:read'), async (req, res, next) => {
-  try {
-    const db = requireDb();
-    await ensureManualLaunchTables(db);
-    const rows = await db`
-      SELECT r.id, r.purchase_date, r.quantity, r.invoice_number, r.notes, r.user_id, r.created_at,
-             m.name AS material_name, m.codes AS material_codes,
-             l.name AS location_name
-      FROM material_purchase_records r
-      LEFT JOIN materials m ON m.id = r.material_id
-      LEFT JOIN locations l ON l.id = r.location_id
-      ORDER BY r.purchase_date DESC, r.created_at DESC, r.id DESC
-      LIMIT 200
-    `;
-    res.json(rows);
-  } catch (error) {
-    next(error);
+function purchaseStockQuantity(material, totalWeightKg) {
+  const primaryUnit = normalizeText(material?.primary_unit);
+  const secondaryUnit = normalizeText(material?.secondary_unit);
+  const factor = toNumber(material?.primary_to_secondary_factor);
+  const weight = toNumber(totalWeightKg);
+
+  if (!(weight > 0)) return null;
+
+  if (primaryUnit === 'kg') {
+    return roundPurchaseQty(weight);
   }
-});
 
-router.post('/material-purchases', requirePermission('launches:write'), async (req, res, next) => {
-  try {
-    const db = requireDb();
-    await ensureManualLaunchTables(db);
-    const purchaseDate = String(req.body.purchaseDate || '').slice(0, 10);
-    const materialId = Number(req.body.materialId);
-    const locationId = Number(req.body.locationId);
-    const quantity = toNumber(req.body.quantity);
-    const invoiceNumber = String(req.body.invoiceNumber || '').trim() || null;
-    const notes = String(req.body.notes || '').trim() || null;
-    const userId = req.user?.id || null;
+  if (
+    primaryUnit === 'un'
+    && secondaryUnit === 'kg'
+    && factor > 0
+  ) {
+    return roundPurchaseQty(
+      weight / factor
+    );
+  }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate) || !materialId || !locationId || quantity <= 0) {
-      return res.status(400).json({ error: 'Data, material, local e quantidade sao obrigatorios.' });
+  return null;
+}
+
+async function normalizePurchaseItems(
+  db,
+  rawItems = []
+) {
+  const sourceItems =
+    Array.isArray(rawItems)
+      ? rawItems
+      : [];
+
+  if (!sourceItems.length) {
+    return {
+      error:
+        'Adicione pelo menos um material na compra.'
+    };
+  }
+
+  const items = [];
+
+  for (
+    let itemIndex = 0;
+    itemIndex < sourceItems.length;
+    itemIndex += 1
+  ) {
+    const source =
+      sourceItems[itemIndex] || {};
+
+    const materialId =
+      Number(source.materialId);
+
+    const locationId =
+      Number(source.locationId);
+
+    const rawLots =
+      Array.isArray(source.lots)
+        ? source.lots
+        : [];
+
+    if (!materialId || !locationId) {
+      return {
+        error:
+          'Material e local de entrada sao obrigatorios em todos os itens.'
+      };
     }
 
-    const [row] = await db`
-      INSERT INTO material_purchase_records (
-        purchase_date, material_id, location_id, quantity, invoice_number, notes, user_id
-      )
-      VALUES (
-        ${purchaseDate}, ${materialId}, ${locationId}, ${quantity}, ${invoiceNumber}, ${notes}, ${userId}
-      )
-      RETURNING *
-    `;
-    res.status(201).json(row);
-  } catch (error) {
-    next(error);
-  }
-});
+    if (!rawLots.length) {
+      return {
+        error:
+          'Cada material precisa ter pelo menos um lote / UD.'
+      };
+    }
 
+    const [material] = await db`
+      SELECT
+        id,
+        name,
+        primary_unit,
+        secondary_unit,
+        primary_to_secondary_factor
+      FROM materials
+      WHERE id = ${materialId}
+        AND active = true
+      LIMIT 1
+    `;
+
+    const [location] = await db`
+      SELECT id
+      FROM locations
+      WHERE id = ${locationId}
+        AND active = true
+      LIMIT 1
+    `;
+
+    if (!material) {
+      return {
+        error:
+          'Material da compra nao encontrado ou inativo.'
+      };
+    }
+
+    if (!location) {
+      return {
+        error:
+          'Local de entrada nao encontrado ou inativo.'
+      };
+    }
+
+    const lots = [];
+
+    for (
+      let lotIndex = 0;
+      lotIndex < rawLots.length;
+      lotIndex += 1
+    ) {
+      const lot =
+        rawLots[lotIndex] || {};
+
+      const lotNumber =
+        String(
+          lot.lotNumber || ''
+        ).trim();
+
+      const heatNumber =
+        String(
+          lot.heatNumber || ''
+        ).trim();
+
+      const steelGrade =
+        String(
+          lot.steelGrade || ''
+        ).trim();
+
+      const weightKg =
+        roundPurchaseQty(
+          lot.weightKg,
+          3
+        );
+
+      const tensileStrengthMpa =
+        roundPurchaseQty(
+          lot.tensileStrengthMpa,
+          3
+        );
+
+      if (
+        !lotNumber
+        || !heatNumber
+        || !steelGrade
+        || !(weightKg > 0)
+        || !(tensileStrengthMpa > 0)
+      ) {
+        return {
+          error:
+            'Preencha lote / UD, peso, corrida, limite de resistencia e grau / qualidade em todos os lotes.'
+        };
+      }
+
+      lots.push({
+        lotNumber,
+        weightKg,
+        heatNumber,
+        tensileStrengthMpa,
+        steelGrade,
+        sortOrder: lotIndex
+      });
+    }
+
+    const totalWeightKg =
+      roundPurchaseQty(
+        lots.reduce(
+          (sum, lot) =>
+            sum + lot.weightKg,
+          0
+        ),
+        3
+      );
+
+    const stockQuantity =
+      purchaseStockQuantity(
+        material,
+        totalWeightKg
+      );
+
+    if (!(stockQuantity > 0)) {
+      return {
+        error:
+          `Nao foi possivel converter o peso comprado para a unidade principal do material ${material.name}.`
+      };
+    }
+
+    items.push({
+      materialId,
+      locationId,
+      primaryUnit:
+        material.primary_unit,
+      totalWeightKg,
+      stockQuantity,
+      sortOrder: itemIndex,
+      lots
+    });
+  }
+
+  return {
+    items
+  };
+}
+
+function groupPurchaseRows(
+  rows = []
+) {
+  const purchases =
+    new Map();
+
+  for (const row of rows) {
+    const purchaseKey =
+      String(
+        row.purchase_id
+      );
+
+    if (
+      !purchases.has(
+        purchaseKey
+      )
+    ) {
+      purchases.set(
+        purchaseKey,
+        {
+          id:
+            row.purchase_id,
+
+          purchase_date:
+            row.purchase_date,
+
+          supplier:
+            row.supplier,
+
+          invoice_number:
+            row.invoice_number,
+
+          certificate_number:
+            row.certificate_number,
+
+          invoice_total_weight_kg:
+            row.invoice_total_weight_kg,
+
+          notes:
+            row.notes,
+
+          user_id:
+            row.user_id,
+
+          created_at:
+            row.created_at,
+
+          updated_at:
+            row.updated_at,
+
+          items: [],
+
+          _items:
+            new Map()
+        }
+      );
+    }
+
+    const purchase =
+      purchases.get(
+        purchaseKey
+      );
+
+    if (
+      !row.purchase_item_id
+    ) {
+      continue;
+    }
+
+    const itemKey =
+      String(
+        row.purchase_item_id
+      );
+
+    if (
+      !purchase._items.has(
+        itemKey
+      )
+    ) {
+      const item = {
+        id:
+          row.purchase_item_id,
+
+        material_id:
+          row.material_id,
+
+        material_name:
+          row.material_name,
+
+        material_codes:
+          row.material_codes ||
+          [],
+
+        location_id:
+          row.location_id,
+
+        location_name:
+          row.location_name,
+
+        stock_quantity:
+          row.stock_quantity,
+
+        primary_unit:
+          row.primary_unit,
+
+        total_weight_kg:
+          row.item_total_weight_kg,
+
+        lots: []
+      };
+
+      purchase._items.set(
+        itemKey,
+        item
+      );
+
+      purchase.items.push(
+        item
+      );
+    }
+
+    if (
+      row.purchase_lot_id
+    ) {
+      purchase._items
+        .get(itemKey)
+        .lots
+        .push({
+          id:
+            row.purchase_lot_id,
+
+          lot_number:
+            row.lot_number,
+
+          weight_kg:
+            row.weight_kg,
+
+          heat_number:
+            row.heat_number,
+
+          tensile_strength_mpa:
+            row.tensile_strength_mpa,
+
+          steel_grade:
+            row.steel_grade
+        });
+    }
+  }
+
+  return [
+    ...purchases.values()
+  ].map(purchase => {
+    delete purchase._items;
+
+    return purchase;
+  });
+}
+
+router.get(
+  '/material-purchases',
+  requirePermission(
+    'launches:read'
+  ),
+  async (
+    req,
+    res,
+    next
+  ) => {
+    try {
+      const db =
+        requireDb();
+
+      const rows =
+        await db`
+          WITH recent AS (
+            SELECT *
+            FROM purchase_records
+            ORDER BY
+              purchase_date DESC,
+              created_at DESC,
+              id DESC
+            LIMIT 200
+          )
+
+          SELECT
+            p.id
+              AS purchase_id,
+
+            p.purchase_date,
+
+            p.supplier,
+
+            p.invoice_number,
+
+            p.certificate_number,
+
+            p.invoice_total_weight_kg,
+
+            p.notes,
+
+            p.user_id,
+
+            p.created_at,
+
+            p.updated_at,
+
+            i.id
+              AS purchase_item_id,
+
+            i.material_id,
+
+            i.location_id,
+
+            i.stock_quantity,
+
+            i.primary_unit,
+
+            i.total_weight_kg
+              AS item_total_weight_kg,
+
+            m.name
+              AS material_name,
+
+            m.codes
+              AS material_codes,
+
+            loc.name
+              AS location_name,
+
+            lot.id
+              AS purchase_lot_id,
+
+            lot.lot_number,
+
+            lot.weight_kg,
+
+            lot.heat_number,
+
+            lot.tensile_strength_mpa,
+
+            lot.steel_grade
+
+          FROM recent p
+
+          LEFT JOIN purchase_items i
+            ON i.purchase_id = p.id
+
+          LEFT JOIN materials m
+            ON m.id = i.material_id
+
+          LEFT JOIN locations loc
+            ON loc.id = i.location_id
+
+          LEFT JOIN purchase_lots lot
+            ON lot.purchase_item_id = i.id
+
+          ORDER BY
+            p.purchase_date DESC,
+            p.created_at DESC,
+            p.id DESC,
+            i.sort_order,
+            i.id,
+            lot.sort_order,
+            lot.id
+        `;
+
+      res.json(
+        groupPurchaseRows(
+          rows
+        )
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  '/material-purchases',
+  requirePermission(
+    'launches:write'
+  ),
+  async (
+    req,
+    res,
+    next
+  ) => {
+    try {
+      const db =
+        requireDb();
+
+      const purchaseDate =
+        String(
+          req.body.purchaseDate ||
+          ''
+        ).slice(
+          0,
+          10
+        );
+
+      const supplier =
+        String(
+          req.body.supplier ||
+          ''
+        ).trim();
+
+      const invoiceNumber =
+        String(
+          req.body.invoiceNumber ||
+          ''
+        ).trim();
+
+      const certificateNumber =
+        String(
+          req.body.certificateNumber ||
+          ''
+        ).trim();
+
+      const invoiceTotalWeightKg =
+        roundPurchaseQty(
+          req.body
+            .invoiceTotalWeightKg,
+          3
+        );
+
+      const notes =
+        String(
+          req.body.notes ||
+          ''
+        ).trim() ||
+        null;
+
+      const userId =
+        req.user?.id ||
+        null;
+
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(
+          purchaseDate
+        )
+        || !supplier
+        || !invoiceNumber
+        || !certificateNumber
+        || !(invoiceTotalWeightKg > 0)
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              'Data, fornecedor, nota fiscal, certificado e peso total da nota fiscal sao obrigatorios.'
+          });
+      }
+
+      const normalized =
+        await normalizePurchaseItems(
+          db,
+          req.body.items
+        );
+
+      if (
+        normalized.error
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              normalized.error
+          });
+      }
+
+      const lotsWeightKg =
+        roundPurchaseQty(
+          normalized.items
+            .reduce(
+              (
+                sum,
+                item
+              ) =>
+                sum +
+                item.totalWeightKg,
+              0
+            ),
+          3
+        );
+
+      if (
+        Math.abs(
+          lotsWeightKg -
+          invoiceTotalWeightKg
+        ) > 0.001
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              `A soma dos lotes (${lotsWeightKg} kg) precisa ser igual ao peso total da nota fiscal (${invoiceTotalWeightKg} kg).`
+          });
+      }
+
+      const purchase =
+        await db.begin(
+          async tx => {
+            const [header] =
+              await tx`
+                INSERT INTO purchase_records (
+                  purchase_date,
+                  supplier,
+                  invoice_number,
+                  certificate_number,
+                  invoice_total_weight_kg,
+                  notes,
+                  user_id
+                )
+                VALUES (
+                  ${purchaseDate},
+                  ${supplier},
+                  ${invoiceNumber},
+                  ${certificateNumber},
+                  ${invoiceTotalWeightKg},
+                  ${notes},
+                  ${userId}
+                )
+                RETURNING *
+              `;
+
+            for (
+              const item
+              of normalized.items
+            ) {
+              const [insertedItem] =
+                await tx`
+                  INSERT INTO purchase_items (
+                    purchase_id,
+                    material_id,
+                    location_id,
+                    stock_quantity,
+                    primary_unit,
+                    total_weight_kg,
+                    sort_order
+                  )
+                  VALUES (
+                    ${header.id},
+                    ${item.materialId},
+                    ${item.locationId},
+                    ${item.stockQuantity},
+                    ${item.primaryUnit},
+                    ${item.totalWeightKg},
+                    ${item.sortOrder}
+                  )
+                  RETURNING id
+                `;
+
+              for (
+                const lot
+                of item.lots
+              ) {
+                await tx`
+                  INSERT INTO purchase_lots (
+                    purchase_item_id,
+                    lot_number,
+                    weight_kg,
+                    heat_number,
+                    tensile_strength_mpa,
+                    steel_grade,
+                    sort_order
+                  )
+                  VALUES (
+                    ${insertedItem.id},
+                    ${lot.lotNumber},
+                    ${lot.weightKg},
+                    ${lot.heatNumber},
+                    ${lot.tensileStrengthMpa},
+                    ${lot.steelGrade},
+                    ${lot.sortOrder}
+                  )
+                `;
+              }
+            }
+
+            await recordAuditLog(
+              tx,
+              {
+                user:
+                  req.user,
+
+                action:
+                  'Compra registrada',
+
+                module:
+                  'Lancamentos',
+
+                description:
+                  `Registrou compra de ${normalized.items.length} material(is), fornecedor ${supplier}, nota ${invoiceNumber}, em ${purchaseDate}.`,
+
+                recordRef:
+                  header.id
+              }
+            );
+
+            return header;
+          }
+        );
+
+      res
+        .status(201)
+        .json(
+          purchase
+        );
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.put(
+  '/material-purchases/:id',
+  requirePermission(
+    'launches:write'
+  ),
+  async (
+    req,
+    res,
+    next
+  ) => {
+    try {
+      const db =
+        requireDb();
+
+      const purchaseDate =
+        String(
+          req.body.purchaseDate ||
+          ''
+        ).slice(
+          0,
+          10
+        );
+
+      const supplier =
+        String(
+          req.body.supplier ||
+          ''
+        ).trim();
+
+      const invoiceNumber =
+        String(
+          req.body.invoiceNumber ||
+          ''
+        ).trim();
+
+      const certificateNumber =
+        String(
+          req.body.certificateNumber ||
+          ''
+        ).trim();
+
+      const invoiceTotalWeightKg =
+        roundPurchaseQty(
+          req.body
+            .invoiceTotalWeightKg,
+          3
+        );
+
+      const notes =
+        String(
+          req.body.notes ||
+          ''
+        ).trim() ||
+        null;
+
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(
+          purchaseDate
+        )
+        || !supplier
+        || !invoiceNumber
+        || !certificateNumber
+        || !(invoiceTotalWeightKg > 0)
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              'Data, fornecedor, nota fiscal, certificado e peso total da nota fiscal sao obrigatorios.'
+          });
+      }
+
+      const normalized =
+        await normalizePurchaseItems(
+          db,
+          req.body.items
+        );
+
+      if (
+        normalized.error
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              normalized.error
+          });
+      }
+
+      const lotsWeightKg =
+        roundPurchaseQty(
+          normalized.items
+            .reduce(
+              (
+                sum,
+                item
+              ) =>
+                sum +
+                item.totalWeightKg,
+              0
+            ),
+          3
+        );
+
+      if (
+        Math.abs(
+          lotsWeightKg -
+          invoiceTotalWeightKg
+        ) > 0.001
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              `A soma dos lotes (${lotsWeightKg} kg) precisa ser igual ao peso total da nota fiscal (${invoiceTotalWeightKg} kg).`
+          });
+      }
+
+      const result =
+        await db.begin(
+          async tx => {
+            const [header] =
+              await tx`
+                UPDATE purchase_records
+
+                SET
+                  purchase_date =
+                    ${purchaseDate},
+
+                  supplier =
+                    ${supplier},
+
+                  invoice_number =
+                    ${invoiceNumber},
+
+                  certificate_number =
+                    ${certificateNumber},
+
+                  invoice_total_weight_kg =
+                    ${invoiceTotalWeightKg},
+
+                  notes =
+                    ${notes},
+
+                  updated_at =
+                    now()
+
+                WHERE id =
+                  ${req.params.id}
+
+                RETURNING *
+              `;
+
+            if (!header) {
+              return null;
+            }
+
+            await tx`
+              DELETE FROM purchase_items
+              WHERE purchase_id =
+                ${header.id}
+            `;
+
+            for (
+              const item
+              of normalized.items
+            ) {
+              const [insertedItem] =
+                await tx`
+                  INSERT INTO purchase_items (
+                    purchase_id,
+                    material_id,
+                    location_id,
+                    stock_quantity,
+                    primary_unit,
+                    total_weight_kg,
+                    sort_order
+                  )
+                  VALUES (
+                    ${header.id},
+                    ${item.materialId},
+                    ${item.locationId},
+                    ${item.stockQuantity},
+                    ${item.primaryUnit},
+                    ${item.totalWeightKg},
+                    ${item.sortOrder}
+                  )
+                  RETURNING id
+                `;
+
+              for (
+                const lot
+                of item.lots
+              ) {
+                await tx`
+                  INSERT INTO purchase_lots (
+                    purchase_item_id,
+                    lot_number,
+                    weight_kg,
+                    heat_number,
+                    tensile_strength_mpa,
+                    steel_grade,
+                    sort_order
+                  )
+                  VALUES (
+                    ${insertedItem.id},
+                    ${lot.lotNumber},
+                    ${lot.weightKg},
+                    ${lot.heatNumber},
+                    ${lot.tensileStrengthMpa},
+                    ${lot.steelGrade},
+                    ${lot.sortOrder}
+                  )
+                `;
+              }
+            }
+
+            await recordAuditLog(
+              tx,
+              {
+                user:
+                  req.user,
+
+                action:
+                  'Compra editada',
+
+                module:
+                  'Lancamentos',
+
+                description:
+                  `Editou compra ${header.id}, fornecedor ${supplier}, nota ${invoiceNumber}.`,
+
+                recordRef:
+                  header.id
+              }
+            );
+
+            return header;
+          }
+        );
+
+      if (!result) {
+        return res
+          .status(404)
+          .json({
+            error:
+              'Compra nao encontrada.'
+          });
+      }
+
+      res.json(
+        result
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete(
+  '/material-purchases/:id',
+  requirePermission(
+    'launches:write'
+  ),
+  requireSuperAdmin,
+  async (
+    req,
+    res,
+    next
+  ) => {
+    try {
+      const db =
+        requireDb();
+
+      const [row] =
+        await db`
+          DELETE FROM purchase_records
+          WHERE id =
+            ${req.params.id}
+          RETURNING *
+        `;
+
+      if (!row) {
+        return res
+          .status(204)
+          .end();
+      }
+
+      await recordAuditLog(
+        db,
+        {
+          user:
+            req.user,
+
+          action:
+            'Exclusao de compra',
+
+          module:
+            'Lancamentos',
+
+          description:
+            `Excluiu definitivamente compra ${row.id}, fornecedor ${row.supplier}, nota ${row.invoice_number}.`,
+
+          recordRef:
+            row.id
+        }
+      );
+
+      res.json(
+        row
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 router.put('/materials-overview/adjustments', requirePermission('stock:write'), async (req, res, next) => {
   try {
     const materialId = Number(req.body.materialId);

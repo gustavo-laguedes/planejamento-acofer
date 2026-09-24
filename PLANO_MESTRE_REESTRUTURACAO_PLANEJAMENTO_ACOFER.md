@@ -1,5 +1,8 @@
 # PLANO MESTRE DE REESTRUTURAÇÃO — PLANEJAMENTO AÇO-FER V1
 
+**Fonte funcional superior:** `docs/refactor/PLANNING_SIMULATION_CANONICAL_SPEC.md`.
+Em caso de conflito funcional entre este plano historico de reestruturacao e o spec canonico, o spec prevalece.
+
 **Projeto:** Planejamento Aço-Fer  
 **Responsável funcional:** Gustavo (“Gu”) — PCP Aço-Fer  
 **Empresas:** Catrion + Aço-Fer  
@@ -674,7 +677,7 @@ Não mudar expectativa apenas para obter verde. Toda alteração precisa apontar
 - [x] Residuos em `tmp/` classificados como nao versionar.
 - [x] Estrategia de checkpoint manual registrada.
 - [ ] Checkpoint Git manual criado pelo Gu.
-- [ ] Homologacao manual REF-013 concluida.
+- [ ] Homologacao manual REF-013 concluida. Tentativa em 2026-08-12 executou servidor local e Chrome real ate a tela de login, mas nao havia sessao autenticada/dados operacionais; status registrado: NAO EXECUTADA POR LIMITACAO DE AMBIENTE.
 - [x] Gate de refatoracao liberado para primeira extracao apos checkpoint manual.
 - [x] Primeira extracao recomendada definida: helpers puros de formatacao/normalizacao (`formatDateOnly`, `formatPeriod`, `parsePtBrDecimal`, `escapeHtml`, `normalizeText`, `normalizeJsonArray`, `normalizeJsonObject`, `formatPtBrDecimal`, `formatPtBrInteger`) para `shared/planning-presentation/planningFormatters.js`.
 - [x] REF-021 concluida: primeira extracao cirurgica de formatadores/normalizadores puros para `shared/planning-presentation/planningFormatters.js`; commit-base `5f7b69c`; suite final `node --test tests/*.js` com 52 testes, 52 aprovados e 0 falhos.
@@ -2714,6 +2717,25 @@ Testes/comandos: `node --check pages/PlanningPage.js`; `node --test tests/ganttA
 Resultado: suite final 98 testes, 98 aprovados e 0 falhas; `git diff --check` sem erros, apenas avisos conhecidos LF -> CRLF; contagem permaneceu 98 porque nenhum teste foi apagado; assertions que caracterizavam CSS orfao (`production-calendar-manual-actions` e `production-calendar-discard-button`) deixaram de substituir protecao funcional.
 Homologacao: browser nao executado; esta REF nao conclui REF-013.
 Blockers: nenhum blocker funcional conhecido de paridade V2 -> Gantt apos a matriz final; `productionCalendar.utils.js` ainda usado pela `PlanningPage`; `production-calendar.css` ainda preservado por fullscreen/diagnosticos/wrappers; wrappers/re-exports legados continuam; nomes `productionCalendar*` residuais ainda exigem limpeza propria; REF-013 nao marcada como homologada.
+
+---
+
+### 2026-08-12 - REF-013 - Homologacao operacional manual do Gantt
+
+Status: NAO EXECUTADA POR LIMITACAO DE AMBIENTE
+Executor/agent: Codex coordenador; Max Verstappen consultado como homologador read-only para matriz de gates; nenhum codigo produtivo alterado.
+Skills usadas: `acofer-operational-homologation`, `acofer-manual-calendar`, `acofer-production-calendar-ui`, `acofer-persistence-legacy`, `acofer-stock`, `acofer-validation-diagnostics`, `acofer-reoptimization`, `acofer-testing`.
+Branch/commit de referencia: `rebuild-production-calendar` / `a73abd1`.
+Pre-flight: `git status --short` sem saida; branch `rebuild-production-calendar`; HEAD `a73abd1`.
+Objetivo: executar homologacao operacional real no browser para Flow -> Gantt, move, edit, split, transporte, undo/redo, descarte, dia/equipe/estoque, horizonte, zoom/fullscreen, diagnosticos e readonly apos a remocao fisica do V2.
+Ambiente/runtime executado: servidor local Node/Express iniciado em `http://localhost:3000`; HTTP 200 confirmado; Chrome real iniciado com perfil temporario isolado e DevTools Protocol local; aplicacao aberta em runtime.
+Evidencia observada no browser: titulo `Planejamento Aco-Fer`; URL `http://localhost:3000/`; texto visivel `Acesso ao sistema`, `Usuario ou E-mail`, `Senha`, `Entrar`; DOM sem seletores de planejamento/Gantt; abertura inicial sem HTTP 4xx/5xx inesperado.
+Resultado da homologacao: checklist operacional nao executado porque nao havia sessao autenticada/dados operacionais para acessar o Planejamento/Gantt. REF-013 nao foi homologada, nao foi marcada como concluida e nao recebeu status intermediario.
+Checklist: Flow -> Gantt, Flow sem allocation/split, move horizontal, edit, split, transporte, undo/redo, descarte, dia/equipe, estoque do dia, horizonte, zoom/fullscreen, diagnosticos e readonly ficaram NAO EXECUTADOS.
+Arquivos alterados: `docs/refactor/REF-013_FLOW_TO_GANTT_FOCUS.md` e este plano.
+Arquivos produtivos alterados: nenhum.
+Blockers: limitacao ambiental de autenticacao/sessao/dados operacionais no browser local; nenhum defeito funcional do Gantt foi comprovado.
+Proxima missao recomendada: preparar uma janela de homologacao assistida com sessao PCP/Visualizador valida e plano de teste com allocations reais, sem alterar codigo.
 
 ---
 

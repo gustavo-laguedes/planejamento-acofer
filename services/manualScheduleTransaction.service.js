@@ -53,6 +53,16 @@ function clone(value) {
 function draftFingerprint(draft) {
   const serialized = JSON.stringify({
     allocations: Array.isArray(draft?.allocations) ? draft.allocations : [],
+        transports:
+      Array.isArray(draft?.transports)
+        ? draft.transports
+        : [],
+
+    plannedReceipts:
+      Array.isArray(draft?.plannedReceipts)
+        ? draft.plannedReceipts
+        : [],
+
     manualWorkDates: Array.isArray(draft?.manualWorkDates) ? draft.manualWorkDates : [],
     dailyTeamOverrides: draft?.dailyTeamOverrides && typeof draft.dailyTeamOverrides === 'object' ? draft.dailyTeamOverrides : {}
   });
@@ -229,8 +239,31 @@ function emptyValidation(errors = [], warnings = []) {
 }
 
 function missingContextIssues(context) {
+  const ignoredFields =
+    context?.skipStockValidation === true
+      ? new Set([
+          'stock',
+          'stockMinimums',
+          'stockLocations'
+        ])
+      : new Set();
+
   const missing = REQUIRED_VALIDATION_CONTEXT
-    .filter(field => !Object.hasOwn(context || {}, field) || context[field] === undefined || context[field] === null)
+    .filter(
+      field =>
+        !ignoredFields.has(field)
+    )
+    .filter(
+      field =>
+        !Object.hasOwn(
+          context || {},
+          field
+        )
+        ||
+        context[field] === undefined
+        ||
+        context[field] === null
+    )
     .map(field => issue(
       'MISSING_VALIDATION_CONTEXT',
       `O contexto obrigatório de validação "${field}" não está disponível.`,
@@ -649,14 +682,38 @@ export function applyManualScheduleTransaction({
       manualWorkDates: candidate.manualWorkDates ?? validationContext.manualWorkDates,
       holidays: validationContext.holidays,
       timezone: validationContext.timezone,
-      operations: validationContext.operations,
-      dependencies: validationContext.dependencies,
-      transports: validationContext.transports,
+            operations:
+        validationContext.operations,
+
+      dependencies:
+        validationContext.dependencies,
+
+      transports:
+        validationContext.transports,
+
+      plannedReceipts:
+        Array.isArray(
+          candidate?.plannedReceipts
+        )
+          ? candidate.plannedReceipts
+          : [],
+
       minimumStartRatio: validationContext.minimumStartRatio,
       dependencyCompletionBufferMinutes: validationContext.dependencyCompletionBufferMinutes,
-      stock: validationContext.stock,
-      stockMinimums: validationContext.stockMinimums,
-      stockLocations: validationContext.stockLocations,
+      stock:
+  validationContext.skipStockValidation === true
+    ? undefined
+    : validationContext.stock,
+
+stockMinimums:
+  validationContext.skipStockValidation === true
+    ? undefined
+    : validationContext.stockMinimums,
+
+stockLocations:
+  validationContext.skipStockValidation === true
+    ? undefined
+    : validationContext.stockLocations,
       setupMinutes: validationContext.setupMinutes,
       dailyTeamOverrides: candidate.dailyTeamOverrides ?? validationContext.dailyTeamOverrides,
       setupRules: validationContext.setupRules || [],

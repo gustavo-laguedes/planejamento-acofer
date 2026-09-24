@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   buildGanttApsWindow,
@@ -50,9 +50,9 @@ const model = {
     ]
   },
   resources: [
-    { id: 'machine-2', name: 'Máquina 2', order: 2 },
-    { id: 'machine-1', name: 'Máquina 1', order: 1 },
-    { id: 'machine-empty', name: 'Máquina vazia', order: 3 }
+    { id: 'machine-2', name: 'MÃ¡quina 2', order: 2 },
+    { id: 'machine-1', name: 'MÃ¡quina 1', order: 1 },
+    { id: 'machine-empty', name: 'MÃ¡quina vazia', order: 3 }
   ],
   tasks: [
     overnight,
@@ -68,14 +68,14 @@ const before = structuredClone(model);
 const orderedResources = orderGanttApsResources(model);
 assert.deepEqual(
   orderedResources.map(resource => resource.id),
-  ['machine-1', 'machine-2', 'machine-empty'],
-  'ordem canônica e máquinas vazias devem ser preservadas'
+  ['Trefila', 'machine-1', 'machine-2', 'machine-empty'],
+  'ordem canÃ´nica, Trefila visual e mÃ¡quinas vazias devem ser preservadas'
 );
 const canonicalMachineResources = [
   { id: 'focus8-id', name: 'Focus-8', order: 1 },
   { id: 'mt100-id', name: 'MT-100', order: 2 },
   { id: 'ec60-id', name: 'EC-60', order: 3 },
-  { id: 'empty-aco8-id', name: 'Aço-8', order: 4 },
+  { id: 'empty-aco8-id', name: 'AÃ§o-8', order: 4 },
   { id: 'trefila-id', name: 'Trefila', order: 5 },
   { id: 'mt150-id', name: 'MT-150', order: 6 },
   { id: 'ec125-id', name: 'EC-125', order: 7 },
@@ -89,13 +89,13 @@ const canonicallyOrderedResources = orderGanttApsResources({
 });
 assert.deepEqual(
   canonicallyOrderedResources.map(resource => resource.name),
-  ['Trefila', 'EC-125', 'EC-60', 'Aço-8', 'Focus-8', 'MT-200', 'MT-150', 'MT-100'],
-  'Gantt APS deve reutilizar exatamente a ordem canônica do Calendário V2'
+  ['Trefila', 'EC-125', 'EC-60', 'AÃ§o-8', 'Focus-8', 'MT-200', 'MT-150', 'MT-100'],
+  'Gantt APS deve reutilizar exatamente a ordem canÃ´nica do CalendÃ¡rio V2'
 );
 assert.deepEqual(
   canonicallyOrderedResources.map(resource => resource.id),
   ['trefila-id', 'ec125-id', 'ec60-id', 'empty-aco8-id', 'focus8-id', 'mt200-id', 'mt150-id', 'mt100-id'],
-  'ordenação deve preservar IDs e a máquina vazia'
+  'ordenaÃ§Ã£o deve preservar IDs e a mÃ¡quina vazia'
 );
 const window = buildGanttApsWindow(model);
 assert.equal(window.days.length, 2);
@@ -103,20 +103,20 @@ assert.equal(window.days[1].date, '2026-07-25');
 const geometry = taskGeometry(overnight, window, 60);
 assert.equal(geometry.left, 22 * 60);
 assert.equal(geometry.width, 4 * 60);
-assert.deepEqual(model, before, 'geometria readonly não pode alterar o view model');
+assert.deepEqual(model, before, 'geometria readonly nÃ£o pode alterar o view model');
 
 const stacked = stackGanttApsTasks(model.tasks);
 assert.equal(stacked.length, model.tasks.length);
 assert.equal(stacked[0].track, 0);
 assert.equal(stacked[1].track, 1, 'barras sobrepostas devem ocupar trilhas distintas');
-assert.equal(stacked[1].task.id, 'readonly:special:id[]', 'ID canônico deve ser preservado');
+assert.equal(stacked[1].task.id, 'readonly:special:id[]', 'ID canÃ´nico deve ser preservado');
 assert.deepEqual(
   orderGanttApsTasks([
     { id: 'b', sequence: 2, start: { date: '2026-07-24', time: '08:00' }, end: { date: '2026-07-24', time: '09:00' } },
     { id: 'a', sequence: 1, start: { date: '2026-07-24', time: '08:00' }, end: { date: '2026-07-24', time: '09:00' } }
   ]).map(task => task.id),
   ['a', 'b'],
-  'ordenação deve usar início civil, sequence e allocationId'
+  'ordenaÃ§Ã£o deve usar inÃ­cio civil, sequence e allocationId'
 );
 assert.deepEqual(
   orderGanttApsTasks([
@@ -125,7 +125,7 @@ assert.deepEqual(
     { id: 'sequenced', sequence: 1, start: { date: '2026-07-24', time: '08:00' }, end: { date: '2026-07-24', time: '09:00' } }
   ]).map(task => task.id),
   ['sequenced', 'missing-empty', 'missing-null'],
-  'sequence ausente não pode virar zero'
+  'sequence ausente nÃ£o pode virar zero'
 );
 
 const productionTotalTasks = orderGanttApsTasks([
@@ -148,8 +148,8 @@ const productionTotalTasks = orderGanttApsTasks([
     productionIndex: 2,
     productionColor: '#333333',
     productionMemberships: [
-      { productionId: 'production-1', productionIndex: 0, productionTitle: 'Produção 1', productionColor: '#111111' },
-      { productionId: 'production-3', productionIndex: 2, productionTitle: 'Produção 3', productionColor: '#333333' }
+      { productionId: 'production-1', productionIndex: 0, productionTitle: 'ProduÃ§Ã£o 1', productionColor: '#111111' },
+      { productionId: 'production-3', productionIndex: 2, productionTitle: 'ProduÃ§Ã£o 3', productionColor: '#333333' }
     ],
     quantity: 2178,
     unit: 'un',
@@ -164,9 +164,9 @@ const productionTotalTasks = orderGanttApsTasks([
     quantity: 940,
     unit: 'kg',
     productionMemberships: [
-      { productionId: 'production-2', productionIndex: 1, productionTitle: 'Produção 2' },
-      { productionId: 'production-3', productionIndex: 2, productionTitle: 'Produção 3' },
-      { productionId: 'production-4', productionIndex: 3, productionTitle: 'Produção 4' }
+      { productionId: 'production-2', productionIndex: 1, productionTitle: 'ProduÃ§Ã£o 2' },
+      { productionId: 'production-3', productionIndex: 2, productionTitle: 'ProduÃ§Ã£o 3' },
+      { productionId: 'production-4', productionIndex: 3, productionTitle: 'ProduÃ§Ã£o 4' }
     ],
     start: { date: '2026-07-24', time: '10:00' },
     end: { date: '2026-07-24', time: '11:00' }
@@ -178,8 +178,8 @@ const productionTotalTasks = orderGanttApsTasks([
     productionIndex: 0,
     productionColor: '#111111',
     productionMemberships: [
-      { productionId: 'production-1', productionIndex: 0, productionTitle: 'Produção 1', productionColor: '#111111' },
-      { productionId: 'production-3', productionIndex: 2, productionTitle: 'Produção 3', productionColor: '#333333' }
+      { productionId: 'production-1', productionIndex: 0, productionTitle: 'ProduÃ§Ã£o 1', productionColor: '#111111' },
+      { productionId: 'production-3', productionIndex: 2, productionTitle: 'ProduÃ§Ã£o 3', productionColor: '#333333' }
     ],
     sequence: 1,
     quantity: 7000,
@@ -259,7 +259,7 @@ assert.deepEqual(
     'split:p4:2',
     'allocation:p4:3'
   ],
-  'ordenação deve priorizar produção canônica e manter cronologia dentro dela'
+  'ordenaÃ§Ã£o deve priorizar produÃ§Ã£o canÃ´nica e manter cronologia dentro dela'
 );
 const productionTotalRows = buildGanttApsProductionTotalBlocks(productionTotalTasks);
 const productionTotalStarts = productionTotalRows.filter(row => row.blockStart);
@@ -272,17 +272,17 @@ assert.deepEqual(
     ['production:production-3', '3110.25', 'un', 2],
     ['production:production-4', '0.6', 'kg', 3]
   ],
-  'totais devem respeitar produção principal, unidade, precisão e splits'
+  'totais devem respeitar produÃ§Ã£o principal, unidade, precisÃ£o e splits'
 );
 assert.equal(
   productionTotalRows.filter(row => row.identity === 'production:production-2').length,
   1,
-  'memberships associados não podem fundir ou duplicar a allocation da produção principal'
+  'memberships associados nÃ£o podem fundir ou duplicar a allocation da produÃ§Ã£o principal'
 );
 assert.equal(
   productionTotalRows.filter(row => row.identity === 'production:production-3').length,
   2,
-  'produção associada deve manter suas próprias allocations'
+  'produÃ§Ã£o associada deve manter suas prÃ³prias allocations'
 );
 
 const singleProductionTask = {
@@ -338,7 +338,7 @@ assert.deepEqual(
     mode: 'full',
     dateLabel: '24/07/26',
     secondaryLabel: 'sexta',
-    fullLabel: '24/07/2026 · sexta'
+    fullLabel: '24/07/2026 Â· sexta'
   }
 );
 for (const pixelsPerHour of [3, 4, 6, 8, 12]) {
@@ -356,7 +356,7 @@ assert.deepEqual(
       date: `2026-07-${String(26 + dayOffset).padStart(2, '0')}`
     }, 72).secondaryLabel
   )),
-  ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado']
+  ['domingo', 'segunda', 'terÃ§a', 'quarta', 'quinta', 'sexta', 'sÃ¡bado']
 );
 assert.deepEqual(
   ganttApsDayHeaderPresentation({
@@ -368,7 +368,7 @@ assert.deepEqual(
     mode: 'compact',
     dateLabel: '24/07/26',
     secondaryLabel: 'sexta',
-    fullLabel: '24/07/2026 · sexta · Feriado municipal'
+    fullLabel: '24/07/2026 Â· sexta Â· Feriado municipal'
   },
   'tooltip acessivel deve preservar a data e o feriado completos no zoom minimo'
 );
@@ -435,13 +435,13 @@ assert.match(rendererSource, /onRequestRedoManualChange\(\)/);
 assert.doesNotMatch(rendererSource, /planningHistoryController|manualScheduleHistory\.service|manualScheduleHistory|undoManualScheduleHistory|redoManualScheduleHistory/);
 assert.doesNotMatch(rendererSource, /persistAutomaticBaselineDiscard|automaticSimulationBaseline|manualSchedulePersistence|planning\.routes|\/manual-schedule/);
 assert.doesNotMatch(rendererSource, /runPlanningAllocationEditorController|applyManualScheduleTransaction|simulateCurrent|buildPlan/);
-assert.doesNotMatch(rendererSource, /stackGanttApsTasks/, 'renderer 1:1 não deve empilhar allocations');
+assert.doesNotMatch(rendererSource, /stackGanttApsTasks/, 'renderer 1:1 nÃ£o deve empilhar allocations');
 assert.doesNotMatch(geometrySource, /projectGanttApsVisualTasks|visualRowId/);
-assert.doesNotMatch(rendererSource, /Produções associadas|membershipBackground/);
+assert.doesNotMatch(rendererSource, /ProduÃ§Ãµes associadas|membershipBackground/);
 assert.match(
   viewModelSource,
   /productionMemberships:\s*cloneValue/,
-  'memberships podem permanecer disponíveis internamente no read model'
+  'memberships podem permanecer disponÃ­veis internamente no read model'
 );
 assert.match(
   geometrySource,
@@ -456,7 +456,7 @@ assert.doesNotMatch(
 assert.doesNotMatch(
   geometrySource,
   /\[\s*['"]trefila['"]\s*,\s*['"]ec125['"]\s*,\s*['"]ec60['"]/i,
-  'Gantt APS não pode duplicar a lista canônica de máquinas'
+  'Gantt APS nÃ£o pode duplicar a lista canÃ´nica de mÃ¡quinas'
 );
 assert.match(rendererSource, /planning-schedule-view\/v1/);
 assert.match(rendererSource, /capabilities\?\.mutate\s*!==\s*false/);
@@ -518,7 +518,7 @@ assert.match(
 assert.match(
   cssSource,
   /\.gantt-aps__lane::after,\s*[\r\n]+\.gantt-aps__group-timeline::after\s*\{[\s\S]*background-image:\s*repeating-linear-gradient\([\s\S]*rgba\(100,\s*116,\s*139,\s*\.52\)[\s\S]*var\(--gantt-aps-day-width\)[\s\S]*z-index:\s*2/,
-  'linhas de allocation e grupos devem compartilhar overlay diário calculado pela largura real do dia'
+  'linhas de allocation e grupos devem compartilhar overlay diÃ¡rio calculado pela largura real do dia'
 );
 assert.match(
   cssSource,
@@ -535,14 +535,19 @@ assert.match(cssSource, /\.gantt-aps__drop-cell\[data-drag-invalid="true"\]/);
 assert.match(cssSource, /\.gantt-aps__bar\[data-dragging="true"\]/);
 assert.match(
   rendererSource,
-  /const\s+GANTT_APS_BAR_HORIZONTAL_INSET\s*=\s*3[\s\S]*function\s+ganttApsApplyBarHorizontalInset[\s\S]*Math\.max\(1,\s*safeWidth\s*-\s*\(2\s*\*\s*inset\)\)[\s\S]*function\s+ganttApsVisualBarGeometry[\s\S]*startOffsetPercent[\s\S]*dayWidth\s*\*\s*startOffsetPercent\s*\/\s*100[\s\S]*ganttApsApplyBarHorizontalInset\(\s*visualLeft,\s*dayWidth\s*\*\s*visualCapacityPercent\s*\/\s*100\s*\)/,
-  'geometria visual deve preencher a célula diária sem alterar taskGeometry'
+  /const\s+GANTT_APS_BAR_HORIZONTAL_INSET\s*=\s*3[\s\S]*function\s+ganttApsApplyBarHorizontalInset[\s\S]*Math\.max\(1,\s*safeWidth\s*-\s*\(2\s*\*\s*inset\)\)[\s\S]*function\s+ganttApsVisualBarGeometry[\s\S]*const\s+visualLeft\s*=\s*\(startDay\s*-\s*window\.startDay\)\s*\*\s*dayWidth[\s\S]*ganttApsApplyBarHorizontalInset\(\s*visualLeft,\s*dayWidth\s*\*\s*visualCapacityPercent\s*\/\s*100\s*\)/,
+  'geometria visual deve ancorar a barra na data da allocation sem alterar taskGeometry'
 );
-assert.match(cssSource, /--gantt-aps-table-width:\s*782px/);
+assert.doesNotMatch(
+  rendererSource,
+  /startOffsetPercent|containedCapacityPercent/,
+  'linha diaria independente nao pode deslocar barra por capacidade acumulada'
+);
+assert.match(cssSource, /--gantt-aps-table-width:\s*714px/);
 assert.match(
   cssSource,
-  /--gantt-aps-table-columns:\s*116px 92px 68px 160px 154px 76px 116px/,
-  'Quantidade / Capacidade e Capacidade utilizada devem caber sem ampliar excessivamente a tabela fixa'
+  /--gantt-aps-table-columns:\s*116px 92px 160px 154px 76px 116px/,
+  'Quantidade / Capacidade e Capacidade utilizada devem caber sem a coluna Etapa'
 );
 assert.match(rendererSource, /function\s+dailyCapacityValue[\s\S]*task\?\.maxDailyCapacity[\s\S]*task\?\.capacityMaxPerDay/);
 assert.match(rendererSource, /function\s+quantityCapacityLabel[\s\S]*return `\$\{quantity\} \/ \$\{formatNumber\(capacity\)\} \$\{task\?\.unit \|\| ''\}`\.trim\(\)/);
@@ -895,6 +900,20 @@ try {
           capacityPercent: 125
         },
         {
+          id: 'allocation:grid:contained-overflow',
+          resourceId: 'machine-with-production',
+          productionIndex: 9,
+          materialName: 'Capacidade contida no dia',
+          start: { date: '2026-07-29', time: '11:00' },
+          end: { date: '2026-07-29', time: '12:00' },
+          quantity: 50,
+          unit: 'un',
+          maxDailyCapacity: 100,
+          capacityPercent: 50,
+          startCapacityPercent: 80,
+          endCapacityPercent: 130
+        },
+        {
           id: 'allocation:grid:zero',
           resourceId: 'machine-with-production',
           productionIndex: 6,
@@ -933,7 +952,7 @@ try {
           id: 'allocation:grid:multi-day',
           resourceId: 'machine-with-production',
           productionIndex: 4,
-          materialName: 'Multidiária preservada',
+          materialName: 'MultidiÃ¡ria preservada',
           start: { date: '2026-07-29', time: '08:00' },
           end: { date: '2026-07-31', time: '10:00' },
           quantity: 40
@@ -956,12 +975,12 @@ try {
       assert.equal(
         gridRoot.style.values.get('--gantt-aps-day-width'),
         `${pixelsPerHour * 24}px`,
-        `largura diária deve acompanhar ${pixelsPerHour}px/h`
+        `largura diÃ¡ria deve acompanhar ${pixelsPerHour}px/h`
       );
       assert.equal(
         gridRoot.style.values.get('--gantt-aps-period-width'),
         `${pixelsPerHour * 6}px`,
-        `subdivisão visual deve acompanhar ${pixelsPerHour}px/h como um quarto do dia`
+        `subdivisÃ£o visual deve acompanhar ${pixelsPerHour}px/h como um quarto do dia`
       );
       assert.equal(
         gridRoot.style.values.get('--gantt-aps-timeline-width'),
@@ -971,38 +990,43 @@ try {
       assert.equal(
         gridRoot.querySelectorAll('.gantt-aps__day-header').length,
         gridModel.calendar.days.length,
-        'cabecalho deve manter uma célula por dia'
+        'cabecalho deve manter uma cÃ©lula por dia'
       );
       assert.deepEqual(
         gridRoot.querySelector('.gantt-aps__table--header').querySelectorAll('.gantt-aps__cell').map(cell => cell.textContent),
-        ['Máquina / total', 'Produção', 'Etapa', 'Material', 'Quantidade / Capacidade', 'Pessoas', 'Capacidade utilizada'],
-        'cabecalho deve apresentar Quantidade / Capacidade e Capacidade utilizada'
+        ['M\u00c1QUINA', 'ProduÃ§Ã£o', 'Material', 'Quantidade / Capacidade', 'Pessoas', 'CAPACIDADEUTILIZADA'],
+        'cabecalho deve apresentar Quantidade / Capacidade e Capacidade utilizada sem coluna de etapa'
       );
       assert.equal(
-        gridRoot.querySelector('.gantt-aps__table--header').querySelectorAll('.gantt-aps__cell')[6].attributes.get('aria-label'),
+        gridRoot.querySelector('.gantt-aps__table--header').querySelectorAll('.gantt-aps__cell')[5].attributes.get('aria-label'),
         'Capacidade utilizada',
         'cabecalho quebrado deve preservar texto completo acessivel'
+      );
+      assert.deepEqual(
+        gridRoot.querySelector('.gantt-aps__table--header').querySelectorAll('.gantt-aps__cell')[5].children.map(child => child.textContent),
+        ['CAPACIDADE', 'UTILIZADA'],
+        'cabecalho de capacidade deve renderizar duas linhas visuais'
       );
       assert.equal(
         gridRoot.querySelectorAll('.gantt-aps__row--group').length,
         2,
-        'máquina com e sem produção devem manter linha de grupo'
+        'mÃ¡quina com e sem produÃ§Ã£o devem manter linha de grupo'
       );
       assert.equal(
         gridRoot.querySelectorAll('.gantt-aps__group-timeline').length,
         2,
-        'cada linha de grupo deve ter área temporal que recebe o overlay diário'
+        'cada linha de grupo deve ter Ã¡rea temporal que recebe o overlay diÃ¡rio'
       );
       assert.ok(
         gridRoot.querySelectorAll('.gantt-aps__row--group')
           .find(row => row.dataset.resourceId === 'machine-empty')
           .querySelector('.gantt-aps__group-timeline'),
-        'máquina sem produção deve preservar a área temporal sem criar allocation falsa'
+        'mÃ¡quina sem produÃ§Ã£o deve preservar a Ã¡rea temporal sem criar allocation falsa'
       );
       assert.equal(
         gridRoot.querySelectorAll('.gantt-aps__row--allocation').length,
         gridModel.tasks.length,
-        'máquina vazia não deve criar allocation row falsa'
+        'mÃ¡quina vazia nÃ£o deve criar allocation row falsa'
       );
       const dayWidth = pixelsPerHour * 24;
       const barsById = new Map(gridRoot.querySelectorAll('.gantt-aps__bar')
@@ -1013,6 +1037,7 @@ try {
       const secondDayBar = barsById.get('allocation:grid:1');
       const fourthDayBar = barsById.get('allocation:grid:2');
       const overcapacityBar = barsById.get('allocation:grid:overcapacity');
+      const containedOverflowBar = barsById.get('allocation:grid:contained-overflow');
       const zeroCapacityBar = barsById.get('allocation:grid:zero');
       const tinyCapacityBar = barsById.get('allocation:grid:tiny');
       const invalidCapacityBar = barsById.get('allocation:grid:invalid-capacity');
@@ -1028,34 +1053,41 @@ try {
         );
       };
       const firstDayGeometry = insetBar(0, dayWidth);
-      const secondDayGeometry = insetBar(dayWidth + (dayWidth * 0.35), dayWidth * 0.6409);
+      const secondDayGeometry = insetBar(dayWidth, dayWidth * 0.6409);
       const fourthDayGeometry = insetBar(dayWidth * 3, dayWidth * 0.25);
       const overcapacityGeometry = insetBar(0, dayWidth);
+      const containedOverflowGeometry = insetBar(dayWidth, dayWidth * 0.50);
       const tinyCapacityGeometry = insetBar(dayWidth * 3, dayWidth * 0.0479);
       const invalidCapacityGeometry = insetBar((48 + 3) * pixelsPerHour, 2 * pixelsPerHour);
       const multiDayGeometry = insetBar((24 + 8) * pixelsPerHour, 50 * pixelsPerHour);
       assertPxClose(firstDayBar.style.left, firstDayGeometry.left, 'capacityPercent 100 deve manter inset esquerdo');
       assertPxClose(firstDayBar.style.width, firstDayGeometry.width, 'capacityPercent 100 deve manter respiro dos dois lados');
-      assertPxClose(secondDayBar.style.left, secondDayGeometry.left, 'capacityPercent 64.09 deve respeitar offset intradiario readonly');
+      assertPxClose(secondDayBar.style.left, secondDayGeometry.left, 'capacityPercent 64.09 deve iniciar na data da allocation');
       assertPxClose(secondDayBar.style.width, secondDayGeometry.width, 'capacityPercent 64.09 deve preservar proporcao com respiro');
-      assert.equal(rowsById.get('allocation:grid:1').querySelector('.gantt-aps__cell--5').textContent, '266,48 un / 700 un');
-      assert.equal(rowsById.get('allocation:grid:1').querySelector('.gantt-aps__cell--5').title, '266,48 un / 700 un');
-      assert.equal(rowsById.get('allocation:grid:1').querySelector('.gantt-aps__cell--5').attributes.get('aria-label'), '266,48 un / 700 un');
-      assert.equal(rowsById.get('allocation:grid:1').querySelector('.gantt-aps__cell--7').textContent, '64,09%');
+      assert.equal(rowsById.get('allocation:grid:1').querySelector('.gantt-aps__cell--4').textContent, '266,48 un / 700 un');
+      assert.equal(rowsById.get('allocation:grid:1').querySelector('.gantt-aps__cell--4').title, '266,48 un / 700 un');
+      assert.equal(rowsById.get('allocation:grid:1').querySelector('.gantt-aps__cell--4').attributes.get('aria-label'), '266,48 un / 700 un');
+      assert.equal(rowsById.get('allocation:grid:1').querySelector('.gantt-aps__cell--6').textContent, '64,09%');
       assert.match(
         secondDayBar.style.values.get('--gantt-aps-production-background'),
         /^linear-gradient\(90deg,/,
-        'barra com mÃºltiplas produÃ§Ãµes deve preservar divisÃ£o cromÃ¡tica'
+        'barra com mÃƒÂºltiplas produÃƒÂ§ÃƒÂµes deve preservar divisÃƒÂ£o cromÃƒÂ¡tica'
       );
       assert.equal(secondDayBar.attributes.get('aria-label').includes('Material com barra'), true);
       assert.equal(secondDayBar.title.includes('Material com barra'), true);
-      assert.equal(rowsById.get('allocation:grid:night').querySelector('.gantt-aps__cell--5').textContent, '700 un / 700 un');
-      assert.equal(rowsById.get('allocation:grid:2').querySelector('.gantt-aps__cell--5').textContent, '4.486,33 kg / 7.000 kg');
-      assert.equal(rowsById.get('allocation:grid:invalid-capacity').querySelector('.gantt-aps__cell--5').textContent, '70 un');
+      assert.equal(rowsById.get('allocation:grid:night').querySelector('.gantt-aps__cell--4').textContent, '700 un / 700 un');
+      assert.equal(rowsById.get('allocation:grid:2').querySelector('.gantt-aps__cell--4').textContent, '4.486,33 kg / 7.000 kg');
+      assert.equal(rowsById.get('allocation:grid:invalid-capacity').querySelector('.gantt-aps__cell--4').textContent, '70 un');
       assertPxClose(fourthDayBar.style.left, fourthDayGeometry.left, 'capacityPercent 25 deve manter inset esquerdo');
       assertPxClose(fourthDayBar.style.width, fourthDayGeometry.width, 'capacityPercent 25 deve preservar proporcao com respiro');
       assertPxClose(overcapacityBar.style.left, overcapacityGeometry.left, 'capacityPercent acima de 100 deve limitar e manter inset');
       assertPxClose(overcapacityBar.style.width, overcapacityGeometry.width, 'capacityPercent acima de 100 deve limitar a celula com respiro');
+      assertPxClose(containedOverflowBar.style.left, containedOverflowGeometry.left, 'barra diaria deve iniciar na data da allocation');
+      assertPxClose(containedOverflowBar.style.width, containedOverflowGeometry.width, 'capacityPercent deve ser calculado pela parcela diaria');
+      assert.ok(
+        Number.parseFloat(containedOverflowBar.style.left) + Number.parseFloat(containedOverflowBar.style.width) <= (dayWidth * 2),
+        'barra diaria nao pode atravessar a celula da data da allocation'
+      );
       assert.equal(zeroCapacityBar.style.left, `${dayWidth * 2}px`);
       assert.equal(zeroCapacityBar.style.width, '0px');
       assertPxClose(tinyCapacityBar.style.left, tinyCapacityGeometry.left, 'barra positiva muito pequena deve reduzir dinamicamente o inset');
@@ -1073,6 +1105,256 @@ try {
       gridRenderer.destroy();
       assert.equal(gridContainer.children.length, 0, 'destroy deve limpar renderer de grade');
     }
+  }
+
+  {
+    const dailyContainer = new FakeElement('div');
+    const dailyRenderer = createGanttApsRenderer();
+    dailyRenderer.mount(dailyContainer, {
+      contractVersion: 'planning-schedule-view/v1',
+      capabilities: { inspect: true, mutate: false },
+      calendar: {
+        days: [
+          {
+            date: '2026-09-10',
+            isWorkingDay: true,
+            team: {
+              peakPeople: 3,
+              availablePeople: 3,
+              shifts: [{ shiftId: 'turno-1', label: 'Turno 1', peakPeople: 3, availablePeople: 3 }]
+            }
+          },
+          { date: '2026-09-11', isWorkingDay: true },
+          { date: '2026-09-12', isWorkingDay: false }
+        ]
+      },
+      resources: [{ id: 'MT-100', name: 'MT-100', order: 1 }],
+      tasks: [
+        {
+          id: 'allocation:q138:2026-09-10',
+          resourceId: 'MT-100',
+          operationId: 'Q-138:2026-09-10',
+          parentOperationId: 'Q-138',
+          productionIndex: 0,
+          materialName: 'Q-138',
+          start: { date: '2026-09-10', time: '07:00' },
+          end: { date: '2026-09-10', time: '16:00' },
+          quantity: 220,
+          unit: 'un',
+          nominalDailyCapacity: 220,
+          capacityPercent: 100,
+          peopleCount: 3
+        },
+        {
+          id: 'allocation:q138:2026-09-11',
+          resourceId: 'MT-100',
+          operationId: 'Q-138:2026-09-11',
+          parentOperationId: 'Q-138',
+          productionIndex: 0,
+          materialName: 'Q-138',
+          start: { date: '2026-09-11', time: '07:00' },
+          end: { date: '2026-09-11', time: '11:00' },
+          quantity: 96.294,
+          unit: 'un',
+          nominalDailyCapacity: 220,
+          capacityPercent: 43.77,
+          peopleCount: 3
+        }
+      ],
+      metadata: { visualState: {} }
+    });
+    const dailyRoot = dailyRenderer.getRootElement();
+    const dailyRows = dailyRoot.querySelectorAll('.gantt-aps__row--allocation');
+    const dailyBars = dailyRoot.querySelectorAll('.gantt-aps__bar');
+    const dayWidth = 6 * 24;
+    assert.equal(dailyRows.length, 2, 'Q-138 400/220 deve gerar duas linhas diarias no Gantt');
+    assert.equal(dailyBars.length, 2, 'Q-138 400/220 deve gerar duas barras, nao uma barra continua');
+    assert.equal(dailyRows[0].dataset.allocationId, 'allocation:q138:2026-09-10');
+    assert.equal(dailyRows[1].dataset.allocationId, 'allocation:q138:2026-09-11');
+    assert.equal(dailyRows[0].querySelector('.gantt-aps__cell--4').textContent, '220 un / 220 un');
+    assert.equal(dailyRows[0].querySelector('.gantt-aps__cell--6').textContent, '100%');
+    assert.equal(dailyRows[1].querySelector('.gantt-aps__cell--4').textContent, '96,29 un / 220 un');
+    assert.equal(dailyRows[1].querySelector('.gantt-aps__cell--6').textContent, '43,77%');
+    const dailyFirstHeader = dailyRoot.querySelectorAll('.gantt-aps__day-header')
+      .find(header => header.dataset.date === '2026-09-10');
+    const assertDailyPxClose = (actual, expected, message) => {
+      assert.ok(
+        Math.abs(Number.parseFloat(actual) - expected) < 0.000001,
+        `${message}: esperado ${expected}px, recebido ${actual}`
+      );
+    };
+    assert.equal(dailyFirstHeader.querySelector('.gantt-aps__day-team').textContent, 'Eq. 3 / 3');
+    assert.equal(dailyFirstHeader.title.includes('Equipe: 3 / 3'), true);
+    assert.equal(dailyBars[0].style.left, '3px');
+    assert.equal(dailyBars[0].style.width, `${dayWidth - 6}px`);
+    assert.equal(dailyBars[1].style.left, `${dayWidth + 3}px`);
+    assertDailyPxClose(dailyBars[1].style.width, (dayWidth * 0.4377) - 6, 'capacityPercent 43.77 deve preservar largura diaria parcial');
+    assert.equal(Number.parseFloat(dailyBars[1].style.left) >= dayWidth, true);
+    assert.equal(
+      Number.parseFloat(dailyBars[1].style.left) + Number.parseFloat(dailyBars[1].style.width) < dayWidth * 2,
+      true,
+      'allocation de sexta 11/09 nao pode invadir sabado 12/09'
+    );
+    dailyRenderer.destroy();
+  }
+
+  {
+    const resourceContainer = new FakeElement('div');
+    const resourceRenderer = createGanttApsRenderer();
+    resourceRenderer.mount(resourceContainer, {
+      contractVersion: 'planning-schedule-view/v1',
+      capabilities: { inspect: true, mutate: false },
+      calendar: {
+        days: [{ date: '2026-09-10', isWorkingDay: true }]
+      },
+      resources: [
+        { id: 'EC-125', name: 'EC-125', order: 1 },
+        { id: 'Aco-8', name: 'AÃ§o-8', order: 2 },
+        { id: 'MT-100', name: 'MT-100', order: 3 },
+        { id: 'Trefila', name: 'Trefila', order: 4 }
+      ],
+      tasks: [{
+        id: 'allocation:trefila:1',
+        resourceId: 'Trefila',
+        machineName: 'Trefila',
+        materialName: 'CA60 3,8 Bobina',
+        start: { date: '2026-09-10', time: '07:00' },
+        end: { date: '2026-09-10', time: '11:00' },
+        quantity: 130,
+        unit: 'kg',
+        capacityPercent: 45.5
+      }],
+      metadata: { visualState: {} }
+    });
+    const resourceRoot = resourceRenderer.getRootElement();
+    const groupRows = resourceRoot.querySelectorAll('.gantt-aps__row--group');
+    assert.deepEqual(
+      groupRows.map(row => row.dataset.resourceId),
+      ['Trefila', 'EC-125', 'Aco-8', 'MT-100'],
+      'grupo Trefila deve seguir a ordenacao canonica e aparecer antes dos demais recursos'
+    );
+    const trefilaGroup = groupRows.find(row => row.dataset.resourceId === 'Trefila');
+    assert.ok(trefilaGroup, 'resource valido Trefila deve renderizar linha de grupo');
+    assert.equal(
+      trefilaGroup.querySelector('.gantt-aps__group-toggle').textContent.includes('Trefila'),
+      true,
+      'header do grupo deve mostrar o nome Trefila'
+    );
+    assert.equal(
+      trefilaGroup.querySelector('.gantt-aps__group-toggle').textContent.includes('1 alocaÃ§Ã£o(Ãµes)'),
+      true,
+      'header do grupo Trefila deve mostrar a contagem de allocations'
+    );
+    resourceRenderer.destroy();
+  }
+
+  {
+    const emptyTrefilaContainer = new FakeElement('div');
+    const emptyTrefilaRenderer = createGanttApsRenderer();
+    emptyTrefilaRenderer.mount(emptyTrefilaContainer, {
+      contractVersion: 'planning-schedule-view/v1',
+      capabilities: { inspect: true, mutate: false },
+      calendar: {
+        days: [{ date: '2026-09-10', isWorkingDay: true }]
+      },
+      resources: [
+        { id: 'EC-125', name: 'EC-125', order: 1 },
+        { id: 'MT-100', name: 'MT-100', order: 2 }
+      ],
+      tasks: [],
+      metadata: { visualState: {} }
+    });
+    const trefilaGroup = emptyTrefilaRenderer.getRootElement()
+      .querySelectorAll('.gantt-aps__row--group')
+      .find(row => row.dataset.resourceId === 'Trefila');
+    assert.ok(trefilaGroup, 'grupo Trefila deve aparecer mesmo sem resource ou allocation no snapshot');
+    assert.equal(
+      trefilaGroup.querySelector('.gantt-aps__group-toggle').textContent.includes('Sem produÃ§Ã£o'),
+      true,
+      'grupo Trefila sem allocations deve exibir Sem produÃ§Ã£o'
+    );
+    emptyTrefilaRenderer.destroy();
+  }
+
+  {
+    const scrolledContainer = new FakeElement('div');
+    const scrolledRenderer = createGanttApsRenderer();
+    scrolledRenderer.mount(scrolledContainer, {
+      contractVersion: 'planning-schedule-view/v1',
+      capabilities: { inspect: true, mutate: false },
+      calendar: { days: [{ date: '2026-09-10', isWorkingDay: true }] },
+      resources: [
+        { id: 'EC-125', name: 'EC-125', order: 1 },
+        { id: 'MT-100', name: 'MT-100', order: 2 }
+      ],
+      tasks: [],
+      metadata: { visualState: { groupsCollapsedByDefault: true } }
+    });
+    const previousViewport = scrolledRenderer.getRootElement().querySelector('.gantt-aps__viewport');
+    previousViewport.scrollTop = 30;
+    scrolledRenderer.update({
+      contractVersion: 'planning-schedule-view/v1',
+      capabilities: { inspect: true, mutate: false },
+      calendar: { days: [{ date: '2026-09-10', isWorkingDay: true }] },
+      resources: [
+        { id: 'EC-125', name: 'EC-125', order: 1 },
+        { id: 'EC-60', name: 'EC-60', order: 2 },
+        { id: 'MT-100', name: 'MT-100', order: 3 }
+      ],
+      tasks: [],
+      metadata: { visualState: { groupsCollapsedByDefault: true } }
+    });
+    const nextViewport = scrolledRenderer.getRootElement().querySelector('.gantt-aps__viewport');
+    assert.equal(
+      nextViewport.scrollTop,
+      0,
+      'mudanca na lista de resources deve mostrar a primeira linha Trefila em vez de reaplicar scroll vertical antigo'
+    );
+    assert.equal(
+      scrolledRenderer.getRootElement()
+        .querySelectorAll('.gantt-aps__row--group')[0]
+        .querySelector('.gantt-aps__group-toggle')
+        .textContent
+        .includes('Trefila'),
+      true,
+      'primeira linha apos reset de scroll deve continuar sendo Trefila'
+    );
+    scrolledRenderer.destroy();
+  }
+
+  {
+    const genericContainer = new FakeElement('div');
+    const genericRenderer = createGanttApsRenderer();
+    genericRenderer.mount(genericContainer, {
+      contractVersion: 'planning-schedule-view/v1',
+      capabilities: { inspect: true, mutate: false },
+      calendar: {
+        days: [{ date: '2026-09-10', isWorkingDay: true }]
+      },
+      resources: [],
+      tasks: [{
+        id: 'allocation:generic-resource:1',
+        resourceId: 'resource-from-task',
+        machineName: 'Recurso Externo',
+        materialName: 'Material externo',
+        start: { date: '2026-09-10', time: '07:00' },
+        end: { date: '2026-09-10', time: '08:00' },
+        quantity: 1,
+        unit: 'un',
+        capacityPercent: 10
+      }],
+      metadata: { visualState: {} }
+    });
+    const genericGroup = genericRenderer.getRootElement()
+      .querySelectorAll('.gantt-aps__row--group')
+      .find(row => row.dataset.resourceId === 'resource-from-task');
+    assert.ok(genericGroup);
+    assert.equal(
+      genericGroup.querySelector('.gantt-aps__group-toggle').textContent.includes('Recurso Externo'),
+      true,
+      'resource generico derivado da task deve renderizar grupo com nome real sem hardcode'
+    );
+    genericRenderer.destroy();
   }
 
   {
@@ -1159,16 +1441,15 @@ try {
     assert.equal(dragRoot.dataset.manualTransport, 'true');
     assert.equal(dragRoot.dataset.daySettings, 'true');
     assert.equal(dragRoot.dataset.manualDiscard, 'true');
-    assert.equal(dragRoot.dataset.optimizeUtilization, 'true');
+    assert.equal(dragRoot.dataset.optimizeUtilization, 'false');
     assert.equal(dragRoot.dataset.manualUndo, 'true');
     assert.equal(dragRoot.dataset.manualRedo, 'true');
     const discardAction = dragRoot.querySelector('[data-action="discard-all-changes"]');
-    const optimizeAction = dragRoot.querySelector('[data-action="optimize-utilization"]');
     const undoAction = dragRoot.querySelector('[data-action="undo-manual-change"]');
     const redoAction = dragRoot.querySelector('[data-action="redo-manual-change"]');
     const horizonActions = dragRoot.querySelectorAll('[data-action="expand-horizon"]');
     assert.ok(discardAction, 'Gantt editavel deve expor acao explicita de descarte global');
-    assert.ok(optimizeAction, 'Gantt editavel deve expor acao explicita de otimizacao de utilizacao');
+    assert.equal(dragRoot.querySelector('[data-action="optimize-utilization"]'), null, 'Gantt editavel nao deve renderizar a acao visual Otimizar');
     assert.deepEqual(horizonActions.map(action => action.dataset.days), ['7', '15', '30']);
     assert.ok(undoAction, 'Gantt editavel deve expor acao explicita de undo manual');
     assert.ok(redoAction, 'Gantt editavel deve expor acao explicita de redo manual');
@@ -1213,7 +1494,6 @@ try {
     undoAction.click();
     redoAction.click();
     discardAction.click();
-    optimizeAction.click();
     const beforeExpandMoveCount = moveRequests.length;
     const beforeExpandOptimizeCount = optimizeRequests.length;
     assert.equal(
@@ -1233,7 +1513,7 @@ try {
     assert.equal(undoRequests.length, 1, 'acao undo deve chamar callback uma unica vez');
     assert.equal(redoRequests.length, 1, 'acao redo deve chamar callback uma unica vez');
     assert.equal(discardRequests.length, 1, 'acao descarte deve chamar callback uma unica vez');
-    assert.equal(optimizeRequests.length, 1, 'acao otimizar deve chamar callback uma unica vez');
+    assert.equal(optimizeRequests.length, 0, 'acao visual Otimizar removida nao pode chamar callback');
     assert.deepEqual(horizonRequests, [{ days: 7 }]);
     assert.equal(moveRequests.length, beforeExpandMoveCount, 'expandir horizonte isoladamente nao pode emitir movimento');
     assert.equal(optimizeRequests.length, beforeExpandOptimizeCount, 'expandir horizonte isoladamente nao pode reotimizar');
@@ -1434,6 +1714,117 @@ try {
     });
     assert.equal(expandedDropCell.dataset.dragTarget, undefined, 'destaque do novo dia deve ser limpo ao soltar');
 
+    const pendingMaterialDrops = [];
+    const pendingMaterialRenderer = createGanttApsRenderer({
+      onRequestPlanningMaterialDrop: intent => pendingMaterialDrops.push(intent)
+    });
+    const pendingMaterialContainer = new FakeElement('div');
+    pendingMaterialRenderer.mount(pendingMaterialContainer, {
+      contractVersion: 'planning-schedule-view/v1',
+      capabilities: { inspect: true, mutate: false, manualMove: true },
+      calendar: {
+        days: [
+          { date: '2026-09-10', isWorkingDay: true },
+          { date: '2026-09-11', isWorkingDay: true }
+        ]
+      },
+      resources: [
+        { id: 'Trefila', name: 'Trefila', order: 1 },
+        { id: 'solda', name: 'Solda', order: 2 }
+      ],
+      tasks: []
+    });
+    const pendingMaterialRoot = pendingMaterialRenderer.getRootElement();
+    pendingMaterialRoot.dispatchEvent({
+      type: 'gantt-aps:planning-material-start',
+      detail: {
+        material: {
+          operationId: '0:BOBINA',
+          materialName: 'CA60 4,2 Bobina',
+          unit: 'kg',
+          remainingQty: 1200
+        },
+        compatibleMachineIds: ['Trefila']
+      },
+      bubbles: false
+    });
+    const trefilaDropCell = pendingMaterialRoot.querySelector('.gantt-aps__drop-cell[data-resource-id="Trefila"][data-date="2026-09-10"]');
+    const soldaDropCell = pendingMaterialRoot.querySelector('.gantt-aps__drop-cell[data-resource-id="solda"][data-date="2026-09-10"]');
+    assert.ok(trefilaDropCell, 'Gantt vazio deve expor celula de drop para maquina compativel');
+    assert.ok(soldaDropCell, 'Gantt vazio deve expor celula de drop para maquina incompativel');
+    assert.equal(trefilaDropCell.dataset.planningMaterialCompatible, 'true');
+    assert.equal(soldaDropCell.dataset.planningMaterialInvalid, 'true');
+    fakeDocument.pointedElement = soldaDropCell;
+    pendingMaterialRoot.dispatchEvent({
+      type: 'dragover',
+      clientX: 1,
+      clientY: 10,
+      dataTransfer: {},
+      preventDefault() {
+        this.defaultPrevented = true;
+      }
+    });
+    assert.equal(soldaDropCell.dataset.planningMaterialTarget, 'invalid', 'maquina incompativel deve destacar destino invalido');
+    pendingMaterialRoot.dispatchEvent({
+      type: 'drop',
+      clientX: 1,
+      clientY: 10,
+      preventDefault() {
+        this.defaultPrevented = true;
+      }
+    });
+    assert.equal(pendingMaterialDrops.length, 0, 'drop incompativel nao pode reconhecer destino nem criar acao');
+    pendingMaterialRoot.dispatchEvent({
+      type: 'gantt-aps:planning-material-start',
+      detail: {
+        material: {
+          operationId: '0:BOBINA',
+          materialName: 'CA60 4,2 Bobina',
+          unit: 'kg',
+          remainingQty: 1200
+        },
+        compatibleMachineIds: ['Trefila']
+      },
+      bubbles: false
+    });
+    fakeDocument.pointedElement = trefilaDropCell;
+    pendingMaterialRoot.dispatchEvent({
+      type: 'dragover',
+      clientX: 1,
+      clientY: 10,
+      dataTransfer: {},
+      preventDefault() {
+        this.defaultPrevented = true;
+      }
+    });
+    assert.equal(trefilaDropCell.dataset.planningMaterialTarget, 'true', 'Trefila compativel deve destacar celula valida');
+    pendingMaterialRoot.dispatchEvent({
+      type: 'drop',
+      clientX: 1,
+      clientY: 10,
+      preventDefault() {
+        this.defaultPrevented = true;
+      }
+    });
+    assert.equal(pendingMaterialDrops.length, 1);
+    assert.deepEqual(pendingMaterialDrops[0], {
+      type: 'PLANNING_MATERIAL_DROP_PREVIEW',
+      material: {
+        operationId: '0:BOBINA',
+        materialName: 'CA60 4,2 Bobina',
+        unit: 'kg',
+        remainingQty: 1200
+      },
+      to: {
+        date: '2026-09-10',
+        machineId: 'Trefila',
+        machineName: 'Trefila'
+      },
+      source: 'materials-to-schedule-drag'
+    });
+    assert.equal(trefilaDropCell.dataset.planningMaterialTarget, undefined, 'estado visual externo deve limpar apos drop');
+    pendingMaterialRenderer.destroy();
+
     const moveCountBeforeReadonlyDrag = moveRequests.length;
     const readonlyRenderer = createGanttApsRenderer({ onRequestMove: intent => moveRequests.push(intent) });
     const readonlyContainer = new FakeElement('div');
@@ -1519,7 +1910,7 @@ try {
           holiday: 'Feriado municipal'
         }]
       },
-      resources: [{ id: 'machine-total', name: 'Aço-8', order: 0 }],
+      resources: [{ id: 'machine-total', name: 'AÃ§o-8', order: 0 }],
       tasks: productionTotalTasks,
       metadata: { visualState: {} }
     });
@@ -1531,57 +1922,38 @@ try {
     assert.equal(dayHeader.attributes.get('aria-label').includes('24/07/2026'), true);
     assert.equal(dayHeader.title.includes('Dia nao util'), true);
     assert.equal(dayHeader.dataset.nonWorking, 'true', 'feriado deve preservar a hachura de dia nao util');
-    const totalCells = totalRoot.querySelectorAll('[data-production-total="start"]');
-    assert.equal(totalCells.length, 5, 'cada bloco de produção/unidade deve apresentar um único total');
-    assert.deepEqual(
-      totalCells.map(cell => cell.textContent),
-      ['7.489,04 kg', '3 un', '940 kg', '3.110,25 un', '0,6 kg'],
-      'totais devem usar formatação pt-BR sem arredondar parcelas antes da soma'
-    );
-    assert.equal(
-      totalCells[0].style.values.get('--gantt-aps-production-total-rows'),
-      '2',
-      'mesclagem visual deve cobrir a altura das duas allocation rows'
-    );
-    assert.equal(
-      totalCells[4].style.values.get('--gantt-aps-production-total-rows'),
-      '3',
-      'mesclagem visual deve cobrir três ou mais allocation rows sem repetir o total'
-    );
-    assert.equal(
-      totalRoot.querySelectorAll('[data-production-total="continuation"]').length,
-      4,
-      'rows seguintes do bloco não podem repetir o total'
-    );
+    assert.equal(totalRoot.querySelectorAll('[data-production-total="start"]').length, 0, 'linhas de allocation nao devem exibir total na coluna Maquina');
+    assert.equal(totalRoot.querySelectorAll('[data-production-total="continuation"]').length, 0, 'linhas seguintes tambem nao devem reservar total visual');
+    assert.equal(totalRoot.querySelectorAll('.gantt-aps__production-total').length, 0, 'total visual nao deve ser renderizado nas allocation rows');
     assert.equal(
       totalRoot.querySelectorAll('.gantt-aps__row--allocation').length,
       productionTotalTasks.length,
-      'uma allocation canônica deve continuar gerando uma row'
+      'uma allocation canÃ´nica deve continuar gerando uma row'
     );
     assert.equal(
       totalRoot.querySelectorAll('.gantt-aps__bar').length,
       productionTotalTasks.length,
-      'uma allocation canônica deve continuar gerando uma barra'
+      'uma allocation canÃ´nica deve continuar gerando uma barra'
     );
     assert.equal(
-      totalRoot.querySelector('.gantt-aps__table--header').textContent.includes('Máquina / total'),
-      true,
-      'primeira coluna deve comunicar máquina e total sem ampliar a tabela'
+      totalRoot.querySelector('.gantt-aps__table--header').textContent.includes('MÃ¡quina / total'),
+      false,
+      'primeira coluna deve comunicar somente maquina'
     );
     const production1Row = totalRoot.querySelectorAll('.gantt-aps__row--allocation')
       .find(row => row.dataset.allocationId === 'split:p1:1');
     const production1Bar = totalRoot.querySelectorAll('.gantt-aps__bar')
       .find(bar => bar.dataset.allocationId === 'split:p1:1');
     const production1Cell = production1Row.querySelector('.gantt-aps__cell--2');
-    const production1MaterialCell = production1Row.querySelector('.gantt-aps__cell--4');
-    assert.equal(production1Cell.textContent, 'Produção 1 / 3');
+    const production1MaterialCell = production1Row.querySelector('.gantt-aps__cell--3');
+    assert.equal(production1Cell.textContent, 'ProduÃ§Ã£o 1 / 3');
     assert.equal(production1Cell.dataset.productionCount, '2');
     assert.match(production1Cell.style.values.get('--gantt-aps-production-background'), /^linear-gradient\(90deg,/);
     assert.equal(production1MaterialCell.textContent, '4,2 Transversal - 2m');
     assert.equal(production1MaterialCell.title, '4,2 Transversal - 2m');
     assert.equal(production1MaterialCell.attributes.get('aria-label'), '4,2 Transversal - 2m');
-    assert.equal(production1Bar.querySelector('strong').textContent, 'Produção 1 / 3');
-    assert.equal(production1Bar.attributes.get('aria-label').includes('Produção 1 / 3'), true);
+    assert.equal(production1Bar.querySelector('strong').textContent, 'ProduÃ§Ã£o 1 / 3');
+    assert.equal(production1Bar.attributes.get('aria-label').includes('ProduÃ§Ã£o 1 / 3'), true);
     assert.equal(production1Bar.dataset.productionCount, '2');
     assert.equal(production1Bar.style.values.get('left'), undefined);
     assert.equal(production1Bar.style.left, '3px');
@@ -1589,31 +1961,31 @@ try {
     assert.equal(
       production1Bar.style.values.get('--gantt-aps-production-background'),
       production1Cell.style.values.get('--gantt-aps-production-background'),
-      'barra e célula devem reutilizar a mesma divisão cromática'
+      'barra e cÃ©lula devem reutilizar a mesma divisÃ£o cromÃ¡tica'
     );
     production1Bar.click();
     let inspector = totalRoot.querySelector('.gantt-aps__inspect');
-    assert.equal(inspector.querySelector('h3').textContent, 'Produção 1 / 3');
+    assert.equal(inspector.querySelector('h3').textContent, 'ProduÃ§Ã£o 1 / 3');
     assert.equal(
       inspector.style.values.get('--gantt-aps-production-background'),
       production1Cell.style.values.get('--gantt-aps-production-background')
     );
-    assert.equal(inspector.textContent.includes('Produções1 / 3'), true);
-    assert.equal(inspector.textContent.includes('Produções associadas'), false);
+    assert.equal(inspector.textContent.includes('ProduÃ§Ãµes1 / 3'), true);
+    assert.equal(inspector.textContent.includes('ProduÃ§Ãµes associadas'), false);
     assert.equal(inspector.textContent.includes('Etapa'), true);
 
     const production3Bar = totalRoot.querySelectorAll('.gantt-aps__bar')
       .find(bar => bar.dataset.allocationId === 'readonly:p3:[special]');
-    assert.equal(production3Bar.querySelector('strong').textContent, 'Produção 1 / 3');
+    assert.equal(production3Bar.querySelector('strong').textContent, 'ProduÃ§Ã£o 1 / 3');
     assert.equal(production3Bar.dataset.productionCount, '2');
     production3Bar.click();
     inspector = totalRoot.querySelector('.gantt-aps__inspect');
-    assert.equal(inspector.querySelector('h3').textContent, 'Produção 1 / 3');
-    assert.equal(inspector.textContent.includes('Produções1 / 3'), true);
-    assert.equal(inspector.textContent.includes('Produções associadas'), false);
+    assert.equal(inspector.querySelector('h3').textContent, 'ProduÃ§Ã£o 1 / 3');
+    assert.equal(inspector.textContent.includes('ProduÃ§Ãµes1 / 3'), true);
+    assert.equal(inspector.textContent.includes('ProduÃ§Ãµes associadas'), false);
     const production2Row = totalRoot.querySelectorAll('.gantt-aps__row--allocation')
       .find(row => row.dataset.allocationId === 'allocation:p2');
-    assert.equal(production2Row.querySelector('.gantt-aps__cell--2').textContent, 'Produção 2 / 3 / 4');
+    assert.equal(production2Row.querySelector('.gantt-aps__cell--2').textContent, 'ProduÃ§Ã£o 2 / 3 / 4');
     assert.equal(production2Row.querySelector('.gantt-aps__cell--2').dataset.productionCount, '3');
     const singleColorRow = totalRoot.querySelectorAll('.gantt-aps__row--allocation')
       .find(row => row.dataset.allocationId === 'split:p1:2');
@@ -1640,7 +2012,7 @@ try {
 
   const resources = Array.from({ length: 4 }, (_item, index) => ({
     id: `machine-${index}`,
-    name: `Máquina ${index}`,
+    name: `MÃ¡quina ${index}`,
     order: index
   }));
   const tasks = resources.flatMap((resource, resourceIndex) => (
@@ -1708,23 +2080,23 @@ try {
   const container = new FakeElement('div');
   const renderer = createGanttApsRenderer();
   renderer.mount(container, domModel);
-  assert.equal(container.children.length, 1, 'mount deve manter um único renderer');
+  assert.equal(container.children.length, 1, 'mount deve manter um Ãºnico renderer');
   let root = renderer.getRootElement();
   const allocationRows = root.querySelectorAll('.gantt-aps__row--allocation');
   const bars = root.querySelectorAll('.gantt-aps__bar');
-  assert.equal(allocationRows.length, GANTT_APS_ROWS_PER_PAGE, 'orçamento global deve limitar allocation rows');
+  assert.equal(allocationRows.length, GANTT_APS_ROWS_PER_PAGE, 'orÃ§amento global deve limitar allocation rows');
   assert.equal(bars.length, allocationRows.length, 'cada allocation row deve ter exatamente uma barra');
-  assert.equal(new Set(bars.map(bar => bar.dataset.allocationId)).size, bars.length, 'uma allocation canônica deve gerar uma única barra');
-  assert.equal(root.querySelectorAll('.gantt-aps__row--group').length, 1);
+  assert.equal(root.querySelector('.gantt-aps__table--header').querySelectorAll('.gantt-aps__cell').length, 6);
+  assert.equal(root.querySelectorAll('.gantt-aps__row--group').length, 2);
   assert.equal(root.querySelectorAll('[role="treegrid"]').length, 1);
-  assert.equal(root.querySelector('.gantt-aps__table--header').querySelectorAll('.gantt-aps__cell').length, 7);
   assert.equal(root.querySelectorAll('.gantt-aps__unplaced-task').length, 2);
   assert.equal(root.querySelectorAll('[data-non-working="true"]').length > 0, true);
   assert.equal(root.querySelectorAll('[data-manual-work-date="true"]').length > 0, true);
-  assert.equal(root.querySelectorAll('.gantt-aps__error').length, 1);
+  assert.equal(root.querySelectorAll('.gantt-aps__error').length, 0);
+  assert.equal(root.textContent.includes('diagnostico(s) recebido(s)'), false);
   assert.equal(root.textContent.includes('0min'), false);
   assert.equal(root.textContent.includes('0%'), false);
-  assert.equal(root.textContent.includes('Produção 1'), false);
+  assert.equal(root.textContent.includes('ProduÃ§Ã£o 1'), false);
 
   const special = root.querySelectorAll('[data-allocation-id]')
     .find(item => item.dataset.allocationId === 'readonly:special:[id]:0');
@@ -1733,20 +2105,23 @@ try {
   assert.deepEqual(
     new Set(root.querySelectorAll('.gantt-aps__bar').map(bar => bar.dataset.labelDetail)),
     new Set(['full']),
-    'as três densidades de label devem derivar da largura temporal'
+    'as trÃªs densidades de label devem derivar da largura temporal'
   );
   special.click();
   assert.equal(root.querySelectorAll('.gantt-aps__inspect').length, 1);
-  assert.deepEqual(domModel, immutableBefore, 'inspeção não pode alterar o modelo');
+  assert.deepEqual(domModel, immutableBefore, 'inspeÃ§Ã£o nÃ£o pode alterar o modelo');
 
-  root.querySelector('[data-action="toggle-group"]').click();
+  const populatedResourceId = root.querySelector('.gantt-aps__row--allocation').dataset.resourceId;
+  root.querySelectorAll('[data-action="toggle-group"]')
+    .find(button => button.dataset.resourceId === populatedResourceId)
+    .click();
   root = renderer.getRootElement();
   assert.equal(root.querySelectorAll('.gantt-aps__row--allocation').length, 0, 'grupo recolhido oculta apenas rows visuais');
   assert.equal(renderer.focusAllocation('readonly:special:[id]:0'), true, 'focus deve expandir o grupo');
   root = renderer.getRootElement();
   assert.equal(root.querySelectorAll('.gantt-aps__row--allocation').length > 0, true);
 
-  assert.equal(renderer.focusAllocation('allocation:0:65'), true, 'focus deve navegar páginas de rows');
+  assert.equal(renderer.focusAllocation('allocation:0:65'), true, 'focus deve navegar pÃ¡ginas de rows');
   root = renderer.getRootElement();
   assert.ok(root.querySelectorAll('[data-allocation-id]')
     .some(item => item.dataset.allocationId === 'allocation:0:65'));
@@ -1766,7 +2141,7 @@ try {
   assert.equal(clearedTimers.length >= 1, true, 'foco anterior deve ser cancelado');
 
   renderer.update(domModel);
-  assert.equal(container.children.length, 1, 'update deve substituir, não acumular renderer');
+  assert.equal(container.children.length, 1, 'update deve substituir, nÃ£o acumular renderer');
   root = renderer.getRootElement();
   root.querySelector('[data-action="fullscreen"]').click();
   assert.equal(fakeDocument.fullscreenElement, root);

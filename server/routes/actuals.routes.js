@@ -35,22 +35,132 @@ async function materialById(db, id) {
   return material || null;
 }
 
-async function consumedInputPayload(db, item) {
-  const source = Array.isArray(item.consumedInputs) ? item.consumedInputs : [];
-  const ids = [...new Set(source.map(input => Number(input.materialId || input.inputMaterialId || input.id)).filter(Boolean))];
-  if (!ids.length) return [];
-  const materials = await db`SELECT id, name, codes FROM materials WHERE id = ANY(${ids})`;
-  const byId = new Map(materials.map(material => [String(material.id), material]));
-  return source.map(input => {
-    const materialId = Number(input.materialId || input.inputMaterialId || input.id);
-    const material = byId.get(String(materialId));
+async function machineByName(db, name) {
+  const machineName =
+    String(name || '').trim();
+
+  if (!machineName) {
+    return null;
+  }
+
+  const [machine] = await db`
+    SELECT
+      m.id,
+      m.name,
+      m.location_id,
+      l.name AS location_name,
+      l.code AS location_code
+    FROM machines m
+    JOIN locations l
+      ON l.id = m.location_id
+    WHERE LOWER(TRIM(m.name))
+          = LOWER(TRIM(${machineName}))
+    ORDER BY
+      m.active DESC,
+      m.id
+    LIMIT 1
+  `;
+
+  return machine || null;
+}
+
+async function consumedInputPayload(
+  db,
+  item,
+  producedMaterial,
+  producedQuantity
+) {
+  const source =
+    Array.isArray(item.consumedInputs)
+      ? item.consumedInputs
+      : [];
+
+  const sourceById =
+    new Map(
+      source
+        .map(input => [
+          String(
+            Number(
+              input.materialId ||
+              input.inputMaterialId ||
+              input.id
+            ) || ''
+          ),
+          input
+        ])
+        .filter(([id]) => id)
+    );
+
+  /*
+   * A configuração oficial de consumo vem do cadastro
+   * do modelo de produção.
+   *
+   * O frontend fornece apenas o lote consumido.
+   */
+  const modelInputs = await db`
+    SELECT
+      mi.input_material_id,
+      mi.qty_per_output,
+      m.name AS material_name,
+      m.codes AS material_codes
+    FROM material_inputs mi
+    JOIN materials m
+      ON m.id = mi.input_material_id
+    WHERE mi.material_id =
+          ${Number(producedMaterial?.id || 0)}
+      AND mi.production_model_name =
+          ${String(item.productionModelName || '').trim()}
+    ORDER BY m.name
+  `;
+
+  return modelInputs.map(config => {
+    const materialId =
+      Number(config.input_material_id);
+
+    const submitted =
+      sourceById.get(
+        String(materialId)
+      ) || {};
+
+    const qtyPerOutput =
+      toNumber(
+        config.qty_per_output,
+        0
+      );
+
+    const consumedQty =
+      Number(
+        (
+          toNumber(producedQuantity) *
+          qtyPerOutput
+        ).toFixed(6)
+      );
+
     return {
       materialId,
-      materialName: material?.name || input.materialName || null,
-      materialCode: firstCode(material) || input.materialCode || null,
-      lot: String(input.lot || input.consumedLot || '').trim()
+
+      materialName:
+        config.material_name || null,
+
+      materialCode:
+        Array.isArray(
+          config.material_codes
+        )
+          ? config.material_codes[0] || null
+          : null,
+
+      lot:
+        String(
+          submitted.lot ||
+          submitted.consumedLot ||
+          ''
+        ).trim(),
+
+      qtyPerOutput,
+
+      consumedQty
     };
-  }).filter(input => input.materialId);
+  });
 }
 
 function launchStatus(row) {
@@ -137,8 +247,18 @@ function validateLaunchRequest(item, material, consumedInputs, lots) {
     || !String(item.machineName || '').trim()
     || !Number.isFinite(peopleCount)
     || peopleCount <= 0
-    || consumedInputs.some(input => !String(input.lot || '').trim())
-    || !lots.length
+    || consumedInputs.some(input => (
+  !String(input.lot || '').trim()
+  || !Number.isFinite(
+    Number(input.qtyPerOutput)
+  )
+  || Number(input.qtyPerOutput) <= 0
+  || !Number.isFinite(
+    Number(input.consumedQty)
+  )
+  || Number(input.consumedQty) <= 0
+))
+|| !lots.length
     || lots.some(lot => {
       const secondaryQty = lot.secondaryQty || Number((lot.quantity * Number(material.primary_to_secondary_factor || 1)).toFixed(3));
       return !Number.isFinite(lot.quantity)
@@ -285,25 +405,97 @@ router.post('/launches', requirePermission('launches:write'), async (req, res, n
   try {
     const db = requireDb();
     const item = req.body;
-    const material = await materialById(db, item.materialId);
-    const consumedInputs = await consumedInputPayload(db, item);
-    const lots = normalizeLots(item.producedLots?.length ? item.producedLots : [{ quantity: item.quantity, lot: item.generatedLot }]);
-    const validationError = validateLaunchRequest(item, material, consumedInputs, lots);
-    if (validationError) return res.status(400).json({ error: validationError });
-    const launchData = launchPayload(item, material, consumedInputs, lots);
+
+const material =
+  await materialById(
+    db,
+    item.materialId
+  );
+
+const lots =
+  normalizeLots(
+    item.producedLots?.length
+      ? item.producedLots
+      : [{
+          quantity: item.quantity,
+          lot: item.generatedLot
+        }]
+  );
+
+const producedQuantity =
+  Number(
+    lots
+      .reduce(
+        (sum, lot) =>
+          sum + lot.quantity,
+        0
+      )
+      .toFixed(6)
+  );
+
+const consumedInputs =
+  await consumedInputPayload(
+    db,
+    item,
+    material,
+    producedQuantity
+  );
+
+const machine =
+  await machineByName(
+    db,
+    item.machineName
+  );
+
+if (!machine) {
+  return res.status(400).json({
+    error:
+      'Máquina inválida ou sem local cadastrado.'
+  });
+}
+
+const validationError =
+  validateLaunchRequest(
+    item,
+    material,
+    consumedInputs,
+    lots
+  );
+
+if (validationError) {
+  return res.status(400).json({
+    error: validationError
+  });
+}
+
+const launchData =
+  launchPayload(
+    item,
+    material,
+    consumedInputs,
+    lots
+  );
 
     const row = await db.begin(async tx => {
       const [launch] = await tx`
         INSERT INTO production_launches (
           production_date, material_id, material_name, material_code, quantity, primary_unit,
-          secondary_qty, secondary_unit, machine_name, people_count, planning_code, notes, user_id,
-          production_model_name, consumed_inputs, input_material_name, input_material_code, consumed_lot,
-          produced_lots, status
+          secondary_qty, secondary_unit, machine_name, location_id, location_name,
+people_count, planning_code, notes, user_id,
+production_model_name, consumed_inputs, input_material_name, input_material_code, consumed_lot,
+produced_lots, status
         )
         VALUES (
           ${item.productionDate}, ${material.id}, ${material.name}, ${launchData.materialCode}, ${launchData.quantity}, ${material.primary_unit},
-          ${launchData.secondaryQty}, ${material.secondary_unit}, ${item.machineName || null}, ${Number(item.peopleCount || 0) || null},
-          ${item.planningCode || null}, ${item.notes || null}, NULL,
+          ${launchData.secondaryQty},
+${material.secondary_unit},
+${machine.name},
+${machine.location_id},
+${machine.location_name},
+${Number(item.peopleCount || 0) || null},
+${item.planningCode || null},
+${item.notes || null},
+NULL,
           ${launchData.productionModelName}, ${tx.json(launchData.consumedInputs)},
           ${launchData.inputMaterialName}, ${launchData.inputMaterialCode}, ${launchData.consumedLot},
           ${tx.json(launchData.producedLots)}, 'launched'
@@ -312,7 +504,7 @@ router.post('/launches', requirePermission('launches:write'), async (req, res, n
       `;
       await tx`
         INSERT INTO production_actuals (production_date, material_name, material_code, machine_name, actual_qty, actual_unit, notes)
-        VALUES (${item.productionDate}, ${material.name}, ${launchData.materialCode}, ${item.machineName || null}, ${launchData.quantity}, ${material.primary_unit}, ${item.notes || null})
+        VALUES (${item.productionDate}, ${material.name}, ${launchData.materialCode}, ${machine.name}, ${launchData.quantity}, ${material.primary_unit}, ${item.notes || null})
       `;
       return launch;
     });
@@ -332,42 +524,539 @@ router.post('/launches', requirePermission('launches:write'), async (req, res, n
 router.get('/launches', requirePermission('launches:read'), async (req, res, next) => {
   try {
     const db = requireDb();
-    const startDate = isDateOnly(req.query.startDate) ? toDateOnly(req.query.startDate) : '';
-    const endDate = isDateOnly(req.query.endDate) ? toDateOnly(req.query.endDate) : '';
-    const machineName = String(req.query.machineName || '').trim();
-    const materialIds = queryList(req.query.materialIds).map(Number).filter(Number.isFinite);
-    const limit = Math.min(Math.max(Number(req.query.limit || 500), 1), 2000);
-    if (startDate && endDate && startDate > endDate) {
-      return res.status(400).json({ error: 'Período de produção inválido.' });
+
+    const startDate =
+      isDateOnly(req.query.startDate)
+        ? toDateOnly(req.query.startDate)
+        : '';
+
+    const endDate =
+      isDateOnly(req.query.endDate)
+        ? toDateOnly(req.query.endDate)
+        : '';
+
+    const machineName =
+      String(req.query.machineName || '').trim();
+
+    const materialIds =
+      queryList(req.query.materialIds)
+        .map(Number)
+        .filter(Number.isFinite);
+
+    const includeMeta =
+      String(req.query.includeMeta || '') === '1';
+
+    if (
+      startDate &&
+      endDate &&
+      startDate > endDate
+    ) {
+      return res.status(400).json({
+        error: 'Período de produção inválido.'
+      });
     }
+
     const clauses = [];
     const params = [];
+
     if (startDate) {
       params.push(startDate);
-      clauses.push(`production_date >= $${params.length}`);
+      clauses.push(
+        `production_date >= $${params.length}`
+      );
     }
+
     if (endDate) {
       params.push(endDate);
-      clauses.push(`production_date <= $${params.length}`);
+      clauses.push(
+        `production_date <= $${params.length}`
+      );
     }
+
     if (machineName) {
       params.push(machineName);
-      clauses.push(`machine_name = $${params.length}`);
+      clauses.push(
+        `machine_name = $${params.length}`
+      );
     }
+
     if (materialIds.length) {
       params.push(materialIds);
-      clauses.push(`material_id = ANY($${params.length}::int[])`);
+      clauses.push(
+        `material_id = ANY($${params.length}::int[])`
+      );
     }
-    params.push(limit);
-    const whereClause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const rows = await db.unsafe(`
-      SELECT *
-      FROM production_launches
-      ${whereClause}
-      ORDER BY production_date DESC, created_at DESC
-      LIMIT $${params.length}
-    `, params);
-    res.json(rows.map(row => ({ ...row, status: launchStatus(row) })));
+
+    const whereClause =
+      clauses.length
+        ? `WHERE ${clauses.join(' AND ')}`
+        : '';
+
+    /*
+     * Mantém compatibilidade com algum outro lugar
+     * do sistema que ainda espere apenas um array.
+     */
+    if (!includeMeta) {
+      const limit =
+        Math.min(
+          Math.max(
+            Number(req.query.limit || 500),
+            1
+          ),
+          2000
+        );
+
+      const listParams = [
+        ...params,
+        limit
+      ];
+
+      const rows =
+        await db.unsafe(`
+          SELECT *
+          FROM production_launches
+          ${whereClause}
+          ORDER BY
+            production_date DESC,
+            created_at DESC,
+            id DESC
+          LIMIT $${listParams.length}
+        `, listParams);
+
+      return res.json(
+        rows.map(row => ({
+          ...row,
+          status: launchStatus(row)
+        }))
+      );
+    }
+
+    const requestedPage =
+      Math.max(
+        Number(req.query.page || 1),
+        1
+      );
+
+    const pageSize =
+      Math.min(
+        Math.max(
+          Number(req.query.pageSize || 100),
+          25
+        ),
+        200
+      );
+
+    const canceledSql = `
+      LOWER(
+        TRIM(
+          COALESCE(status, '')
+        )
+      )
+      IN (
+        'canceled',
+        'cancelled',
+        'cancelado',
+        'cancelada'
+      )
+    `;
+
+    const activeWhereClause =
+      whereClause
+        ? `${whereClause} AND NOT (${canceledSql})`
+        : `WHERE NOT (${canceledSql})`;
+
+    const [
+      summaryRows,
+      primaryTotals,
+      secondaryTotals,
+      weightTotals
+    ] =
+      await Promise.all([
+
+        db.unsafe(`
+          SELECT
+            COUNT(*) AS total_rows,
+
+            COUNT(*)
+              FILTER (
+                WHERE NOT (${canceledSql})
+              )
+              AS total_productions,
+
+            COUNT(*)
+              FILTER (
+                WHERE ${canceledSql}
+              )
+              AS canceled,
+
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN NOT (${canceledSql})
+                  THEN
+                    CASE
+                      WHEN
+                        jsonb_typeof(
+                          COALESCE(
+                            produced_lots,
+                            '[]'::jsonb
+                          )
+                        ) = 'array'
+                        AND
+                        jsonb_array_length(
+                          COALESCE(
+                            produced_lots,
+                            '[]'::jsonb
+                          )
+                        ) > 0
+                      THEN
+                        jsonb_array_length(
+                          COALESCE(
+                            produced_lots,
+                            '[]'::jsonb
+                          )
+                        )
+                      ELSE 1
+                    END
+                  ELSE 0
+                END
+              ),
+              0
+            ) AS lots,
+
+            COUNT(*)
+              FILTER (
+                WHERE
+                  NOT (${canceledSql})
+                  AND
+                  LOWER(
+                    TRIM(
+                      COALESCE(status, '')
+                    )
+                  ) <> 'cancel_requested'
+                  AND
+                  (
+                    CASE
+                      WHEN
+                        jsonb_typeof(
+                          COALESCE(
+                            produced_lots,
+                            '[]'::jsonb
+                          )
+                        ) = 'array'
+                        AND
+                        jsonb_array_length(
+                          COALESCE(
+                            produced_lots,
+                            '[]'::jsonb
+                          )
+                        ) > 0
+                      THEN EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(
+                          COALESCE(
+                            produced_lots,
+                            '[]'::jsonb
+                          )
+                        ) AS lot
+                        WHERE
+                          COALESCE(
+                            NULLIF(
+                              TRIM(
+                                lot->>'benefitNumber'
+                              ),
+                              ''
+                            ),
+                            NULLIF(
+                              TRIM(
+                                lot->>'benefit_number'
+                              ),
+                              ''
+                            )
+                          )
+                          IS NULL
+                      )
+                      ELSE
+                        NULLIF(
+                          TRIM(
+                            COALESCE(
+                              benefit_number,
+                              ''
+                            )
+                          ),
+                          ''
+                        )
+                        IS NULL
+                    END
+                  )
+              )
+              AS pending_benefit
+
+          FROM production_launches
+          ${whereClause}
+        `, params),
+
+        db.unsafe(`
+          SELECT
+            TRIM(primary_unit) AS unit,
+            SUM(quantity) AS quantity
+
+          FROM production_launches
+          ${activeWhereClause}
+
+            AND NULLIF(
+              TRIM(
+                COALESCE(
+                  primary_unit,
+                  ''
+                )
+              ),
+              ''
+            )
+            IS NOT NULL
+
+          GROUP BY TRIM(primary_unit)
+          ORDER BY TRIM(primary_unit)
+        `, params),
+
+        db.unsafe(`
+          SELECT
+            TRIM(secondary_unit) AS unit,
+            SUM(secondary_qty) AS quantity
+
+          FROM production_launches
+          ${activeWhereClause}
+
+            AND NULLIF(
+              TRIM(
+                COALESCE(
+                  secondary_unit,
+                  ''
+                )
+              ),
+              ''
+            )
+            IS NOT NULL
+
+          GROUP BY TRIM(secondary_unit)
+          ORDER BY TRIM(secondary_unit)
+        `, params),
+
+        db.unsafe(`
+          SELECT
+            unit,
+            SUM(quantity) AS quantity
+
+          FROM (
+            SELECT
+              COALESCE(
+                NULLIF(
+                  TRIM(
+                    lot->>'realWeightUnit'
+                  ),
+                  ''
+                ),
+                NULLIF(
+                  TRIM(
+                    lot->>'real_weight_unit'
+                  ),
+                  ''
+                ),
+                NULLIF(
+                  TRIM(
+                    lot->>'secondaryUnit'
+                  ),
+                  ''
+                ),
+                NULLIF(
+                  TRIM(
+                    lot->>'secondary_unit'
+                  ),
+                  ''
+                ),
+                NULLIF(
+                  TRIM(
+                    COALESCE(
+                      secondary_unit,
+                      ''
+                    )
+                  ),
+                  ''
+                )
+              ) AS unit,
+
+              COALESCE(
+                NULLIF(
+                  lot->>'realWeight',
+                  ''
+                )::numeric,
+
+                NULLIF(
+                  lot->>'real_weight',
+                  ''
+                )::numeric,
+
+                0
+              ) AS quantity
+
+            FROM production_launches
+
+            CROSS JOIN LATERAL
+              jsonb_array_elements(
+                CASE
+                  WHEN
+                    jsonb_typeof(
+                      COALESCE(
+                        produced_lots,
+                        '[]'::jsonb
+                      )
+                    ) = 'array'
+                  THEN
+                    COALESCE(
+                      produced_lots,
+                      '[]'::jsonb
+                    )
+                  ELSE
+                    '[]'::jsonb
+                END
+              ) AS lot
+
+            ${activeWhereClause}
+          ) AS weights
+
+          WHERE unit IS NOT NULL
+
+          GROUP BY unit
+          ORDER BY unit
+        `, params)
+      ]);
+
+    const summaryRow =
+      summaryRows[0] || {};
+
+    const total =
+      Number(
+        summaryRow.total_rows || 0
+      );
+
+    const totalPages =
+      Math.max(
+        1,
+        Math.ceil(
+          total / pageSize
+        )
+      );
+
+    const pageNumber =
+      Math.min(
+        requestedPage,
+        totalPages
+      );
+
+    const offset =
+      (pageNumber - 1) *
+      pageSize;
+
+    const rowParams = [
+      ...params,
+      pageSize,
+      offset
+    ];
+
+    const rows =
+      await db.unsafe(`
+        SELECT *
+        FROM production_launches
+        ${whereClause}
+
+        ORDER BY
+          production_date DESC,
+          created_at DESC,
+          id DESC
+
+        LIMIT $${params.length + 1}
+        OFFSET $${params.length + 2}
+      `, rowParams);
+
+    const normalizeTotals =
+      totals =>
+        totals.map(item => ({
+          unit:
+            String(
+              item.unit || ''
+            ).trim(),
+
+          quantity:
+            Number(
+              item.quantity || 0
+            )
+        }));
+
+    res.json({
+      rows:
+        rows.map(row => ({
+          ...row,
+          status: launchStatus(row)
+        })),
+
+      pagination: {
+        page: pageNumber,
+        pageSize,
+        total,
+        totalPages,
+
+        from:
+          total
+            ? offset + 1
+            : 0,
+
+        to:
+          total
+            ? Math.min(
+                offset + rows.length,
+                total
+              )
+            : 0
+      },
+
+      summary: {
+        totalProductions:
+          Number(
+            summaryRow.total_productions || 0
+          ),
+
+        totalPrimary:
+          normalizeTotals(
+            primaryTotals
+          ),
+
+        totalSecondary:
+          normalizeTotals(
+            secondaryTotals
+          ),
+
+        realWeight:
+          normalizeTotals(
+            weightTotals
+          ),
+
+        lots:
+          Number(
+            summaryRow.lots || 0
+          ),
+
+        pendingBenefit:
+          Number(
+            summaryRow.pending_benefit || 0
+          ),
+
+        canceled:
+          Number(
+            summaryRow.canceled || 0
+          )
+      }
+    });
+
   } catch (error) {
     next(error);
   }
@@ -460,12 +1149,75 @@ router.put('/launches/:id', requirePermission('launches:write'), async (req, res
     const item = req.body;
     const [current] = await db`SELECT * FROM production_launches WHERE id = ${req.params.id}`;
     if (!current) return res.status(404).json({ error: 'Produção não encontrada.' });
-    const material = await materialById(db, item.materialId);
-    const consumedInputs = await consumedInputPayload(db, item);
-    const lots = normalizeLots(item.producedLots?.length ? item.producedLots : [{ quantity: item.quantity, lot: item.generatedLot }]);
-    const validationError = validateLaunchRequest(item, material, consumedInputs, lots);
-    if (validationError) return res.status(400).json({ error: validationError });
-    const launchData = launchPayload(item, material, consumedInputs, lots);
+    const material =
+  await materialById(
+    db,
+    item.materialId
+  );
+
+const lots =
+  normalizeLots(
+    item.producedLots?.length
+      ? item.producedLots
+      : [{
+          quantity: item.quantity,
+          lot: item.generatedLot
+        }]
+  );
+
+const producedQuantity =
+  Number(
+    lots
+      .reduce(
+        (sum, lot) =>
+          sum + lot.quantity,
+        0
+      )
+      .toFixed(6)
+  );
+
+const consumedInputs =
+  await consumedInputPayload(
+    db,
+    item,
+    material,
+    producedQuantity
+  );
+
+const machine =
+  await machineByName(
+    db,
+    item.machineName
+  );
+
+if (!machine) {
+  return res.status(400).json({
+    error:
+      'Máquina inválida ou sem local cadastrado.'
+  });
+}
+
+const validationError =
+  validateLaunchRequest(
+    item,
+    material,
+    consumedInputs,
+    lots
+  );
+
+if (validationError) {
+  return res.status(400).json({
+    error: validationError
+  });
+}
+
+const launchData =
+  launchPayload(
+    item,
+    material,
+    consumedInputs,
+    lots
+  );
 
     const [row] = await db`
       UPDATE production_launches
@@ -477,8 +1229,10 @@ router.put('/launches/:id', requirePermission('launches:write'), async (req, res
           primary_unit = ${material.primary_unit},
           secondary_qty = ${launchData.secondaryQty},
           secondary_unit = ${material.secondary_unit},
-          machine_name = ${item.machineName || null},
-          people_count = ${Number(item.peopleCount || 0) || null},
+          machine_name = ${machine.name},
+location_id = ${machine.location_id},
+location_name = ${machine.location_name},
+people_count = ${Number(item.peopleCount || 0) || null},
           planning_code = ${item.planningCode || null},
           notes = ${item.notes || null},
           production_model_name = ${launchData.productionModelName},
