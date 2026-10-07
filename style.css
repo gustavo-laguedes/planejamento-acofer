@@ -21242,3 +21242,25 @@ html[data-theme="dark"] .dashboard-v5-report-error {
 }
 
 /* === /Dashboard V5B.2 === */
+
+/* =========================================================
+   Usuários / perfil e redefinição de senha
+   ========================================================= */
+.user-password-backdrop, .user-profile-backdrop { z-index: 1500; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.user-password-modal { width: min(520px, 100%); }
+.user-password-form, .user-profile-form { display: grid; gap: 16px; }
+.user-password-form label, .user-profile-form label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 800; }
+.user-profile-modal { width: min(720px, 100%); }
+.user-profile-grid, .user-profile-password-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.user-profile-grid label:first-child { grid-column: 1 / -1; }
+.user-profile-password-section { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(148, 163, 184, .06); }
+.user-profile-password-section strong { color: var(--ink); font-size: 14px; }
+.user-profile-password-section p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+.user-profile-actions { justify-content: flex-end; }
+.user-actions { align-items: center; }
+.user-actions [data-password] { white-space: nowrap; }
+.app-user-dropdown { width: 172px; }
+.app-profile-icon, .app-logout-icon { width: 20px; height: 20px; display: grid; place-items: center; color: #475467; }
+.app-profile-icon svg, .app-logout-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 720px) { .user-profile-grid, .user-profile-password-grid { grid-template-columns: 1fr; } }
+html[data-theme="dark"] .user-profile-password-section { background: rgba(255, 255, 255, .035); }

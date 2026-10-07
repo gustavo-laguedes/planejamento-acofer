@@ -1,6 +1,7 @@
 import { api, getCurrentUser } from './api.js';
 import { signOut } from './clerkAuth.js';
 import { UserManagementModal } from './UserManagementModal.js';
+import { UserProfileModal } from './UserProfileModal.js';
 import { ROLES, canAccess, normalizeRole } from './rbac.js';
 import { clearBrowserSession } from './browserSession.js';
 import { resetPlanningBrowserCache } from './browserCacheReset.js';
@@ -243,10 +244,15 @@ function userInitials(user = {}) {
 function userMenu(user) {
   const wrapper = document.createElement('div');
   wrapper.className = 'app-user-menu';
-  wrapper.innerHTML = `<button class="app-user-trigger" type="button" aria-expanded="false"><span class="app-user-avatar">${escapeHtml(userInitials(user))}</span><span class="app-user-copy"><strong>${escapeHtml(user?.name || 'Usuário')}</strong><span>${escapeHtml(user?.role || '')}</span></span><span class="app-user-chevron" aria-hidden="true">⌄</span></button><div class="app-user-dropdown" hidden><button type="button" data-user-logout><span class="app-logout-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10"/></svg></span><span>Sair</span></button></div>`;
+  wrapper.innerHTML = `<button class="app-user-trigger" type="button" aria-expanded="false"><span class="app-user-avatar">${escapeHtml(userInitials(user))}</span><span class="app-user-copy"><strong>${escapeHtml(user?.name || 'Usuário')}</strong><span>${escapeHtml(user?.role || '')}</span></span><span class="app-user-chevron" aria-hidden="true">⌄</span></button><div class="app-user-dropdown" hidden><button type="button" data-user-profile><span class="app-profile-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"/></svg></span><span>Meu usuário</span></button><button type="button" data-user-logout><span class="app-logout-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10"/></svg></span><span>Sair</span></button></div>`;
   const trigger = wrapper.querySelector('.app-user-trigger'); const dropdown = wrapper.querySelector('.app-user-dropdown');
   trigger.addEventListener('click', event => { event.stopPropagation(); const expanded = dropdown.hidden; dropdown.hidden = !expanded; trigger.setAttribute('aria-expanded', String(expanded)); });
   document.addEventListener('click', event => { if (wrapper.contains(event.target)) return; dropdown.hidden = true; trigger.setAttribute('aria-expanded', 'false'); });
+  wrapper.querySelector('[data-user-profile]').addEventListener('click', () => {
+    dropdown.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+    document.body.appendChild(UserProfileModal(user));
+  });
   wrapper.querySelector('[data-user-logout]').addEventListener('click', async () => { await api('/auth/events/logout', { method: 'POST' }).catch(() => {}); await api('/auth/session/close', { method: 'POST' }).catch(() => {}); clearBrowserSession(); await signOut(); window.location.reload(); });
   return wrapper;
 }

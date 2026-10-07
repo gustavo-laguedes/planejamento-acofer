@@ -188,6 +188,99 @@ export async function getProfileForTokenPayload(payload) {
   return rows[0] || null;
 }
 
+function clerkNamePayload(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  const firstName = parts.shift() || '';
+  const lastName = parts.join(' ');
+
+  return {
+    first_name: firstName,
+    last_name: lastName || null
+  };
+}
+
+async function clerkApiRequest(path, { method = 'GET', body } = {}) {
+  if (!process.env.CLERK_SECRET_KEY) {
+    const error = new Error('CLERK_SECRET_KEY nao configurada.');
+    error.status = 500;
+    throw error;
+  }
+
+  const response = await fetch(`https://api.clerk.com/v1${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${process.env.CLERK_SECRET_KEY}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const error = new Error(
+      payload.errors?.[0]?.long_message
+      || payload.errors?.[0]?.message
+      || payload.message
+      || 'Falha ao comunicar com o Clerk.'
+    );
+    error.status = response.status;
+    throw error;
+  }
+
+  return payload;
+}
+
+export async function updateClerkUser({
+  clerkUserId,
+  name,
+  password,
+  signOutOfOtherSessions = false
+}) {
+  const id = String(clerkUserId || '').trim();
+
+  if (!id) {
+    const error = new Error('Usuario ainda nao esta vinculado ao Clerk.');
+    error.status = 409;
+    throw error;
+  }
+
+  const body = {};
+
+  if (name !== undefined) Object.assign(body, clerkNamePayload(name));
+
+  if (password) {
+    body.password = String(password);
+    body.sign_out_of_other_sessions = Boolean(signOutOfOtherSessions);
+  }
+
+  if (!Object.keys(body).length) return getClerkUser(id);
+
+  return clerkApiRequest(`/users/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body
+  });
+}
+
+export async function updateClerkUserMetadata(clerkUserId, metadata = {}) {
+  const id = String(clerkUserId || '').trim();
+  if (!id) return null;
+
+  return clerkApiRequest(`/users/${encodeURIComponent(id)}/metadata`, {
+    method: 'PATCH',
+    body: { public_metadata: metadata }
+  });
+}
+
+export async function deleteClerkUser(clerkUserId) {
+  const id = String(clerkUserId || '').trim();
+  if (!id) return null;
+
+  return clerkApiRequest(`/users/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
+}
+
 export async function inviteClerkUser({ email, name, role }) {
   if (!process.env.CLERK_SECRET_KEY) {
     const error = new Error('CLERK_SECRET_KEY nao configurada.');

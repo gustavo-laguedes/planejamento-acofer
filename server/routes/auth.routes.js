@@ -5,10 +5,13 @@ import {
   USER_STATUSES,
   assertRole,
   assertStatus,
+  deleteClerkUser,
   ensureInitialSuperAdmin,
   inviteClerkUser,
   isSuperAdmin,
-  roleSlug
+  roleSlug,
+  updateClerkUser,
+  updateClerkUserMetadata
 } from '../auth/clerk.js';
 import { requireAuth, requireIdentity, requirePermission } from './middleware.js';
 import { permissionsForRole } from '../../shared/rbac.js';
@@ -122,6 +125,55 @@ router.post('/events/logout', requireAuth, async (req, res, next) => {
   }
 });
 
+router.patch('/profile', requireAuth, async (req, res, next) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const password = String(req.body?.password || '');
+    const confirmPassword = String(req.body?.confirmPassword || '');
+
+    if (!name) return res.status(400).json({ error: 'Nome e obrigatorio.' });
+    if (password || confirmPassword) {
+      if (password !== confirmPassword) {
+        return res.status(400).json({ error: 'As senhas nao conferem.' });
+      }
+      if (password.length < 8) {
+        return res.status(400).json({ error: 'A nova senha deve ter pelo menos 8 caracteres.' });
+      }
+    }
+
+    const sql = requireDb();
+    const current = await sql`SELECT * FROM app_users WHERE id = ${req.user.id} LIMIT 1`;
+    if (!current[0]) return res.status(404).json({ error: 'Usuario nao encontrado.' });
+
+    await updateClerkUser({
+      clerkUserId: req.user.clerkUserId,
+      name,
+      password: password || undefined,
+      signOutOfOtherSessions: Boolean(password)
+    });
+    await updateClerkUserMetadata(req.user.clerkUserId, {
+      name,
+      role: current[0].role,
+      status: current[0].status
+    });
+
+    const rows = await sql`
+      UPDATE app_users SET name = ${name}, updated_at = now()
+      WHERE id = ${req.user.id} RETURNING *
+    `;
+    await recordAuditLog(sql, {
+      user: req.user,
+      action: password ? 'Alteracao de perfil e senha' : 'Alteracao de perfil',
+      module: 'Usuarios',
+      description: password ? 'Atualizou o proprio perfil e redefiniu a senha' : 'Atualizou o proprio perfil',
+      recordRef: rows[0].id
+    });
+    res.json({ user: serializeUser(rows[0]) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/users', requireAuth, requirePermission('users:manage'), async (req, res, next) => {
   try {
     await ensureInitialSuperAdmin();
@@ -216,6 +268,11 @@ router.patch('/users/:id', requireAuth, requirePermission('users:manage'), async
       return res.status(400).json({ error: 'O Super Admin inicial nao pode ser desativado ou perder acesso.' });
     }
 
+    if (current[0].clerk_user_id) {
+      await updateClerkUser({ clerkUserId: current[0].clerk_user_id, name });
+      await updateClerkUserMetadata(current[0].clerk_user_id, { name, role, status });
+    }
+
     const rows = await sql`
       UPDATE app_users
       SET name = ${name}, role = ${role}, status = ${status}, updated_at = now()
@@ -248,6 +305,48 @@ router.patch('/users/:id', requireAuth, requirePermission('users:manage'), async
   }
 });
 
+router.patch('/users/:id/password', requireAuth, requirePermission('users:manage'), async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const password = String(req.body?.password || '');
+    const confirmPassword = String(req.body?.confirmPassword || '');
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Usuario invalido.' });
+    if (!password || password !== confirmPassword) {
+      return res.status(400).json({ error: 'Informe a nova senha e confirme com o mesmo valor.' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'A nova senha deve ter pelo menos 8 caracteres.' });
+    }
+    const sql = requireDb();
+    const current = await sql`SELECT * FROM app_users WHERE id = ${id} LIMIT 1`;
+    if (!current[0]) return res.status(404).json({ error: 'Usuario nao encontrado.' });
+    if (!current[0].clerk_user_id) {
+      return res.status(409).json({ error: 'Usuario ainda nao esta vinculado ao Clerk.' });
+    }
+    await updateClerkUser({
+      clerkUserId: current[0].clerk_user_id,
+      password,
+      signOutOfOtherSessions: true
+    });
+    await sql`
+      UPDATE app_users
+      SET active_browser_session_id = NULL, active_session_started_at = NULL,
+          active_session_last_seen_at = now(), updated_at = now()
+      WHERE id = ${id}
+    `;
+    await recordAuditLog(sql, {
+      user: req.user,
+      action: 'Redefinicao de senha',
+      module: 'Usuarios',
+      description: `Redefiniu a senha de ${current[0].name}`,
+      recordRef: current[0].id
+    });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.delete('/users/:id', requireAuth, requirePermission('users:manage'), async (req, res, next) => {
   try {
     const id = Number(req.params.id);
@@ -268,6 +367,7 @@ router.delete('/users/:id', requireAuth, requirePermission('users:manage'), asyn
       return res.status(400).json({ error: 'O Super Admin inicial nao pode ser removido.' });
     }
 
+    if (current[0].clerk_user_id) await deleteClerkUser(current[0].clerk_user_id);
     await sql`DELETE FROM app_users WHERE id = ${id}`;
     await recordAuditLog(sql, {
       user: req.user,
