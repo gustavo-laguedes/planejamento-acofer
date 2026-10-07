@@ -21264,3 +21264,30 @@ html[data-theme="dark"] .dashboard-v5-report-error {
 .app-profile-icon svg, .app-logout-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 @media (max-width: 720px) { .user-profile-grid, .user-profile-password-grid { grid-template-columns: 1fr; } }
 html[data-theme="dark"] .user-profile-password-section { background: rgba(255, 255, 255, .035); }
+
+/* =========================================================
+   Login — espaçamento interno das etapas
+   ========================================================= */
+
+.login-form-panel [data-login-credentials]:not([hidden]),
+.login-form-panel [data-login-verification]:not([hidden]) {
+  display: grid;
+  gap: 14px;
+}
+
+.login-form-panel [data-login-credentials] .primary-button.full,
+.login-form-panel [data-login-verification] .primary-button.full {
+  margin-top: 6px;
+}
+
+.login-form-panel [data-login-credentials] .login-reset-link,
+.login-form-panel [data-login-verification] .login-reset-link {
+  margin-top: 2px;
+}
+
+.login-form-panel [data-login-verification] > p {
+  margin: 0 0 2px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
