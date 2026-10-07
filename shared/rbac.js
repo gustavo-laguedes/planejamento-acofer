@@ -9,12 +9,12 @@ export const ROLES = {
 };
 
 export const TAB_PERMISSIONS = {
+  dashboardReports: 'productivity:read',
+  calendar: 'planning:read',
   planning: 'planning:read',
   analysis: 'planning:read',
-  commercialCalendar: 'commercial:calendar',
   tracking: 'productivity:read',
   stock: 'stock:read',
-  restricted: 'restricted:read',
   production: 'launches:read',
   history: 'launches:read',
   dashboardReports: 'productivity:read',
@@ -24,17 +24,21 @@ export const TAB_PERMISSIONS = {
 };
 
 export const DEFAULT_TAB_BY_ROLE = {
+  [ROLES.SUPER_ADMIN]: 'dashboardReports',
+  [ROLES.DIRETOR]: 'dashboardReports',
+  [ROLES.GERENTE]: 'dashboardReports',
+  [ROLES.PCP]: 'dashboardReports',
   [ROLES.OPERADOR]: 'production',
-  [ROLES.COMERCIAL]: 'commercialCalendar',
+  [ROLES.COMERCIAL]: 'calendar',
   [ROLES.VISUALIZADOR]: 'dashboardReports'
 };
 
 const OPERATIONAL_TABS = [
+  'dashboardReports',
+  'calendar',
   'planning',
   'analysis',
-  'commercialCalendar',
   'tracking',
-  'dashboardReports',
   'stock',
   'production',
   'history',
@@ -45,8 +49,7 @@ const OPERATIONAL_TABS = [
 export const ROLE_TABS = {
   [ROLES.SUPER_ADMIN]: [
     ...OPERATIONAL_TABS,
-    'audit',
-    'restricted'
+    'audit'
   ],
   [ROLES.DIRETOR]: [
     ...OPERATIONAL_TABS,
@@ -54,7 +57,7 @@ export const ROLE_TABS = {
   ],
   [ROLES.GERENTE]: OPERATIONAL_TABS,
   [ROLES.PCP]: OPERATIONAL_TABS,
-  [ROLES.COMERCIAL]: ['commercialCalendar'],
+  [ROLES.COMERCIAL]: ['calendar'],
   [ROLES.OPERADOR]: ['production'],
   [ROLES.VISUALIZADOR]: ['dashboardReports']
 };

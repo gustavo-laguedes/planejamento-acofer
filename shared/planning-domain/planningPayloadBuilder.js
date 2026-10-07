@@ -11,6 +11,24 @@ export function buildProductionPayload({
     const material = findMaterialById(materials, production.materialId);
     return {
       materialId: Number(production.materialId),
+
+      productionNumber:
+        Number.isInteger(
+          Number(
+            production.productionNumber
+          )
+        )
+        &&
+        Number(
+          production.productionNumber
+        ) > 0
+
+          ? Number(
+              production.productionNumber
+            )
+
+          : productionIndex + 1,
+
       color: isHexColor(production.color) ? production.color : getAutomaticProductionColor(productionIndex),
       materialCode: material?.codes?.[0] || '',
       plannedQty: Number(production.plannedQty),
@@ -49,15 +67,28 @@ export function buildStockOnlyMaterialsForPayload({ stockOnlyMaterials, producti
 }
 
 export function buildShiftPayload(shifts, { getDefaultTeamAvailable }) {
-  return shifts.map((shift, index) => ({
-    label: shift.label,
-    hoursPerDay: String(shift.hoursPerDay || '').trim() || '8,48',
-    shiftStartTime: shift.shiftStartTime,
-    pauseLabel: shift.pauseLabel,
-    pauseHours: '0',
-    shiftEndTime: shift.shiftEndTime,
-    teamAvailable: getDefaultTeamAvailable(shift.teamAvailable, index)
-  }));
+  return shifts.map((shift, index) => {
+    const legacyTotal = getDefaultTeamAvailable(shift.teamAvailable, index);
+    const suppliedMatrix = Number(shift.matrixTeamAvailable);
+    const matrixTeamAvailable = Number.isInteger(suppliedMatrix) && suppliedMatrix >= 0
+      ? suppliedMatrix
+      : 1;
+    const suppliedFeital = Number(shift.feitalTeamAvailable);
+    const feitalTeamAvailable = Number.isInteger(suppliedFeital) && suppliedFeital >= 0
+      ? suppliedFeital
+      : Math.max(legacyTotal - matrixTeamAvailable, 0);
+    return {
+      label: shift.label,
+      hoursPerDay: String(shift.hoursPerDay || '').trim() || '8,48',
+      shiftStartTime: shift.shiftStartTime,
+      pauseLabel: shift.pauseLabel,
+      pauseHours: '0',
+      shiftEndTime: shift.shiftEndTime,
+      matrixTeamAvailable,
+      feitalTeamAvailable,
+      teamAvailable: matrixTeamAvailable + feitalTeamAvailable
+    };
+  });
 }
 
 export function buildPlanningSimulationPayload({

@@ -1022,8 +1022,7 @@ export function ImportHistoryPage() {
 
     function transportOriginStockHtml(
       material,
-      originLocationId,
-      exceeded = false
+      originLocationId
     ) {
       if (!originLocationId) {
         return '<span>Selecione a origem para consultar o estoque.</span>';
@@ -1061,14 +1060,19 @@ export function ImportHistoryPage() {
       const primaryText =
         `${formatNumber(primaryQty)} ${primaryUnit}`.trim();
 
-      let quantityText = primaryText;
+      let quantityText =
+        primaryText;
 
       if (
         secondaryUnit
-        && factor > 0
+        &&
+        factor > 0
         && (
           secondaryUnit !== primaryUnit
-          || Math.abs(factor - 1) > 0.000001
+          ||
+          Math.abs(
+            factor - 1
+          ) > 0.000001
         )
       ) {
         const secondaryQty =
@@ -1084,11 +1088,6 @@ export function ImportHistoryPage() {
       return `
         <span>Em estoque na origem:</span>
         <strong>${escapeHtml(quantityText)}</strong>
-        ${
-          exceeded
-            ? '<em class="transport-stock-warning">Quantidade acima do estoque disponível.</em>'
-            : ''
-        }
       `;
     }
 
@@ -1103,51 +1102,11 @@ export function ImportHistoryPage() {
           )
         ];
 
-      const requestedByMaterial =
-        new Map();
-
-      lineRows.forEach(lineRow => {
-        const materialId =
-          lineRow.querySelector(
-            '[name="lineMaterialId"]'
-          )?.value;
-
-        const quantity =
-          Number(
-            lineRow.querySelector(
-              '[name="lineQuantity"]'
-            )?.value || 0
-          );
-
-        if (
-          !materialId
-          || !(quantity > 0)
-        ) {
-          return;
-        }
-
-        requestedByMaterial.set(
-          String(materialId),
-
-          Number(
-            requestedByMaterial.get(
-              String(materialId)
-            ) || 0
-          ) + quantity
-        );
-      });
-
-      let hasExceededStock = false;
-
-      lineRows.forEach(lineRow => {
+      lineRows.forEach(
+        lineRow => {
         const stockTarget =
           lineRow.querySelector(
             '[data-transport-origin-stock]'
-          );
-
-        const quantityInput =
-          lineRow.querySelector(
-            '[name="lineQuantity"]'
           );
 
         const materialId =
@@ -1156,51 +1115,51 @@ export function ImportHistoryPage() {
           )?.value;
 
         const material =
-          materialById(materialId);
-
-        const availableQty =
-          transportOriginStockQty(
-            materialId,
-            originLocationId
+          materialById(
+            materialId
           );
 
-        const requestedQty =
-          Number(
-            requestedByMaterial.get(
-              String(materialId)
-            ) || 0
-          );
-
-        const exceeded =
-          availableQty !== null
-          && requestedQty >
-            availableQty + 0.000001;
-
-        if (exceeded) {
-          hasExceededStock = true;
-        }
-
-        quantityInput?.classList.toggle(
-          'transport-stock-exceeded-input',
-          exceeded
-        );
-
-        stockTarget?.classList.toggle(
-          'is-exceeded',
-          exceeded
-        );
+        /*
+         * O saldo da origem é apenas
+         * informativo.
+         *
+         * Não existe mais comparação
+         * entre quantidade transportada
+         * e estoque disponível.
+         */
 
         if (stockTarget) {
+          stockTarget.classList.remove(
+            'is-exceeded'
+          );
+
           stockTarget.innerHTML =
             transportOriginStockHtml(
               material,
-              originLocationId,
-              exceeded
+              originLocationId
             );
         }
-      });
 
-      return hasExceededStock;
+        const quantityInput =
+          lineRow.querySelector(
+            '[name="lineQuantity"]'
+          );
+
+        quantityInput?.classList.remove(
+          'transport-stock-exceeded-input'
+        );
+      }
+    );
+
+      /*
+       * Mantemos retorno false somente
+       * por compatibilidade com chamadas
+       * existentes.
+       *
+       * O estoque nunca mais bloqueia
+       * o transporte.
+       */
+      return false;
     }
 
     function collectLines() {
@@ -1344,16 +1303,6 @@ export function ImportHistoryPage() {
       ) {
         toast(
           'Origem e destino devem ser diferentes.'
-        );
-
-        return;
-      }
-
-      if (
-        updateAllTransportLineStocks()
-      ) {
-        toast(
-          'A quantidade informada ultrapassa o estoque disponível na origem.'
         );
 
         return;

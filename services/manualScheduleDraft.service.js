@@ -3767,6 +3767,16 @@ const allowedQty =
     calendarParentOperationId: parentOperationId || allocationId,
     productionId,
     productionIndex: Number.isFinite(productionIndex) ? productionIndex : 0,
+    productionNumber:
+      Number(
+        material.productionNumber
+        ??
+        (
+          Number.isFinite(productionIndex)
+            ? productionIndex + 1
+            : 1
+        )
+      ),
     productionTitle: String(material.productionTitle || ''),
     productionColor: String(material.productionColor || ''),
     materialId: String(material.materialId || ''),
@@ -3784,6 +3794,16 @@ const allowedQty =
     productionMemberships: [{
       productionId,
       productionIndex: Number.isFinite(productionIndex) ? productionIndex : 0,
+      productionNumber:
+        Number(
+          material.productionNumber
+          ??
+          (
+            Number.isFinite(productionIndex)
+              ? productionIndex + 1
+              : 1
+          )
+        ),
       productionTitle: String(material.productionTitle || ''),
       materialId: String(material.materialId || ''),
       materialName: String(material.materialName || material.name || ''),

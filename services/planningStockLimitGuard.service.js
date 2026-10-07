@@ -204,9 +204,11 @@ function operationProductionIndexes(
           id
         );
 
-      index =
-        Number(
-          index
+            index =
+        Math.floor(
+          Number(
+            index
+          )
         );
 
 
@@ -745,18 +747,46 @@ function productionMeta(
   };
 }
 
+function recoveryOverrideQuantity(
+  operationOverrides,
+  productionIndex,
+  materialIdValue
+) {
+  const override =
+    operationOverrides?.[
+      `${Number(productionIndex)}:${text(materialIdValue)}`
+    ];
+
+  return Math.max(
+    number(
+      override?.stockLimitRecoveryQty
+    ),
+    0
+  );
+}
+
 
 function suggestionsFor(
   violations,
   productions
 ) {
-
   const byProduction =
     new Map();
 
-
   violations.forEach(
     violation => {
+
+      /*
+       * Estoque que JÁ começou abaixo do mínimo
+       * não reduz automaticamente o produto final.
+       */
+      if (
+        violation.scenario
+        ===
+        'minimum_recovery'
+      ) {
+        return;
+      }
 
       const movement =
         number(
@@ -764,23 +794,25 @@ function suggestionsFor(
             .movementQuantity
         );
 
-
       let factor =
         1;
 
-
+      /*
+       * Estoque ainda estava saudável.
+       *
+       * Calculamos quanto da produção final
+       * cabe até chegar exatamente ao mínimo.
+       */
       if (
-        violation.kind
+        violation.scenario
         ===
-        'minimum'
+        'minimum_breach'
         &&
         movement < -EPSILON
       ) {
-
         factor =
           Math.max(
             Math.min(
-
               (
                 number(
                   violation
@@ -796,25 +828,24 @@ function suggestionsFor(
               Math.abs(
                 movement
               ),
-
               1
             ),
             0
           );
 
-
+      /*
+       * Máximo continua funcionando como teto.
+       */
       } else if (
-        violation.kind
+        violation.scenario
         ===
-        'maximum'
+        'maximum_breach'
         &&
         movement > EPSILON
       ) {
-
         factor =
           Math.max(
             Math.min(
-
               (
                 number(
                   violation
@@ -828,14 +859,14 @@ function suggestionsFor(
               )
               /
               movement,
-
               1
             ),
             0
           );
 
+      } else {
+        return;
       }
-
 
       violation
         .productionIndexes
@@ -848,17 +879,16 @@ function suggestionsFor(
                 index
               );
 
-
             if (
               !(
                 production
                   .plannedQty
-                > 0
+                >
+                0
               )
             ) {
               return;
             }
-
 
             const current =
               byProduction.get(
@@ -874,13 +904,11 @@ function suggestionsFor(
                   []
               };
 
-
             current.factor =
               Math.min(
                 current.factor,
                 factor
               );
-
 
             current
               .violationIds
@@ -888,25 +916,20 @@ function suggestionsFor(
                 violation.id
               );
 
-
             byProduction.set(
               index,
               current
             );
-
           }
         );
-
     }
   );
-
 
   return [
     ...byProduction.values()
   ]
     .map(
       item => ({
-
         ...item,
 
         suggestedQty:
@@ -914,10 +937,8 @@ function suggestionsFor(
             item.plannedQty
             *
             item.factor,
-
             item.unit
           )
-
       })
     )
     .sort(
@@ -931,6 +952,291 @@ function suggestionsFor(
     );
 }
 
+function recoverySuggestionsFor(
+  violations,
+  operationOverrides = {}
+) {
+  const byTarget =
+    new Map();
+
+
+  violations
+    .filter(
+      violation =>
+        violation.scenario
+        ===
+        'minimum_recovery'
+    )
+    .forEach(
+      violation => {
+
+        const productionIndex =
+          violation
+            .productionIndexes?.[0];
+
+
+        if (
+          !Number.isInteger(
+            Number(
+              productionIndex
+            )
+          )
+        ) {
+          return;
+        }
+
+
+        /*
+         * Recuperação atualmente salva para esta
+         * produção/material.
+         */
+        const currentRecoveryQty =
+          recoveryOverrideQuantity(
+            operationOverrides,
+            productionIndex,
+            violation.materialId
+          );
+
+
+        /*
+         * Caso o mesmo material participe de mais
+         * de uma produção, pode existir recuperação
+         * em outro productionIndex.
+         */
+        const currentRecoveryTotal =
+          Math.max(
+            number(
+              violation.currentRecoveryQuantity
+            ),
+            currentRecoveryQty
+          );
+
+
+        const otherRecoveryQty =
+          Math.max(
+            currentRecoveryTotal
+            -
+            currentRecoveryQty,
+            0
+          );
+
+
+        /*
+         * PRODUÇÃO NORMAL.
+         *
+         * É somente o que precisa ser fabricado
+         * para atender a produção solicitada,
+         * SEM considerar o estoque mínimo.
+         *
+         * Exemplo:
+         *
+         * consumo total = 10.825,056
+         * estoque inicial = 0
+         *
+         * produção normal = 10.825,056
+         */
+        const plannedProductionQty =
+          roundedQuantity(
+            Math.max(
+              number(
+                violation.normalProductionQuantity
+              ),
+              0
+            ),
+            violation.unit
+          );
+
+
+        /*
+         * RECUPERAÇÃO TOTAL necessária.
+         *
+         * Exemplo:
+         *
+         * estoque final sem recomposição = 0
+         * mínimo = 6.000
+         *
+         * adicional = 6.000
+         */
+        const requiredRecoveryTotal =
+          roundedQuantity(
+            Math.max(
+              number(
+                violation.requiredRecoveryQuantity
+              ),
+              0
+            ),
+            violation.unit
+          );
+
+
+        /*
+         * Quanto este productionIndex deve carregar
+         * de recuperação.
+         */
+        const suggestedQty =
+          roundedQuantity(
+            Math.max(
+              requiredRecoveryTotal
+              -
+              otherRecoveryQty,
+              0
+            ),
+            violation.unit
+          );
+
+
+        /*
+         * Produção TOTAL:
+         *
+         * 10.825,056
+         * +
+         * 6.000
+         * =
+         * 16.825,056
+         */
+        const totalProductionQty =
+          roundedQuantity(
+            plannedProductionQty
+            +
+            otherRecoveryQty
+            +
+            suggestedQty,
+            violation.unit
+          );
+
+
+        /*
+         * Saldo sem recomposição.
+         *
+         * No seu exemplo:
+         * 0 kg.
+         */
+        const projectedWithoutRecovery =
+          roundedQuantity(
+            number(
+              violation.projectedQuantity
+            ),
+            violation.unit
+          );
+
+
+        /*
+         * Saldo com a recomposição sugerida.
+         *
+         * No seu exemplo:
+         * 6.000 kg.
+         */
+        const projectedWithSuggestion =
+          roundedQuantity(
+            projectedWithoutRecovery
+            +
+            otherRecoveryQty
+            +
+            suggestedQty,
+            violation.unit
+          );
+
+
+        const key =
+          `${Number(productionIndex)}:${text(violation.materialId)}`;
+
+
+        byTarget.set(
+          key,
+          {
+
+            violationId:
+              violation.id,
+
+            productionIndex:
+              Number(
+                productionIndex
+              ),
+
+            materialId:
+              violation.materialId,
+
+            materialName:
+              violation.materialName,
+
+            unit:
+              violation.unit,
+
+            canProduce:
+              violation.isInitialRawMaterial
+              !==
+              true,
+
+            initialStock:
+              number(
+                violation.initialStock
+              ),
+
+            limitQuantity:
+              number(
+                violation.limitQuantity
+              ),
+
+            existingDeficit:
+              Math.max(
+                number(
+                  violation.limitQuantity
+                )
+                -
+                number(
+                  violation.initialStock
+                ),
+                0
+              ),
+
+            consumptionQuantity:
+              number(
+                violation.totalConsumptionQuantity
+              ),
+
+            plannedProductionQty,
+
+            currentRecoveryQty,
+
+            currentRecoveryTotal,
+
+            projectedWithoutRecovery,
+
+            suggestedQty,
+
+            totalProductionQty,
+
+            projectedWithSuggestion
+
+          }
+        );
+
+      }
+    );
+
+
+  return [
+    ...byTarget.values()
+  ]
+    .sort(
+      (
+        a,
+        b
+      ) =>
+        a.productionIndex
+        -
+        b.productionIndex
+        ||
+        String(
+          a.materialName
+        )
+          .localeCompare(
+            String(
+              b.materialName
+            )
+          )
+    );
+}
 
 export function evaluatePlanningStockLimits({
 
@@ -940,13 +1246,15 @@ export function evaluatePlanningStockLimits({
 
   plannedReceipts = [],
 
-  productions = []
+  productions = [],
+
+  operationOverrides = {}
 
 } = {}) {
 
   if (!simulation) {
 
-    return {
+        return {
       projection:
         null,
 
@@ -954,6 +1262,9 @@ export function evaluatePlanningStockLimits({
         [],
 
       suggestions:
+        [],
+
+      recoverySuggestions:
         []
     };
 
@@ -989,9 +1300,10 @@ export function evaluatePlanningStockLimits({
     );
 
 
-  const operations =
+    const operations =
     simulation?.operations
     || [];
+
 
 
   const indexesByOperation =
@@ -1065,14 +1377,131 @@ export function evaluatePlanningStockLimits({
     });
 
 
-  const violations =
+      const violations =
     [];
 
 
-  const seen =
+  /*
+   * Para o ESTOQUE MÍNIMO, não usamos mais somente
+   * a primeira movimentação que atravessou o limite.
+   *
+   * Primeiro resumimos TODO o planejamento do material:
+   *
+   * - estoque inicial;
+   * - produção total;
+   * - consumo total;
+   * - saldo final;
+   * - produções-raiz relacionadas.
+   *
+   * Depois verificamos o mínimo.
+   */
+  const materialSummaries =
+    new Map();
+
+
+  /*
+   * O máximo continua sendo avaliado no momento
+   * exato da movimentação.
+   */
+  const maximumSeen =
     new Set();
 
 
+  const summaryFor =
+    (
+      id,
+      material,
+      row
+    ) => {
+
+      if (
+        !materialSummaries.has(
+          id
+        )
+      ) {
+
+        materialSummaries.set(
+          id,
+          {
+
+            materialId:
+              id,
+
+            materialName:
+              text(
+                material?.name
+              )
+              ||
+              text(
+                row?.materialName
+              )
+              ||
+              id,
+
+            unit:
+              materialUnit(
+                material
+              )
+              ||
+              text(
+                row?.unit
+              ),
+
+            /*
+             * Primeiro saldo encontrado na projeção.
+             */
+            initialStock:
+              number(
+                row?.openingStock
+              ),
+
+            /*
+             * Será atualizado até chegar ao saldo
+             * FINAL do planejamento.
+             */
+            finalStock:
+              number(
+                row?.openingStock
+              ),
+
+            /*
+             * Soma de TODOS os PRODUCTION_IN.
+             */
+            totalProductionQuantity:
+              0,
+
+            /*
+             * Soma de TODOS os
+             * PRODUCTION_CONSUMPTION.
+             */
+            totalConsumptionQuantity:
+              0,
+
+            productionIndexes:
+              new Set(),
+
+            lastDate:
+              '',
+
+            lastTime:
+              ''
+
+          }
+        );
+
+      }
+
+
+      return materialSummaries.get(
+        id
+      );
+
+    };
+
+
+  /*
+   * Primeiro percorremos TODA a projeção.
+   */
   (
     projection?.days
     || []
@@ -1091,6 +1520,10 @@ export function evaluatePlanningStockLimits({
             );
 
 
+          /*
+           * Só verificamos materiais realmente
+           * presentes na cadeia produtiva.
+           */
           if (
             !id
             ||
@@ -1123,6 +1556,10 @@ export function evaluatePlanningStockLimits({
             );
 
 
+          /*
+           * Material sem limite configurado
+           * continua sendo ignorado.
+           */
           if (
             !Number.isFinite(
               minimum
@@ -1136,10 +1573,27 @@ export function evaluatePlanningStockLimits({
           }
 
 
+          const summary =
+            summaryFor(
+              id,
+              material,
+              row
+            );
+
+
           let balance =
             number(
-              row?.openingStock
+              row?.openingStock,
+              summary.finalStock
             );
+
+
+          /*
+           * Mesmo se o dia não possuir movimentações,
+           * este é o saldo conhecido naquele ponto.
+           */
+          summary.finalStock =
+            balance;
 
 
           (
@@ -1154,31 +1608,24 @@ export function evaluatePlanningStockLimits({
 
               const quantity =
                 number(
-                  movement
-                    ?.quantity
+                  movement?.quantity
                 );
 
 
               const after =
                 Number.isFinite(
                   Number(
-                    movement
-                      ?.balanceAfter
+                    movement?.balanceAfter
                   )
                 )
 
                   ? Number(
-                      movement
-                        .balanceAfter
+                      movement.balanceAfter
                     )
 
                   : before
                     +
                     quantity;
-
-
-              balance =
-                after;
 
 
               const productionIndexes =
@@ -1188,35 +1635,115 @@ export function evaluatePlanningStockLimits({
                 );
 
 
+              /*
+               * Guardamos todas as produções finais
+               * relacionadas àquele material.
+               */
+              productionIndexes
+                .forEach(
+                  index =>
+                    summary
+                      .productionIndexes
+                      .add(
+                        index
+                      )
+                );
+
+
+              /*
+               * Soma da produção TOTAL daquele material.
+               *
+               * Exemplo:
+               *
+               * 4.000
+               * + 3.000
+               * + 3.825,056
+               * =
+               * 10.825,056
+               */
               if (
-                !productionIndexes
-                  .length
+                movement?.type
+                ===
+                'PRODUCTION_IN'
+
+                &&
+                quantity
+                >
+                EPSILON
               ) {
-                return;
+
+                summary
+                  .totalProductionQuantity +=
+                    quantity;
+
               }
 
 
-              const pushViolation =
-                (
-                  kind,
-                  limit,
-                  difference
-                ) => {
+              /*
+               * Soma do consumo TOTAL daquele material.
+               *
+               * É aqui que paramos de usar somente
+               * aqueles 3.998,808 kg do primeiro evento.
+               */
+              if (
+                movement?.type
+                ===
+                'PRODUCTION_CONSUMPTION'
 
-                  const key =
-                    `${id}:${kind}`;
+                &&
+                quantity
+                <
+                -EPSILON
+              ) {
+
+                summary
+                  .totalConsumptionQuantity +=
+                    Math.abs(
+                      quantity
+                    );
+
+              }
 
 
-                  if (
-                    seen.has(
-                      key
-                    )
-                  ) {
-                    return;
-                  }
+              /*
+               * ESTOQUE MÁXIMO continua cronológico.
+               *
+               * Mesmo que o estoque final fique baixo,
+               * uma entrada intermediária pode ter
+               * ultrapassado o teto.
+               */
+              if (
+                movement?.type
+                ===
+                'PRODUCTION_IN'
+
+                &&
+                Number.isFinite(
+                  maximum
+                )
+
+                &&
+                after
+                >
+                maximum + EPSILON
+              ) {
+
+                const key =
+                  `${id}:maximum_breach`;
 
 
-                  seen.add(
+                if (
+                  !maximumSeen.has(
+                    key
+                  )
+
+                  &&
+
+                  productionIndexes
+                    .length
+                ) {
+
+                  maximumSeen.add(
                     key
                   );
 
@@ -1226,35 +1753,32 @@ export function evaluatePlanningStockLimits({
                     id:
                       key,
 
-                    kind,
+                    kind:
+                      'maximum',
+
+                    scenario:
+                      'maximum_breach',
 
                     materialId:
                       id,
 
                     materialName:
-                      text(
-                        material
-                          ?.name
-                      )
-                      ||
-                      text(
-                        row
-                          ?.materialName
-                      )
-                      ||
-                      id,
+                      summary.materialName,
 
                     unit:
-                      materialUnit(
-                        material
-                      )
-                      ||
-                      text(
-                        row?.unit
-                      ),
+                      summary.unit,
 
                     limitQuantity:
-                      limit,
+                      maximum,
+
+                    initialStock:
+                      summary.initialStock,
+
+                    isInitialRawMaterial:
+                      material
+                        ?.is_initial_raw_material
+                      ===
+                      true,
 
                     balanceBefore:
                       before,
@@ -1263,7 +1787,9 @@ export function evaluatePlanningStockLimits({
                       after,
 
                     differenceQuantity:
-                      difference,
+                      after
+                      -
+                      maximum,
 
                     movementQuantity:
                       quantity,
@@ -1290,61 +1816,32 @@ export function evaluatePlanningStockLimits({
 
                   });
 
-                };
-
-
-              if (
-                movement?.type
-                ===
-                'PRODUCTION_CONSUMPTION'
-
-                &&
-
-                Number.isFinite(
-                  minimum
-                )
-
-                &&
-
-                after
-                <
-                minimum - EPSILON
-              ) {
-
-                pushViolation(
-                  'minimum',
-                  minimum,
-                  minimum - after
-                );
+                }
 
               }
 
 
-              if (
-                movement?.type
-                ===
-                'PRODUCTION_IN'
+              /*
+               * Continua avançando a cronologia.
+               */
+              balance =
+                after;
 
-                &&
 
-                Number.isFinite(
-                  maximum
-                )
+              summary.finalStock =
+                after;
 
-                &&
 
-                after
-                >
-                maximum + EPSILON
-              ) {
-
-                pushViolation(
-                  'maximum',
-                  maximum,
-                  after - maximum
+              summary.lastDate =
+                text(
+                  day?.date
                 );
 
-              }
+
+              summary.lastTime =
+                text(
+                  movement?.time
+                );
 
             }
           );
@@ -1356,7 +1853,414 @@ export function evaluatePlanningStockLimits({
   );
 
 
-  return {
+  /*
+   * =========================================================
+   * ESTOQUE MÍNIMO
+   * =========================================================
+   *
+   * Agora que percorremos o planejamento INTEIRO,
+   * verificamos o saldo final.
+   *
+   * Exemplo real:
+   *
+   * estoque inicial             0
+   * produção normal       10.825,056
+   * consumo              -10.825,056
+   * --------------------------------
+   * saldo final                  0
+   *
+   * mínimo                   6.000
+   *
+   * recuperação              6.000
+   */
+  
+    for (
+    const summary
+    of materialSummaries.values()
+  ) {
+
+    const material =
+      catalog.get(
+        summary.materialId
+      )
+      || {};
+
+
+    const minimum =
+      materialLimit(
+        material,
+        'minimum'
+      );
+
+
+    if (
+      !Number.isFinite(
+        minimum
+      )
+    ) {
+      continue;
+    }
+
+
+    /*
+     * Material não participou deste planejamento.
+     */
+    if (
+      !(
+        summary.totalConsumptionQuantity
+        >
+        EPSILON
+      )
+      &&
+      !(
+        summary.totalProductionQuantity
+        >
+        EPSILON
+      )
+    ) {
+      continue;
+    }
+
+
+    const productionIndexes =
+      [
+        ...summary
+          .productionIndexes
+      ]
+        .filter(
+          index =>
+            Number.isInteger(
+              Number(
+                index
+              )
+            )
+            &&
+            Number(
+              index
+            )
+            >=
+            0
+        )
+        .map(
+          Number
+        )
+        .sort(
+          (
+            a,
+            b
+          ) =>
+            a - b
+        );
+
+
+    /*
+     * =====================================================
+     * REGRA DEFINITIVA DO MÍNIMO
+     * =====================================================
+     *
+     * O planejamento normal usa primeiro o estoque.
+     *
+     * Se faltar material para atender o consumo,
+     * fabrica somente essa diferença.
+     *
+     * Portanto:
+     *
+     * estoque 0
+     * consumo 10.825,056
+     * =>
+     * produção normal 10.825,056
+     *
+     *
+     * estoque 6.000
+     * consumo 2.000
+     * =>
+     * produção normal 0
+     *
+     *
+     * estoque 3.000
+     * consumo 10.000
+     * =>
+     * produção normal 7.000
+     */
+    const totalConsumptionQuantity =
+      Math.max(
+        number(
+          summary.totalConsumptionQuantity
+        ),
+        0
+      );
+
+
+    const initialStock =
+      Math.max(
+        number(
+          summary.initialStock
+        ),
+        0
+      );
+
+
+    /*
+     * Quanto seria necessário produzir para
+     * SOMENTE atender a produção solicitada.
+     *
+     * Não existe mínimo nesta conta.
+     */
+    const normalProductionQuantity =
+      Math.max(
+        totalConsumptionQuantity
+        -
+        initialStock,
+        0
+      );
+
+
+    /*
+     * Estoque final depois de atender toda a produção,
+     * mas SEM fabricar nada para recuperar o mínimo.
+     *
+     * Exemplo atual:
+     *
+     * 0
+     * + 10.825,056
+     * - 10.825,056
+     * =
+     * 0
+     */
+    const projectedWithoutRecovery =
+      Math.max(
+        initialStock
+        +
+        normalProductionQuantity
+        -
+        totalConsumptionQuantity,
+        0
+      );
+
+
+    /*
+     * Quanto devemos produzir A MAIS para terminar
+     * exatamente no mínimo.
+     *
+     * Exemplo:
+     *
+     * mínimo = 6.000
+     * saldo sem recomposição = 0
+     *
+     * recovery = 6.000
+     */
+    const requiredRecoveryQuantity =
+      Math.max(
+        minimum
+        -
+        projectedWithoutRecovery,
+        0
+      );
+
+
+    /*
+     * Se o planejamento normal já termina no mínimo
+     * ou acima dele, não existe alerta.
+     */
+    if (
+      !(
+        requiredRecoveryQuantity
+        >
+        EPSILON
+      )
+    ) {
+      continue;
+    }
+
+
+    /*
+     * Recuperação que já está configurada.
+     */
+    const currentRecoveryQuantity =
+      productionIndexes.reduce(
+        (
+          total,
+          productionIndex
+        ) =>
+          total
+          +
+          recoveryOverrideQuantity(
+            operationOverrides,
+            productionIndex,
+            summary.materialId
+          ),
+        0
+      );
+
+
+    /*
+     * Já recuperamos o suficiente.
+     *
+     * Não abre o modal novamente.
+     */
+    if (
+      currentRecoveryQuantity
+      >=
+      requiredRecoveryQuantity
+      -
+      EPSILON
+    ) {
+      continue;
+    }
+
+
+    const key =
+      `${summary.materialId}:minimum_recovery`;
+
+
+    violations.push({
+
+      id:
+        key,
+
+      kind:
+        'minimum',
+
+      scenario:
+        'minimum_recovery',
+
+      materialId:
+        summary.materialId,
+
+      materialName:
+        summary.materialName,
+
+      unit:
+        summary.unit,
+
+      limitQuantity:
+        minimum,
+
+      initialStock,
+
+      startedBelowMinimum:
+        initialStock
+        <
+        minimum
+        -
+        EPSILON,
+
+      isInitialRawMaterial:
+        material
+          ?.is_initial_raw_material
+        ===
+        true,
+
+      balanceBefore:
+        initialStock,
+
+
+      /*
+       * ESTE CAMPO AGORA É, SEM AMBIGUIDADE:
+       *
+       * ESTOQUE FINAL SEM RECOMPOSIÇÃO.
+       *
+       * No seu print:
+       * 0 kg.
+       */
+      projectedQuantity:
+        Number(
+          projectedWithoutRecovery
+            .toFixed(6)
+        ),
+
+
+      differenceQuantity:
+        Number(
+          requiredRecoveryQuantity
+            .toFixed(6)
+        ),
+
+
+      /*
+       * Consumo total das 5.896 barras.
+       *
+       * 10.825,056 kg.
+       */
+      movementQuantity:
+        -Number(
+          totalConsumptionQuantity
+            .toFixed(6)
+        ),
+
+
+      totalConsumptionQuantity:
+        Number(
+          totalConsumptionQuantity
+            .toFixed(6)
+        ),
+
+
+      /*
+       * PRODUÇÃO NORMAL.
+       *
+       * No seu print:
+       * 10.825,056 kg.
+       */
+      normalProductionQuantity:
+        Number(
+          normalProductionQuantity
+            .toFixed(6)
+        ),
+
+
+      /*
+       * RECUPERAÇÃO necessária.
+       *
+       * No seu print:
+       * 6.000 kg.
+       */
+      requiredRecoveryQuantity:
+        Number(
+          requiredRecoveryQuantity
+            .toFixed(6)
+        ),
+
+
+      currentRecoveryQuantity:
+        Number(
+          currentRecoveryQuantity
+            .toFixed(6)
+        ),
+
+
+      /*
+       * Mantemos este campo para compatibilidade,
+       * mas ele representa aqui a produção NORMAL,
+       * não normal + recuperação.
+       */
+      totalProductionQuantity:
+        Number(
+          normalProductionQuantity
+            .toFixed(6)
+        ),
+
+
+      movementType:
+        'PLANNING_TOTAL',
+
+      date:
+        summary.lastDate,
+
+      time:
+        summary.lastTime,
+
+      relatedOperationIds:
+        [],
+
+      productionIndexes
+
+    });
+
+  }
+  
+
+    return {
 
     projection,
 
@@ -1366,6 +2270,12 @@ export function evaluatePlanningStockLimits({
       suggestionsFor(
         violations,
         productions
+      ),
+
+    recoverySuggestions:
+      recoverySuggestionsFor(
+        violations,
+        operationOverrides
       )
 
   };

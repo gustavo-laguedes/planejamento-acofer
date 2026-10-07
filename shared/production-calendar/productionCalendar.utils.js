@@ -186,13 +186,21 @@ function productionCalendarShiftId(shift, index) {
   return String(shift?.shiftId ?? shift?.id ?? `shift-${index + 1}`);
 }
 
-function productionCalendarShiftOverride(overrides, shift, shiftId, index) {
+function productionCalendarShiftOverride(overrides, shift, shiftId, index, teamPool = 'total') {
   if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return { found: false, value: null };
-  const keys = [shiftId, shift?.label, `Turno ${index + 1}`, `T${index + 1}`]
+  const baseKeys = [shiftId, shift?.label, `Turno ${index + 1}`, `T${index + 1}`]
     .map(value => String(value || ''))
     .filter(Boolean);
-  const key = keys.find(candidate => Object.hasOwn(overrides, candidate));
-  return key ? { found: true, value: Number(overrides[key]) } : { found: false, value: null };
+  if (teamPool === 'matrix' || teamPool === 'feital') {
+    const poolKey = baseKeys.map(key => `${key}:${teamPool}`).find(candidate => Object.hasOwn(overrides, candidate));
+    if (poolKey) return { found: true, value: Number(overrides[poolKey]) };
+  }
+  const legacyKey = baseKeys.find(candidate => Object.hasOwn(overrides, candidate));
+  if (!legacyKey) return { found: false, value: null };
+  const total = Number(overrides[legacyKey]);
+  if (teamPool !== 'matrix' && teamPool !== 'feital') return { found: true, value: total };
+  const matrix = Math.min(Math.max(Number(shift?.matrixAvailablePeople ?? shift?.matrixTeamAvailable ?? 1) || 0, 0), Math.max(total || 0, 0));
+  return { found: true, value: teamPool === 'matrix' ? matrix : Math.max(total - matrix, 0) };
 }
 
 /**
@@ -215,19 +223,30 @@ export function buildProductionCalendarDayPresentation({
     const projection = projectedShifts[shiftId]
       || projectedShifts[String(shift?.label || '')]
       || {};
-    const override = productionCalendarShiftOverride(dateOverrides, shift, shiftId, index);
-    const standardPeople = Number(shift?.availablePeople ?? shift?.teamAvailable);
-    const projectedAvailable = Number(projection.availablePeople);
-    const availablePeople = Number.isFinite(projectedAvailable)
-      ? projectedAvailable
-      : (override.found && Number.isFinite(override.value) ? override.value : (Number.isFinite(standardPeople) ? standardPeople : 0));
+    const legacyTotal = Number(shift?.availablePeople ?? shift?.teamAvailable);
+    const standardMatrix = Math.max(Number(shift?.matrixAvailablePeople ?? shift?.matrixTeamAvailable ?? 1) || 0, 0);
+    const standardFeital = Math.max(Number(shift?.feitalAvailablePeople ?? shift?.feitalTeamAvailable ?? (Number.isFinite(legacyTotal) ? legacyTotal - standardMatrix : 5)) || 0, 0);
+    const matrixOverride = productionCalendarShiftOverride(dateOverrides, shift, shiftId, index, 'matrix');
+    const feitalOverride = productionCalendarShiftOverride(dateOverrides, shift, shiftId, index, 'feital');
+    const projectedMatrix = Number(projection.matrixAvailablePeople);
+    const projectedFeital = Number(projection.feitalAvailablePeople);
+    const matrixAvailablePeople = Number.isFinite(projectedMatrix) ? projectedMatrix : (matrixOverride.found && Number.isFinite(matrixOverride.value) ? matrixOverride.value : standardMatrix);
+    const feitalAvailablePeople = Number.isFinite(projectedFeital) ? projectedFeital : (feitalOverride.found && Number.isFinite(feitalOverride.value) ? feitalOverride.value : standardFeital);
+    const matrixPeakPeople = Math.max(0, Number(projection.matrixPeakPeople) || 0);
+    const feitalPeakPeople = Math.max(0, Number(projection.feitalPeakPeople) || 0);
     return {
       shiftId,
       label: String(shift?.label || `Turno ${index + 1}`),
-      standardPeople: Number.isFinite(standardPeople) ? standardPeople : 0,
-      peakPeople: Math.max(0, Number(projection.peakPeople) || 0),
-      availablePeople: Math.max(0, availablePeople),
-      hasDailyOverride: override.found,
+      standardMatrixPeople: standardMatrix,
+      standardFeitalPeople: standardFeital,
+      matrixPeakPeople,
+      feitalPeakPeople,
+      matrixAvailablePeople: Math.max(0, matrixAvailablePeople),
+      feitalAvailablePeople: Math.max(0, feitalAvailablePeople),
+      standardPeople: standardMatrix + standardFeital,
+      peakPeople: matrixPeakPeople + feitalPeakPeople,
+      availablePeople: Math.max(0, matrixAvailablePeople) + Math.max(0, feitalAvailablePeople),
+      hasDailyOverride: matrixOverride.found || feitalOverride.found,
       overrideUsed: Boolean(projection.overrideUsed)
     };
   });
@@ -246,6 +265,8 @@ export function buildProductionCalendarDayPresentation({
   const peakShift = normalizedShifts.reduce((selected, shift) => (
     !selected || shift.peakPeople > selected.peakPeople ? shift : selected
   ), null) || { peakPeople: 0, availablePeople: 0, hasDailyOverride: false, overrideUsed: false };
+  const matrixTeam = normalizedShifts.reduce((current, shift) => ({ peakPeople: Math.max(current.peakPeople, shift.matrixPeakPeople || 0), availablePeople: Math.max(current.availablePeople, shift.matrixAvailablePeople || 0) }), { peakPeople: 0, availablePeople: 0 });
+  const feitalTeam = normalizedShifts.reduce((current, shift) => ({ peakPeople: Math.max(current.peakPeople, shift.feitalPeakPeople || 0), availablePeople: Math.max(current.availablePeople, shift.feitalAvailablePeople || 0) }), { peakPeople: 0, availablePeople: 0 });
   let state = 'normal';
   if (peakShift.peakPeople > peakShift.availablePeople) state = 'error';
   else if (extraordinaryCapacity || peakShift.hasDailyOverride || peakShift.overrideUsed) state = 'override';
@@ -260,6 +281,8 @@ export function buildProductionCalendarDayPresentation({
     team: {
       peakPeople: peakShift.peakPeople,
       availablePeople: peakShift.availablePeople,
+      matrix: matrixTeam,
+      feital: feitalTeam,
       state,
       shifts: normalizedShifts
     }

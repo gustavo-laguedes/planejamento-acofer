@@ -6,559 +6,4771 @@ import PDFDocument from 'pdfkit';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const logoPath = path.resolve(__dirname, '..', 'assets', 'logo-acofer.png');
 
-const THEMES = [
-  { border: '#2F343B', soft: '#F4F6F8', text: '#1F2937' },
-  { border: '#D97706', soft: '#FFF7ED', text: '#1F2937' },
-  { border: '#2F343B', soft: '#F4F6F8', text: '#1F2937' },
-  { border: '#D97706', soft: '#FFF7ED', text: '#1F2937' },
-  { border: '#2F343B', soft: '#F4F6F8', text: '#1F2937' }
+const COLORS = {
+  ink: '#1F2937',
+  muted: '#64748B',
+  line: '#CBD5E1',
+  strongLine: '#94A3B8',
+  paper: '#FFFFFF',
+  soft: '#F8FAFC',
+  header: '#2F343B',
+  orange: '#EA580C',
+  green: '#16A34A',
+  blue: '#2563EB',
+  violet: '#7C3AED',
+  cyan: '#0891B2',
+  red: '#DC2626'
+};
+
+const PRODUCTION_COLORS = [
+  '#16A34A',
+  '#EA580C',
+  '#2563EB',
+  '#7C3AED',
+  '#0891B2',
+  '#CA8A04',
+  '#DB2777'
 ];
 
-function formatDate(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().slice(0, 10).split('-').reverse().join('/');
-  }
-  const dateValue = String(value || '').slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) return '';
-  return dateValue.split('-').reverse().join('/');
+const PAGE = {
+  margin: 42,
+  headerHeight: 88,
+  top: 110,
+  bottom: 800
+};
+
+const DOCUMENT_TYPES = {
+  MATRIZ: 'matriz',
+  FEITAL: 'feital'
+};
+
+
+function text(value) {
+  return value === null || value === undefined
+    ? ''
+    : String(value);
 }
 
-function formatDateTime(date, time) {
-  return [formatDate(date), time].filter(Boolean).join(' ');
+
+function number(value, fallback = 0) {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed)
+    ? parsed
+    : fallback;
 }
 
-function operationPeriod(operations = [], fallbackStartDate = null, fallbackEndDate = null) {
-  const starts = normalizeArray(operations)
-    .map(operation => String(operation?.startDate || '').slice(0, 10))
-    .filter(value => /^\d{4}-\d{2}-\d{2}$/.test(value))
-    .sort();
-  const ends = normalizeArray(operations)
-    .map(operation => String(operation?.endDate || '').slice(0, 10))
-    .filter(value => /^\d{4}-\d{2}-\d{2}$/.test(value))
-    .sort();
-  return {
-    startDate: starts[0] || fallbackStartDate,
-    endDate: ends.at(-1) || fallbackEndDate || fallbackStartDate
-  };
-}
-
-function formatNumber(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return '';
-  return number.toLocaleString('pt-BR', {
-    minimumFractionDigits: Number.isInteger(number) ? 0 : 2,
-    maximumFractionDigits: 3
-  });
-}
-
-function formatDuration(minutes) {
-  const total = Math.max(Math.round(Number(minutes || 0)), 0);
-  const hours = Math.floor(total / 60);
-  const mins = total % 60;
-  if (!hours) return `${mins} min`;
-  return mins ? `${hours}h ${String(mins).padStart(2, '0')}min` : `${hours}h`;
-}
-
-function formatHourDuration(value) {
-  const totalMinutes = Math.max(Math.round(Number(value || 0) * 60), 0);
-  const hours = Math.floor(totalMinutes / 60);
-  const mins = totalMinutes % 60;
-  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')} h/dia`;
-}
-
-function statusLabel(value) {
-  const labels = { planned: 'Planejado', launched: 'Lançado', canceled: 'Cancelado' };
-  return labels[String(value || '').toLowerCase()] || value || 'Sem status';
-}
-
-function isCanceledPlan(plan = {}) {
-  return String(plan.status || '').toLowerCase() === 'canceled';
-}
-
-function isPlanningRootName(value) {
-  return ['Plano de producao', 'Plano de produção'].includes(String(value || ''));
-}
-
-function treeRoots(tree) {
-  if (!tree || typeof tree !== 'object') return [];
-  return Array.isArray(tree.children) && isPlanningRootName(tree.materialName) ? tree.children : [tree];
-}
 
 function normalizeArray(value) {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== 'string') return [];
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return [];
+  }
+
   try {
     const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
+
+    return Array.isArray(parsed)
+      ? parsed
+      : [];
   } catch {
     return [];
   }
 }
 
+
 function normalizeObject(value) {
-  if (value && typeof value === 'object') return value;
-  if (typeof value !== 'string') return {};
+  if (
+    value
+    &&
+    typeof value === 'object'
+    &&
+    !Array.isArray(value)
+  ) {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return {};
+  }
+
   try {
     const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+
+    return (
+      parsed
+      &&
+      typeof parsed === 'object'
+      &&
+      !Array.isArray(parsed)
+    )
+      ? parsed
+      : {};
   } catch {
     return {};
   }
 }
 
-function productionRows(tree, plan) {
-  const rows = treeRoots(tree).map((node, index) => ({
-    title: node.productionTitle || `Produção ${Number(node.productionIndex ?? index) + 1}`,
-    material: node.materialName,
-    code: node.materialCode,
-    quantity: node.requiredQty,
-    unit: node.unit,
-    machine: node.machineName,
-    people: node.peopleCount,
-    model: node.productionModelName
-  }));
-  if (rows.length) return rows;
-  return [{
-    title: 'Produção 1',
-    material: plan.material_name,
-    code: plan.material_code,
-    quantity: plan.planned_qty,
-    unit: plan.planned_unit,
-    machine: plan.machine_name,
-    people: plan.people_count,
-    model: ''
-  }];
+
+function validDateKey(value) {
+  const date =
+    text(value)
+      .slice(0, 10);
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? date
+    : '';
 }
 
-function collectAlerts(tree, operations) {
-  const alerts = [];
+
+function formatDate(value) {
+  const date =
+    validDateKey(value);
+
+  return date
+    ? date
+        .split('-')
+        .reverse()
+        .join('/')
+    : '';
+}
+
+
+function weekdayLabel(value) {
+  const date =
+    validDateKey(value);
+
+  if (!date) {
+    return '';
+  }
+
+  const label =
+    new Intl.DateTimeFormat(
+      'pt-BR',
+      {
+        weekday:
+          'long',
+
+        timeZone:
+          'UTC'
+      }
+    )
+      .format(
+        new Date(
+          `${date}T00:00:00Z`
+        )
+      );
+
+  return label
+    ? label.charAt(0).toUpperCase()
+      +
+      label.slice(1)
+    : '';
+}
+
+
+function formatNumber(value) {
+  const parsed =
+    Number(value);
+
+  if (
+    !Number.isFinite(parsed)
+  ) {
+    return '-';
+  }
+
+  return parsed.toLocaleString(
+    'pt-BR',
+    {
+      minimumFractionDigits:
+        0,
+
+      maximumFractionDigits:
+        3
+    }
+  );
+}
+
+
+function formatDuration(minutes) {
+  const total =
+    Math.max(
+      Math.round(
+        number(minutes)
+      ),
+      0
+    );
+
+  const hours =
+    Math.floor(
+      total / 60
+    );
+
+  const mins =
+    total % 60;
+
+  if (!hours) {
+    return `${mins}min`;
+  }
+
+  return mins
+    ? `${hours}h ${String(mins).padStart(2, '0')}min`
+    : `${hours}h`;
+}
+
+
+function formatHourDuration(value) {
+  const totalMinutes =
+    Math.max(
+      Math.round(
+        number(value)
+        *
+        60
+      ),
+      0
+    );
+
+  const hours =
+    Math.floor(
+      totalMinutes / 60
+    );
+
+  const mins =
+    totalMinutes % 60;
+
+  return (
+    `${String(hours).padStart(2, '0')}`
+    +
+    ':'
+    +
+    `${String(mins).padStart(2, '0')}`
+    +
+    ' h/dia'
+  );
+}
+
+
+function formatPeople(value) {
+  const people =
+    Math.max(
+      Math.round(
+        number(value)
+      ),
+      0
+    );
+
+  if (!people) {
+    return '-';
+  }
+
+  return (
+    `${people} pessoa`
+    +
+    (
+      people === 1
+        ? ''
+        : 's'
+    )
+  );
+}
+
+
+function statusLabel(value) {
+  const labels = {
+    planned:
+      'Planejado',
+
+    launched:
+      'Lançado',
+
+    canceled:
+      'Cancelado'
+  };
+
+  return (
+    labels[
+      text(value)
+        .toLowerCase()
+    ]
+    ||
+    text(value)
+    ||
+    'Sem status'
+  );
+}
+
+
+function isCanceledPlan(plan = {}) {
+  return (
+    text(
+      plan.status
+    ).toLowerCase()
+    ===
+    'canceled'
+  );
+}
+
+
+function safeColor(
+  value,
+  fallback = COLORS.ink
+) {
+  return /^#[0-9a-f]{6}$/i.test(
+    text(value).trim()
+  )
+    ? text(value).trim()
+    : fallback;
+}
+
+
+function productionColor(
+  index = 0,
+  explicit = null
+) {
+  return safeColor(
+    explicit,
+
+    PRODUCTION_COLORS[
+      Math.max(
+        number(index),
+        0
+      )
+      %
+      PRODUCTION_COLORS.length
+    ]
+  );
+}
+
+
+function isPlanningRootName(value) {
+  return [
+    'Plano de producao',
+    'Plano de produção'
+  ].includes(
+    text(value)
+  );
+}
+
+
+function treeRoots(tree) {
+  if (
+    !tree
+    ||
+    typeof tree !== 'object'
+  ) {
+    return [];
+  }
+
+  return (
+    Array.isArray(tree.children)
+    &&
+    isPlanningRootName(
+      tree.materialName
+    )
+  )
+    ? tree.children
+    : [tree];
+}
+
+
+function isBobinaName(value) {
+  return /\bbobina\b/i.test(
+    text(value)
+  );
+}
+
+
+function normalizedLocation(value) {
+  return text(value)
+    .normalize('NFD')
+    .replace(
+      /[\u0300-\u036f]/g,
+      ''
+    )
+    .trim()
+    .toUpperCase();
+}
+
+
+function isMatrizLocation(value) {
+  return normalizedLocation(
+    value
+  ).includes(
+    'MATRIZ'
+  );
+}
+
+
+function isFeitalLocation(value) {
+  return normalizedLocation(
+    value
+  ).includes(
+    'FEITAL'
+  );
+}
+
+
+function documentTitle(type) {
+  return (
+    type
+    ===
+    DOCUMENT_TYPES.MATRIZ
+  )
+    ? 'PLANEJAMENTO DE PRODUÇÃO · MATRIZ'
+    : 'PLANEJAMENTO DE PRODUÇÃO · FEITAL';
+}
+
+
+function operationPeriod(
+  events = [],
+  fallbackStartDate = null,
+  fallbackEndDate = null
+) {
+  const dates =
+    normalizeArray(events)
+      .flatMap(
+        event => [
+          validDateKey(
+            event.date
+          ),
+
+          validDateKey(
+            event.startDate
+          ),
+
+          validDateKey(
+            event.endDate
+          )
+        ]
+      )
+      .filter(Boolean)
+      .sort();
+
+  return {
+    startDate:
+      dates[0]
+      ||
+      validDateKey(
+        fallbackStartDate
+      ),
+
+    endDate:
+      dates.at(-1)
+      ||
+      validDateKey(
+        fallbackEndDate
+      )
+      ||
+      validDateKey(
+        fallbackStartDate
+      )
+  };
+}
+
+
+function normalizeManualSchedule(
+  plan = {}
+) {
+  return normalizeObject(
+    plan.manual_schedule_draft
+  );
+}
+
+
+function operationKey(
+  operation = {}
+) {
+  return text(
+    operation.calendarParentOperationId
+    ||
+    operation.splitParentOperationId
+    ||
+    operation.parentOperationId
+    ||
+    operation.operationId
+    ||
+    operation.materialId
+  );
+}
+
+
+function compareScheduleEvents(
+  left,
+  right
+) {
+  return (
+    text(
+      left.date
+    )
+      .localeCompare(
+        text(
+          right.date
+        )
+      )
+
+    ||
+
+    text(
+      left.sortTime
+      ||
+      '99:99'
+    )
+      .localeCompare(
+        text(
+          right.sortTime
+          ||
+          '99:99'
+        )
+      )
+
+    ||
+
+    number(
+      left.productionIndex
+    )
+    -
+    number(
+      right.productionIndex
+    )
+
+    ||
+
+    number(
+      left.sequence
+    )
+    -
+    number(
+      right.sequence
+    )
+
+    ||
+
+    text(
+      left.machineName
+    )
+      .localeCompare(
+        text(
+          right.machineName
+        ),
+        'pt-BR'
+      )
+
+    ||
+
+    text(
+      left.materialName
+    )
+      .localeCompare(
+        text(
+          right.materialName
+        ),
+        'pt-BR'
+      )
+  );
+}
+
+
+function manualAllocationEvents(
+  plan,
+  operations = []
+) {
+  const draft =
+    normalizeManualSchedule(
+      plan
+    );
+
+  const allocations =
+    normalizeArray(
+      draft.allocations
+    );
+
+  if (
+    !allocations.length
+  ) {
+    return [];
+  }
+
+  const byParent =
+    new Map();
+
+  operations.forEach(
+    operation => {
+      const key =
+        operationKey(
+          operation
+        );
+
+      if (key) {
+        byParent.set(
+          key,
+          operation
+        );
+      }
+    }
+  );
+
+  return allocations
+    .map(
+      (
+        allocation,
+        index
+      ) => {
+        const parent =
+          byParent.get(
+            text(
+              allocation.parentOperationId
+            )
+          )
+          ||
+          {};
+
+        return {
+          type:
+            'production',
+
+          eventId:
+            text(
+              allocation.allocationId
+            )
+            ||
+            `allocation-${index + 1}`,
+
+          date:
+            validDateKey(
+              allocation.date
+              ||
+              allocation.startDate
+            ),
+
+          sortTime:
+            text(
+              allocation.startTime
+              ||
+              '07:00'
+            ).slice(0, 5),
+
+          productionIndex:
+            number(
+              allocation.productionIndex
+              ??
+              parent.productionIndex
+            ),
+
+          productionTitle:
+            allocation.productionTitle
+            ||
+            parent.productionTitle
+            ||
+            `Produção ${
+              number(
+                allocation.productionIndex
+                ??
+                parent.productionIndex
+              )
+              +
+              1
+            }`,
+
+          productionColor:
+            allocation.productionColor
+            ||
+            parent.productionColor
+            ||
+            null,
+
+          materialId:
+            text(
+              allocation.materialId
+              ||
+              parent.materialId
+            ),
+
+          materialName:
+            allocation.materialName
+            ||
+            parent.materialName
+            ||
+            '-',
+
+          materialCode:
+            allocation.materialCode
+            ||
+            parent.materialCode
+            ||
+            '',
+
+          quantity:
+            number(
+              allocation.quantity
+            ),
+
+          unit:
+            allocation.unit
+            ||
+            parent.unit
+            ||
+            '',
+
+          machineName:
+            allocation.machineName
+            ||
+            parent.machineName
+            ||
+            '-',
+
+          peopleCount:
+            allocation.peopleCount
+            ??
+            parent.peopleCount
+            ??
+            0,
+
+          durationMinutes:
+            number(
+              allocation.durationMinutes
+              ||
+              allocation.totalMinutes
+            ),
+
+          locationName:
+            allocation.locationName
+            ||
+            allocation.machineLocationName
+            ||
+            allocation.locationCode
+            ||
+            parent.locationName
+            ||
+            parent.machineLocationName
+            ||
+            '',
+
+          parentOperationId:
+            text(
+              allocation.parentOperationId
+            ),
+
+          sequence:
+            Number.isFinite(
+              Number(
+                allocation.sequence
+              )
+            )
+              ? Number(
+                  allocation.sequence
+                )
+              : index + 1
+        };
+      }
+    )
+    .filter(
+      event =>
+        event.date
+    )
+    .sort(
+      compareScheduleEvents
+    );
+}
+
+
+function operationToEvents(
+  operation,
+  index = 0
+) {
+  /*
+   * Transporte deixa de fazer parte
+   * do documento operacional.
+   */
+  if (
+    operation?.operationType
+    ===
+    'transport'
+  ) {
+    return [];
+  }
+
+
+  const segments =
+    normalizeArray(
+      operation?.segments
+    );
+
+
+  if (
+    segments.length
+  ) {
+    const totalSegmentMinutes =
+      segments.reduce(
+        (
+          sum,
+          segment
+        ) =>
+          sum
+          +
+          number(
+            segment.minutes
+          ),
+        0
+      );
+
+
+    return segments.map(
+      (
+        segment,
+        segmentIndex
+      ) => {
+        const ratio =
+          totalSegmentMinutes > 0
+            ? (
+                number(
+                  segment.minutes
+                )
+                /
+                totalSegmentMinutes
+              )
+            : (
+                1
+                /
+                segments.length
+              );
+
+
+        return {
+          type:
+            'production',
+
+          eventId:
+            `${
+              operation.operationId
+              ||
+              index
+            }:segment:${segmentIndex}`,
+
+          date:
+            validDateKey(
+              segment.date
+              ||
+              operation.startDate
+            ),
+
+          sortTime:
+            text(
+              segment.startTime
+              ||
+              operation.startTime
+              ||
+              '07:00'
+            ).slice(0, 5),
+
+          productionIndex:
+            number(
+              operation.productionIndex
+            ),
+
+          productionTitle:
+            operation.productionTitle
+            ||
+            `Produção ${
+              number(
+                operation.productionIndex
+              )
+              +
+              1
+            }`,
+
+          productionColor:
+            operation.productionColor
+            ||
+            null,
+
+          materialId:
+            text(
+              operation.materialId
+            ),
+
+          materialName:
+            operation.materialName
+            ||
+            '-',
+
+          materialCode:
+            operation.materialCode
+            ||
+            '',
+
+          quantity:
+            number(
+              operation.produceQty
+              ||
+              operation.requiredQty
+            )
+            *
+            ratio,
+
+          unit:
+            operation.unit
+            ||
+            '',
+
+          machineName:
+            operation.machineName
+            ||
+            '-',
+
+          peopleCount:
+            operation.peopleCount
+            ??
+            0,
+
+          durationMinutes:
+            number(
+              segment.minutes
+              ||
+              operation.totalMinutes
+            ),
+
+          locationName:
+            operation.locationName
+            ||
+            operation.machineLocationName
+            ||
+            operation.locationCode
+            ||
+            '',
+
+          parentOperationId:
+            operationKey(
+              operation
+            ),
+
+          sequence:
+            index
+            +
+            segmentIndex
+            +
+            1
+        };
+      }
+    );
+  }
+
+
+  return [
+    {
+      type:
+        'production',
+
+      eventId:
+        text(
+          operation?.operationId
+        )
+        ||
+        `operation-${index + 1}`,
+
+      date:
+        validDateKey(
+          operation?.startDate
+          ||
+          operation?.date
+        ),
+
+      sortTime:
+        text(
+          operation?.startTime
+          ||
+          '07:00'
+        ).slice(0, 5),
+
+      productionIndex:
+        number(
+          operation?.productionIndex
+        ),
+
+      productionTitle:
+        operation?.productionTitle
+        ||
+        `Produção ${
+          number(
+            operation?.productionIndex
+          )
+          +
+          1
+        }`,
+
+      productionColor:
+        operation?.productionColor
+        ||
+        null,
+
+      materialId:
+        text(
+          operation?.materialId
+        ),
+
+      materialName:
+        operation?.materialName
+        ||
+        '-',
+
+      materialCode:
+        operation?.materialCode
+        ||
+        '',
+
+      quantity:
+        number(
+          operation?.produceQty
+          ||
+          operation?.requiredQty
+        ),
+
+      unit:
+        operation?.unit
+        ||
+        '',
+
+      machineName:
+        operation?.machineName
+        ||
+        '-',
+
+      peopleCount:
+        operation?.peopleCount
+        ??
+        0,
+
+      durationMinutes:
+        number(
+          operation?.totalMinutes
+          ||
+          operation?.durationMinutes
+        ),
+
+      locationName:
+        operation?.locationName
+        ||
+        operation?.machineLocationName
+        ||
+        operation?.locationCode
+        ||
+        '',
+
+      parentOperationId:
+        operationKey(
+          operation
+        ),
+
+      sequence:
+        index + 1
+    }
+  ];
+}
+
+
+function dayRowsToEvents(
+  days = [],
+  operations = []
+) {
+  return normalizeArray(
+    days
+  )
+    .map(
+      (
+        row,
+        index
+      ) => {
+        const matching =
+          operations.find(
+            operation =>
+              operation?.operationType
+                !==
+                'transport'
+
+              &&
+
+              (
+                text(
+                  operation.materialId
+                )
+                ===
+                text(
+                  row.material_id
+                )
+
+                ||
+
+                text(
+                  operation.materialCode
+                )
+                ===
+                text(
+                  row.material_code
+                )
+
+                ||
+
+                text(
+                  operation.materialName
+                )
+                ===
+                text(
+                  row.material_name
+                )
+              )
+
+              &&
+
+              (
+                !row.machine_name
+
+                ||
+
+                text(
+                  operation.machineName
+                )
+                ===
+                text(
+                  row.machine_name
+                )
+              )
+          )
+          ||
+          {};
+
+
+        return {
+          type:
+            'production',
+
+          eventId:
+            `day-${
+              row.id
+              ||
+              index + 1
+            }`,
+
+          date:
+            validDateKey(
+              row.planned_date
+            ),
+
+          sortTime:
+            '07:00',
+
+          productionIndex:
+            number(
+              row.production_index
+              ??
+              matching.productionIndex
+            ),
+
+          productionTitle:
+            row.production_title
+            ||
+            matching.productionTitle
+            ||
+            `Produção ${
+              number(
+                row.production_index
+                ??
+                matching.productionIndex
+              )
+              +
+              1
+            }`,
+
+          productionColor:
+            row.production_color
+            ||
+            matching.productionColor
+            ||
+            null,
+
+          materialId:
+            text(
+              row.material_id
+              ||
+              matching.materialId
+            ),
+
+          materialName:
+            row.material_name
+            ||
+            matching.materialName
+            ||
+            '-',
+
+          materialCode:
+            row.material_code
+            ||
+            matching.materialCode
+            ||
+            '',
+
+          quantity:
+            number(
+              row.planned_qty
+            ),
+
+          unit:
+            row.planned_unit
+            ||
+            matching.unit
+            ||
+            '',
+
+          machineName:
+            row.machine_name
+            ||
+            matching.machineName
+            ||
+            '-',
+
+          peopleCount:
+            row.people_count
+            ??
+            matching.peopleCount
+            ??
+            0,
+
+          durationMinutes:
+            0,
+
+          locationName:
+            row.location_name
+            ||
+            row.location
+            ||
+            matching.locationName
+            ||
+            matching.machineLocationName
+            ||
+            '',
+
+          sequence:
+            index + 1
+        };
+      }
+    )
+    .filter(
+      event =>
+        event.date
+    );
+}
+
+
+function buildScheduleEvents(
+  plan,
+  days = [],
+  operations = []
+) {
+  const manual =
+    manualAllocationEvents(
+      plan,
+      operations
+    );
+
+
+  if (
+    manual.length
+  ) {
+    return manual.sort(
+      compareScheduleEvents
+    );
+  }
+
+
+  const fromOperations =
+    operations
+      .flatMap(
+        operationToEvents
+      )
+      .filter(
+        event =>
+          event.date
+      );
+
+
+  if (
+    fromOperations.length
+  ) {
+    return fromOperations.sort(
+      compareScheduleEvents
+    );
+  }
+
+
+  return dayRowsToEvents(
+    days,
+    operations
+  )
+    .sort(
+      compareScheduleEvents
+    );
+}
+
+
+function eventBelongsToDocument(
+  event,
+  type
+) {
+  const bobina =
+    isBobinaName(
+      event.materialName
+    );
+
+
+  if (
+    type
+    ===
+    DOCUMENT_TYPES.MATRIZ
+  ) {
+    /*
+     * Documento da Matriz:
+     * somente bobinas.
+     */
+    return bobina;
+  }
+
+
+  /*
+   * Documento do Feital:
+   * barras, varetas, telas/malhas e
+   * demais materiais, sem bobina.
+   */
+  return !bobina;
+}
+
+
+function filterEventsForDocument(
+  events,
+  type
+) {
+  return events
+    .filter(
+      event =>
+        event.type
+        ===
+        'production'
+    )
+    .filter(
+      event =>
+        eventBelongsToDocument(
+          event,
+          type
+        )
+    )
+    .sort(
+      compareScheduleEvents
+    );
+}
+
+
+function rootProductionRows(
+  tree,
+  plan
+) {
+  const roots =
+    treeRoots(
+      tree
+    );
+
+
+  if (
+    roots.length
+  ) {
+    return roots.map(
+      (
+        node,
+        index
+      ) => ({
+        productionIndex:
+          number(
+            node.productionIndex
+            ??
+            index
+          ),
+
+        title:
+          node.productionTitle
+          ||
+          `Produção ${
+            number(
+              node.productionIndex
+              ??
+              index
+            )
+            +
+            1
+          }`,
+
+        color:
+          node.productionColor
+          ||
+          null,
+
+        material:
+          node.materialName
+          ||
+          '-',
+
+        code:
+          node.materialCode
+          ||
+          '',
+
+        quantity:
+          number(
+            node.requiredQty
+          ),
+
+        unit:
+          node.unit
+          ||
+          '',
+
+        treeNode:
+          node
+      })
+    );
+  }
+
+
+  return [
+    {
+      productionIndex:
+        0,
+
+      title:
+        'Produção 1',
+
+      color:
+        null,
+
+      material:
+        plan.material_name
+        ||
+        '-',
+
+      code:
+        plan.material_code
+        ||
+        '',
+
+      quantity:
+        number(
+          plan.planned_qty
+        ),
+
+      unit:
+        plan.planned_unit
+        ||
+        '',
+
+      treeNode:
+        null
+    }
+  ];
+}
+
+
+function findTreeNode(
+  tree,
+  predicate
+) {
+  let found =
+    null;
+
+
   function visit(node) {
-    if (!node) return;
-    if (node.isInitialRawMaterial && Number(node.stockQty || 0) < Number(node.requiredQty || 0)) {
-      alerts.push(`Matéria-prima insuficiente: ${node.materialName} precisa ${formatNumber(node.requiredQty)} ${node.unit || ''} e possui ${formatNumber(node.stockQty)}.`);
+    if (
+      !node
+      ||
+      found
+    ) {
+      return;
     }
-    if (!node.isInitialRawMaterial && Number(node.produceQty || 0) <= 0 && Number(node.requiredQty || 0) > 0) {
-      alerts.push(`Material atendido por saldo: ${node.materialName}.`);
+
+
+    if (
+      predicate(
+        node
+      )
+    ) {
+      found =
+        node;
+
+      return;
     }
-    (node.children || []).forEach(visit);
+
+
+    (
+      node.children
+      ||
+      []
+    ).forEach(
+      visit
+    );
   }
-  treeRoots(tree).forEach(visit);
-  operations.forEach(operation => {
-    if (Number(operation.teamAvailable || 0) && Number(operation.peopleCount || 0) > Number(operation.teamAvailable || 0)) {
-      alerts.push(`Equipe excedida em ${operation.materialName}: ${operation.peopleCount} pessoas para ${operation.teamAvailable} disponíveis.`);
-    }
-    if (operation.operationType === 'transport') {
-      alerts.push(`Transporte pendente de conferência: ${operation.materialName}.`);
-    }
-  });
-  return [...new Set(alerts)];
+
+
+  treeRoots(
+    tree
+  )
+    .forEach(
+      visit
+    );
+
+
+  return found;
 }
 
-function stockAuthorizationFromPlan(plan = {}, tree = null, operations = []) {
-  const fromTree = normalizeObject(tree || plan.schedule_tree)._stockAuthorization;
-  if (fromTree && typeof fromTree === 'object') return fromTree;
-  return normalizeArray(operations || plan.operations).find(operation => operation?._planningMeta)?._planningMeta?.stockAuthorization || null;
+
+function matrixProductionRows(
+  events,
+  tree
+) {
+  const matrixEvents =
+    filterEventsForDocument(
+      events,
+      DOCUMENT_TYPES.MATRIZ
+    );
+
+
+  const groups =
+    new Map();
+
+
+  matrixEvents.forEach(
+    event => {
+      const key =
+        text(
+          event.materialId
+          ||
+          event.materialCode
+          ||
+          event.materialName
+        );
+
+
+      if (
+        !groups.has(
+          key
+        )
+      ) {
+        groups.set(
+          key,
+          {
+            productionIndex:
+              0,
+
+            title:
+              'Produção de Bobina',
+
+            color:
+              COLORS.green,
+
+            material:
+              event.materialName
+              ||
+              '-',
+
+            code:
+              event.materialCode
+              ||
+              '',
+
+            quantity:
+              0,
+
+            unit:
+              event.unit
+              ||
+              '',
+
+            treeNode:
+              findTreeNode(
+                tree,
+                node =>
+                  (
+                    text(
+                      node.materialId
+                    )
+                    ===
+                    text(
+                      event.materialId
+                    )
+                  )
+
+                  ||
+
+                  (
+                    text(
+                      node.materialCode
+                    )
+                    ===
+                    text(
+                      event.materialCode
+                    )
+                  )
+
+                  ||
+
+                  (
+                    text(
+                      node.materialName
+                    )
+                    ===
+                    text(
+                      event.materialName
+                    )
+                  )
+              )
+          }
+        );
+      }
+
+
+      groups
+        .get(
+          key
+        )
+        .quantity
+        +=
+        number(
+          event.quantity
+        );
+    }
+  );
+
+
+  return [
+    ...groups.values()
+  ];
 }
 
-function drawAlertsPage(doc, plan, tree, operations, pageNumberRef) {
-  addPage(doc, 'ALERTAS E OBSERVAÇÕES', plan, pageNumberRef);
-  sectionTitle(doc, 'ALERTAS E OBSERVAÇÕES', 42, 116);
-  const authorization = stockAuthorizationFromPlan(plan, tree, operations);
-  const materials = Array.isArray(authorization?.materials) ? authorization.materials : [];
-  if (!materials.length) {
-    doc.fillColor('#4B5563').font('Helvetica').fontSize(10).text('Sem alertas registrados.', 42, 150, { width: 511 });
+
+function productionRowsForDocument(
+  type,
+  tree,
+  plan,
+  events
+) {
+  if (
+    type
+    ===
+    DOCUMENT_TYPES.MATRIZ
+  ) {
+    return matrixProductionRows(
+      events,
+      tree
+    );
+  }
+
+
+  return rootProductionRows(
+    tree,
+    plan
+  )
+    .filter(
+      row =>
+        !isBobinaName(
+          row.material
+        )
+    );
+}
+
+
+function aggregateNodes(
+  nodes = []
+) {
+  const map =
+    new Map();
+
+
+  nodes.forEach(
+    node => {
+      if (!node) {
+        return;
+      }
+
+
+      const key =
+        text(
+          node.materialId
+          ||
+          node.materialCode
+          ||
+          node.materialName
+        );
+
+
+      if (!key) {
+        return;
+      }
+
+
+      if (
+        !map.has(
+          key
+        )
+      ) {
+        map.set(
+          key,
+          {
+            materialId:
+              node.materialId,
+
+            materialName:
+              node.materialName
+              ||
+              '-',
+
+            materialCode:
+              node.materialCode
+              ||
+              '',
+
+            requiredQty:
+              0,
+
+            unit:
+              node.unit
+              ||
+              '',
+
+            children:
+              []
+          }
+        );
+      }
+
+
+      const target =
+        map.get(
+          key
+        );
+
+
+      target.requiredQty +=
+        number(
+          node.requiredQty
+        );
+
+
+      target.children.push(
+        ...(
+          node.children
+          ||
+          []
+        )
+      );
+    }
+  );
+
+
+  return [
+    ...map.values()
+  ];
+}
+
+
+function dependencyLayers(
+  root,
+  type
+) {
+  if (!root) {
+    return [];
+  }
+
+
+  const first =
+    aggregateNodes(
+      root.children
+      ||
+      []
+    );
+
+
+  if (
+    type
+    ===
+    DOCUMENT_TYPES.MATRIZ
+  ) {
+    /*
+     * Para a Bobina da Matriz mostramos
+     * somente seu insumo imediatamente anterior.
+     *
+     * Ex.:
+     * Bobina -> Fio Máquina
+     */
+    return first.length
+      ? [first]
+      : [];
+  }
+
+
+  if (
+    !first.length
+  ) {
+    return [];
+  }
+
+
+  /*
+   * Caso direto:
+   *
+   * 4,2 Reto
+   *    ↓
+   * Bobina
+   *
+   * O fluxo visual para aqui.
+   */
+  if (
+    first.every(
+      node =>
+        isBobinaName(
+          node.materialName
+        )
+    )
+  ) {
+    return [
+      first
+    ];
+  }
+
+
+  /*
+   * Caso de malha:
+   *
+   * Q-138
+   *   ↓
+   * Longitudinal / Transversal
+   *   ↓
+   * Bobina
+   */
+  const second =
+    aggregateNodes(
+      first.flatMap(
+        node =>
+          node.children
+          ||
+          []
+      )
+    )
+      .filter(
+        node =>
+          isBobinaName(
+            node.materialName
+          )
+      );
+
+
+  return [
+    first,
+    second
+  ]
+    .filter(
+      layer =>
+        layer.length
+    );
+}
+
+
+function uniqueMachines(
+  events = []
+) {
+  return [
+    ...new Set(
+      events
+        .map(
+          event =>
+            text(
+              event.machineName
+            ).trim()
+        )
+        .filter(
+          value =>
+            value
+            &&
+            value !== '-'
+        )
+    )
+  ]
+    .sort(
+      (
+        left,
+        right
+      ) =>
+        left.localeCompare(
+          right,
+          'pt-BR'
+        )
+    );
+}
+
+
+function uniqueDates(
+  events = []
+) {
+  return [
+    ...new Set(
+      events
+        .map(
+          event =>
+            validDateKey(
+              event.date
+            )
+        )
+        .filter(Boolean)
+    )
+  ].sort();
+}
+
+
+function totalMinutes(
+  events = []
+) {
+  return events.reduce(
+    (
+      sum,
+      event
+    ) =>
+      sum
+      +
+      number(
+        event.durationMinutes
+      ),
+    0
+  );
+}
+
+
+function drawHeader(
+  doc,
+  title,
+  plan,
+  pageNumber,
+  type
+) {
+  const width =
+    doc.page.width;
+
+
+  const headerTitle =
+    title.startsWith(
+      'PROGRAMAÇÃO OPERACIONAL'
+    )
+      ? 'PROGRAMAÇÃO OPERACIONAL'
+
+      : title.startsWith(
+          'OBSERVAÇÕES'
+        )
+          ? 'OBSERVAÇÕES E DESVIOS'
+
+          : title.startsWith(
+              'ASSINATURAS'
+            )
+              ? 'ASSINATURAS'
+
+              : 'PLANEJAMENTO DE PRODUÇÃO';
+
+
+  doc.save();
+
+
+  doc.rect(
+    0,
+    0,
+    width,
+    PAGE.headerHeight
+  )
+    .fill(
+      COLORS.header
+    );
+
+
+  if (
+    fs.existsSync(
+      logoPath
+    )
+  ) {
+    doc.image(
+      logoPath,
+      PAGE.margin,
+      18,
+      {
+        width:
+          82
+      }
+    );
+  }
+
+
+  doc.fillColor(
+    '#FFFFFF'
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      15
+    )
+    .text(
+      headerTitle,
+      150,
+      22,
+      {
+        width:
+          width
+          -
+          300
+      }
+    );
+
+
+  doc.fillColor(
+    '#E5E7EB'
+  )
+    .font(
+      'Helvetica'
+    )
+    .fontSize(
+      8.5
+    )
+    .text(
+      `Planejamento ${
+        plan.code
+        ||
+        plan.id
+        ||
+        '-'
+      }`,
+      150,
+      47,
+      {
+        width:
+          width
+          -
+          300
+      }
+    );
+
+
+  doc.fillColor(
+    '#FFFFFF'
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      8.5
+    )
+    .text(
+      (
+        type
+        ===
+        DOCUMENT_TYPES.MATRIZ
+      )
+        ? 'MATRIZ'
+        : 'FEITAL',
+      width - 180,
+      22,
+      {
+        width:
+          138,
+
+        align:
+          'right'
+      }
+    );
+
+
+  doc.fillColor(
+    '#FFFFFF'
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      8.5
+    )
+    .text(
+      `Página ${pageNumber}`,
+      width - 180,
+      48,
+      {
+        width:
+          138,
+
+        align:
+          'right'
+      }
+    );
+
+
+  doc.restore();
+
+
+  doc.y =
+    PAGE.top;
+}
+
+
+function drawCanceledWatermark(
+  doc,
+  plan
+) {
+  if (
+    !isCanceledPlan(
+      plan
+    )
+  ) {
     return;
   }
-  doc.fillColor('#111827')
-    .font('Helvetica-Bold')
-    .fontSize(9)
-    .text('Planejamento salvo mediante autorização por estoque insuficiente.', 42, 150, { width: 511 });
-  drawTable(doc, [
-    { label: 'Material', render: row => row.materialName || row.material || '' },
-    { label: 'Necessário', render: row => `${formatNumber(row.requiredQty)} ${row.unit || ''}`.trim() },
-    { label: 'Saldo', render: row => `${formatNumber(row.stockQty)} ${row.unit || ''}`.trim() },
-    { label: 'Falta', render: row => `${formatNumber(row.shortageQty)} ${row.unit || ''}`.trim() }
-  ], materials, 42, 184, 511, { rowHeight: 28, fontSize: 7 });
-}
 
-function linkedProductions(operation) {
-  if (!Array.isArray(operation.productionItems) || !operation.productionItems.length) {
-    return operation.productionTitle || '-';
-  }
-  return operation.productionItems
-    .map(item => `${item.productionTitle || `Produção ${Number(item.productionIndex || 0) + 1}`}: ${formatNumber(item.quantity)} ${item.unit || operation.unit || ''}`.trim())
-    .join(' | ');
-}
 
-function drawHeader(doc, title, plan, pageNumber) {
   doc.save();
-  doc.rect(0, 0, doc.page.width, 76).fill('#2F343B');
-  doc.strokeColor('#2F343B').lineWidth(0.8).moveTo(42, 76).lineTo(doc.page.width - 42, 76).stroke();
-  if (fs.existsSync(logoPath)) doc.image(logoPath, 42, 24, { width: 48 });
-  doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(12).text(title, 150, 28, { width: 280 });
-  doc.fillColor('#FFFFFF').font('Helvetica').fontSize(8).text(`Planejamento ${plan.code || plan.id}`, 150, 47, { width: 260 });
-  doc.fillColor('#FFFFFF').fontSize(8).text(`Página ${pageNumber}`, doc.page.width - 130, 47, { width: 88, align: 'right' });
+
+
+  doc.fillColor(
+    COLORS.red
+  )
+    .fillOpacity(
+      0.10
+    )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      74
+    );
+
+
+  doc.rotate(
+    -32,
+    {
+      origin: [
+        doc.page.width / 2,
+        doc.page.height / 2
+      ]
+    }
+  );
+
+
+  doc.text(
+    'CANCELADO',
+    0,
+    doc.page.height / 2 - 42,
+    {
+      width:
+        doc.page.width,
+
+      align:
+        'center'
+    }
+  );
+
+
   doc.restore();
-  doc.y = 100;
+
+
+  doc.fillOpacity(
+    1
+  );
 }
 
-function drawCanceledWatermark(doc, plan) {
-  if (!isCanceledPlan(plan)) return;
+
+function addPage(
+  doc,
+  title,
+  plan,
+  pageNumberRef,
+  type
+) {
+  doc.addPage({
+    size:
+      'A4',
+
+    margin:
+      PAGE.margin
+  });
+
+
+  pageNumberRef.value +=
+    1;
+
+
+  drawHeader(
+    doc,
+    title,
+    plan,
+    pageNumberRef.value,
+    type
+  );
+
+
+  drawCanceledWatermark(
+    doc,
+    plan
+  );
+}
+
+
+function roundedPanel(
+  doc,
+  x,
+  y,
+  width,
+  height,
+  options = {}
+) {
   doc.save();
-  doc.fillColor('#DC2626').fillOpacity(0.12).font('Helvetica-Bold').fontSize(74);
-  doc.rotate(-32, { origin: [doc.page.width / 2, doc.page.height / 2] });
-  doc.text('CANCELADO', 0, doc.page.height / 2 - 42, {
-    width: doc.page.width,
-    align: 'center'
-  });
+
+
+  doc.roundedRect(
+    x,
+    y,
+    width,
+    height,
+    options.radius
+    ??
+    8
+  )
+    .fillAndStroke(
+      options.fill
+      ||
+      COLORS.paper,
+
+      options.stroke
+      ||
+      COLORS.line
+    );
+
+
+  if (
+    options.accent
+  ) {
+    doc.roundedRect(
+      x,
+      y,
+      6,
+      height,
+      options.radius
+      ??
+      8
+    )
+      .fill(
+        options.accent
+      );
+
+
+    doc.rect(
+      x + 2,
+      y,
+      5,
+      height
+    )
+      .fill(
+        options.accent
+      );
+  }
+
+
   doc.restore();
-  doc.fillOpacity(1);
 }
 
-function addPage(doc, title, plan, pageNumberRef) {
-  if (pageNumberRef.value > 0) doc.addPage();
-  pageNumberRef.value += 1;
-  drawHeader(doc, title, plan, pageNumberRef.value);
-  drawCanceledWatermark(doc, plan);
+
+function sectionTitle(
+  doc,
+  label,
+  x,
+  y,
+  width
+) {
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      12.5
+    )
+    .text(
+      label,
+      x,
+      y,
+      {
+        width
+      }
+    );
+
+
+  doc.strokeColor(
+    COLORS.line
+  )
+    .lineWidth(
+      0.8
+    )
+    .moveTo(
+      x,
+      y + 20
+    )
+    .lineTo(
+      x + width,
+      y + 20
+    )
+    .stroke();
 }
 
-function pill(doc, text, x, y, width, color = '#1F2937') {
-  doc.roundedRect(x, y, width, 20, 10).fill('#F4F6F8');
-  doc.fillColor(color).font('Helvetica-Bold').fontSize(8).text(text, x + 8, y + 6, { width: width - 16 });
+
+function pill(
+  doc,
+  label,
+  x,
+  y,
+  width,
+  options = {}
+) {
+  doc.roundedRect(
+    x,
+    y,
+    width,
+    options.height
+    ||
+    22,
+    11
+  )
+    .fill(
+      options.fill
+      ||
+      COLORS.soft
+    );
+
+
+  doc.fillColor(
+    options.color
+    ||
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      options.fontSize
+      ||
+      7.5
+    )
+    .text(
+      label,
+      x + 8,
+      y + 6,
+      {
+        width:
+          width - 16,
+
+        align:
+          options.align
+          ||
+          'center'
+      }
+    );
 }
 
-function summaryCard(doc, label, value, x, y, width, height = 58) {
-  doc.roundedRect(x, y, width, height, 6).fillAndStroke('#ffffff', '#D1D5DB');
-  doc.fillColor('#6B7280').font('Helvetica-Bold').fontSize(7).text(label.toUpperCase(), x + 10, y + 10, { width: width - 20 });
-  doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(12).text(String(value ?? '-'), x + 10, y + 27, { width: width - 20, height: height - 32 });
+
+function infoPair(
+  doc,
+  label,
+  value,
+  x,
+  y,
+  width
+) {
+  doc.fillColor(
+    COLORS.muted
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      7.2
+    )
+    .text(
+      text(label)
+        .toUpperCase(),
+      x,
+      y,
+      {
+        width
+      }
+    );
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      9.8
+    )
+    .text(
+      text(
+        value
+        ||
+        '-'
+      ),
+      x,
+      y + 14,
+      {
+        width,
+
+        height:
+          28
+      }
+    );
 }
 
-function sectionTitle(doc, text, x, y, width = 511) {
-  doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(11).text(text, x, y, { width });
-  doc.strokeColor('#D1D5DB').lineWidth(0.7).moveTo(x, y + 18).lineTo(x + width, y + 18).stroke();
+
+function summaryCard(
+  doc,
+  label,
+  value,
+  x,
+  y,
+  width,
+  accent
+) {
+  roundedPanel(
+    doc,
+    x,
+    y,
+    width,
+    56,
+    {
+      fill:
+        COLORS.paper,
+
+      stroke:
+        COLORS.line,
+
+      accent
+    }
+  );
+
+
+  doc.fillColor(
+    COLORS.muted
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      7.2
+    )
+    .text(
+      text(label)
+        .toUpperCase(),
+      x + 13,
+      y + 9,
+      {
+        width:
+          width - 26
+      }
+    );
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      12.5
+    )
+    .text(
+      text(
+        value
+        ||
+        '-'
+      ),
+      x + 13,
+      y + 28,
+      {
+        width:
+          width - 26
+      }
+    );
 }
 
-function drawTable(doc, columns, rows, x, y, width, options = {}) {
-  const rowFontSize = options.fontSize || 7.5;
-  const headerHeight = 24;
-  const rowMinHeight = options.rowHeight || 28;
-  const colWidths = columns.map(column => column.width);
-  const total = colWidths.reduce((sum, item) => sum + item, 0);
-  const scaled = colWidths.map(item => (item / total) * width);
-  let cursorY = y;
 
-  doc.rect(x, cursorY, width, headerHeight).fill('#2F343B');
-  let cursorX = x;
-  columns.forEach((column, index) => {
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(7).text(column.label, cursorX + 5, cursorY + 8, { width: scaled[index] - 10 });
-    cursorX += scaled[index];
-  });
-  cursorY += headerHeight;
+function drawSmallMaterialCard(
+  doc,
+  node,
+  x,
+  y,
+  width,
+  height,
+  options = {}
+) {
+  roundedPanel(
+    doc,
+    x,
+    y,
+    width,
+    height,
+    {
+      fill:
+        options.fill
+        ||
+        COLORS.paper,
 
-  rows.forEach((row, rowIndex) => {
-    const values = columns.map(column => String(column.render ? column.render(row) : row[column.key] ?? ''));
-    const rowHeight = Math.max(rowMinHeight, ...values.map((value, index) => doc.heightOfString(value || '-', { width: scaled[index] - 10, fontSize: rowFontSize }) + 12));
-    doc.rect(x, cursorY, width, rowHeight).fill(rowIndex % 2 ? '#ffffff' : '#F4F6F8');
-    doc.strokeColor('#D1D5DB').lineWidth(0.5).moveTo(x, cursorY + rowHeight).lineTo(x + width, cursorY + rowHeight).stroke();
-    cursorX = x;
-    values.forEach((value, index) => {
-      doc.fillColor('#1F2937').font('Helvetica').fontSize(rowFontSize).text(value || '-', cursorX + 5, cursorY + 7, { width: scaled[index] - 10, height: rowHeight - 10 });
-      cursorX += scaled[index];
-    });
-    cursorY += rowHeight;
-  });
+      stroke:
+        options.stroke
+        ||
+        COLORS.line,
 
-  if (!rows.length) {
-    doc.rect(x, cursorY, width, rowMinHeight).fill('#ffffff');
-    doc.fillColor('#6B7280').font('Helvetica').fontSize(9).text('Sem registros.', x + 8, cursorY + 8, { width: width - 16 });
-    cursorY += rowMinHeight;
+      accent:
+        options.accent
+        ||
+        null,
+
+      radius:
+        6
+    }
+  );
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      options.titleSize
+      ||
+      8
+    )
+    .text(
+      node.materialName
+      ||
+      node.material
+      ||
+      '-',
+      x + 10,
+      y + 8,
+      {
+        width:
+          width - 20,
+
+        height:
+          18
+      }
+    );
+
+
+  /*
+   * Cards pequenos de longitudinais/transversais
+   * não mostram o código para evitar aperto visual.
+   */
+  if (
+    (
+      node.materialCode
+      ||
+      node.code
+    )
+    &&
+    height >= 48
+  ) {
+    doc.fillColor(
+      COLORS.muted
+    )
+      .font(
+        'Helvetica'
+      )
+      .fontSize(
+        5.8
+      )
+      .text(
+        node.materialCode
+        ||
+        node.code,
+        x + 10,
+        y + 26,
+        {
+          width:
+            width - 20,
+
+          height:
+            10
+        }
+      );
   }
-  return cursorY;
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      options.qtySize
+      ||
+      7.2
+    )
+    .text(
+      `${
+        formatNumber(
+          node.requiredQty
+          ??
+          node.quantity
+        )
+      } ${
+        node.unit
+        ||
+        ''
+      }`.trim(),
+      x + 10,
+      y + height - 18,
+      {
+        width:
+          width - 20
+      }
+    );
 }
 
-function flowNodeKey(node) {
-  return String(node.materialId ?? node.materialCode ?? node.materialName);
+
+function drawArrow(
+  doc,
+  x1,
+  y1,
+  x2,
+  y2
+) {
+  doc.save();
+
+
+  doc.strokeColor(
+    COLORS.strongLine
+  )
+    .lineWidth(
+      1.2
+    )
+    .moveTo(
+      x1,
+      y1
+    )
+    .lineTo(
+      x2 - 5,
+      y2
+    )
+    .stroke();
+
+
+  doc.polygon(
+    [
+      x2,
+      y2
+    ],
+
+    [
+      x2 - 6,
+      y2 - 4
+    ],
+
+    [
+      x2 - 6,
+      y2 + 4
+    ]
+  )
+    .fill(
+      COLORS.strongLine
+    );
+
+
+  doc.restore();
 }
 
-function mergeFlowNode(targetNode, sourceNode) {
-  const productionKey = String(sourceNode.productionKey || `production-${Number(sourceNode.productionIndex || 0)}`);
-  if (!targetNode.productionKeys.has(productionKey)) {
-    targetNode.requiredQty = Number(targetNode.requiredQty || 0) + Number(sourceNode.requiredQty || 0);
-    targetNode.stockUsedQty = Number(targetNode.stockUsedQty || 0) + Number(sourceNode.stockUsedQty || 0);
-    targetNode.produceQty = Number(targetNode.produceQty || 0) + Number(sourceNode.produceQty || 0);
-  } else {
-    targetNode.requiredQty = Math.max(Number(targetNode.requiredQty || 0), Number(sourceNode.requiredQty || 0));
-    targetNode.stockUsedQty = Math.max(Number(targetNode.stockUsedQty || 0), Number(sourceNode.stockUsedQty || 0));
-    targetNode.produceQty = Math.max(Number(targetNode.produceQty || 0), Number(sourceNode.produceQty || 0));
+
+function drawChainRow(
+  doc,
+  row,
+  type,
+  x,
+  y,
+  width
+) {
+  const root =
+    row.treeNode;
+
+
+  const layers =
+    dependencyLayers(
+      root,
+      type
+    );
+
+
+  const firstLayer =
+    layers[0]
+    ||
+    [];
+
+
+  const secondLayer =
+    layers[1]
+    ||
+    [];
+
+
+  const finalW =
+    150;
+
+
+  const gap =
+    27;
+
+
+  const depW =
+    Math.max(
+      118,
+      (
+        width
+        -
+        finalW
+        -
+        gap * 2
+      )
+      /
+      2
+    );
+
+
+  const rowH =
+    104;
+
+
+  const finalY =
+    y + 17;
+
+
+  drawSmallMaterialCard(
+    doc,
+    {
+      materialName:
+        row.material,
+
+      materialCode:
+        row.code,
+
+      quantity:
+        row.quantity,
+
+      unit:
+        row.unit
+    },
+    x,
+    finalY,
+    finalW,
+    70,
+    {
+      accent:
+        productionColor(
+          row.productionIndex,
+          row.color
+        ),
+
+      titleSize:
+        8.5,
+
+      qtySize:
+        8
+    }
+  );
+
+
+  if (
+    !firstLayer.length
+  ) {
+    return y + rowH;
   }
-  targetNode.stockQty = Math.max(Number(targetNode.stockQty || 0), Number(sourceNode.stockQty || 0));
-  targetNode.isInitialRawMaterial = targetNode.isInitialRawMaterial || sourceNode.isInitialRawMaterial;
-  targetNode.productionKeys.add(productionKey);
-  if (!targetNode.productions.some(item => item.key === productionKey)) {
-    targetNode.productions.push({
-      key: productionKey,
-      index: Number(sourceNode.productionIndex || 0),
-      title: sourceNode.productionTitle || `Produção ${Number(sourceNode.productionIndex || 0) + 1}`
-    });
-    targetNode.productions.sort((left, right) => Number(left.index || 0) - Number(right.index || 0));
+
+
+  const firstX =
+    x
+    +
+    finalW
+    +
+    gap;
+
+
+  const maxFirst =
+    Math.min(
+      firstLayer.length,
+      2
+    );
+
+
+  const firstCardH =
+    maxFirst > 1
+      ? 44
+      : 54;
+
+
+  const firstTop =
+    maxFirst > 1
+      ? y + 5
+      : y + 25;
+
+
+  drawArrow(
+    doc,
+    x + finalW + 4,
+    finalY + 35,
+    firstX - 6,
+    y + 52
+  );
+
+
+  firstLayer
+    .slice(
+      0,
+      2
+    )
+    .forEach(
+      (
+        node,
+        index
+      ) => {
+        drawSmallMaterialCard(
+          doc,
+          node,
+          firstX,
+          firstTop
+          +
+          index * 48,
+          depW,
+          firstCardH,
+          {
+            fill:
+              '#F8FAFC'
+          }
+        );
+      }
+    );
+
+
+  if (
+    !secondLayer.length
+  ) {
+    return y + rowH;
   }
+
+
+  const secondX =
+    firstX
+    +
+    depW
+    +
+    gap;
+
+
+  const maxSecond =
+    Math.min(
+      secondLayer.length,
+      2
+    );
+
+
+  const secondCardH =
+    maxSecond > 1
+      ? 44
+      : 54;
+
+
+  const secondTop =
+    maxSecond > 1
+      ? y + 5
+      : y + 25;
+
+
+  drawArrow(
+    doc,
+    firstX + depW + 4,
+    y + 52,
+    secondX - 6,
+    y + 52
+  );
+
+
+  secondLayer
+    .slice(
+      0,
+      2
+    )
+    .forEach(
+      (
+        node,
+        index
+      ) => {
+        drawSmallMaterialCard(
+          doc,
+          node,
+          secondX,
+          secondTop
+          +
+          index * 48,
+          depW,
+          secondCardH,
+          {
+            fill:
+              '#FFF7ED',
+
+            stroke:
+              '#FED7AA'
+          }
+        );
+      }
+    );
+
+
+  return y + rowH;
 }
 
-function buildFlowGraph(roots) {
-  const nodes = new Map();
-  const incoming = new Map();
-  const outgoing = new Map();
 
-  function ensureNode(node) {
-    const key = flowNodeKey(node);
-    if (!nodes.has(key)) {
-      const productionKey = String(node.productionKey || `production-${Number(node.productionIndex || 0)}`);
-      nodes.set(key, {
-        ...node,
-        flowKey: key,
-        flowOrder: nodes.size,
-        productionKeys: new Set([productionKey]),
-        productions: [{
-          key: productionKey,
-          index: Number(node.productionIndex || 0),
-          title: node.productionTitle || `Produção ${Number(node.productionIndex || 0) + 1}`
-        }]
-      });
-      incoming.set(key, new Set());
-      outgoing.set(key, new Set());
+function drawExecutivePage(
+  doc,
+  plan,
+  type,
+  rows,
+  events,
+  pageNumberRef
+) {
+  addPage(
+    doc,
+    documentTitle(
+      type
+    ),
+    plan,
+    pageNumberRef,
+    type
+  );
+
+
+  const period =
+    operationPeriod(
+      events,
+      plan.start_date,
+      plan.end_date
+    );
+
+
+  const machines =
+    uniqueMachines(
+      events
+    );
+
+
+  const dates =
+    uniqueDates(
+      events
+    );
+
+
+  const minutes =
+    totalMinutes(
+      events
+    );
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      18
+    )
+    .text(
+      documentTitle(
+        type
+      ),
+      PAGE.margin,
+      108,
+      {
+        width:
+          430
+      }
+    );
+
+
+  pill(
+    doc,
+    statusLabel(
+      plan.status
+    ),
+    doc.page.width - 168,
+    108,
+    126,
+    {
+      fill:
+        isCanceledPlan(
+          plan
+        )
+          ? '#FEE2E2'
+          : COLORS.soft,
+
+      color:
+        isCanceledPlan(
+          plan
+        )
+          ? COLORS.red
+          : COLORS.ink
+    }
+  );
+
+
+  roundedPanel(
+    doc,
+    PAGE.margin,
+    146,
+    doc.page.width
+    -
+    PAGE.margin * 2,
+    72,
+    {
+      fill:
+        COLORS.soft,
+
+      stroke:
+        COLORS.line
+    }
+  );
+
+
+  infoPair(
+    doc,
+    'Código do planejamento',
+    plan.code
+    ||
+    plan.id,
+    56,
+    161,
+    180
+  );
+
+
+  infoPair(
+    doc,
+    'Período planejado',
+    `${
+      formatDate(
+        period.startDate
+      )
+      ||
+      '-'
+    } até ${
+      formatDate(
+        period.endDate
+      )
+      ||
+      '-'
+    }`,
+    236,
+    161,
+    180
+  );
+
+
+  infoPair(
+    doc,
+    'Turno operacional',
+    formatHourDuration(
+      plan.hours_per_day
+    ),
+    416,
+    161,
+    122
+  );
+
+
+  /*
+   * Mantemos somente os dois cards
+   * aprovados:
+   *
+   * - Dias programados
+   * - Tempo operacional estimado
+   */
+  const gap =
+    12;
+
+
+  const cardW =
+    (
+      doc.page.width
+      -
+      PAGE.margin * 2
+      -
+      gap
+    )
+    /
+    2;
+
+
+  summaryCard(
+    doc,
+    'Dias programados',
+    dates.length,
+    PAGE.margin,
+    232,
+    cardW,
+    COLORS.cyan
+  );
+
+
+  summaryCard(
+    doc,
+    'Tempo operacional estimado',
+    minutes
+      ? formatDuration(
+          minutes
+        )
+      : '-',
+    PAGE.margin
+    +
+    cardW
+    +
+    gap,
+    232,
+    cardW,
+    COLORS.green
+  );
+
+
+  sectionTitle(
+    doc,
+    (
+      type
+      ===
+      DOCUMENT_TYPES.MATRIZ
+    )
+      ? 'BOBINAS PLANEJADAS E INSUMOS'
+      : 'MATERIAIS FINAIS PLANEJADOS E CADEIA NECESSÁRIA',
+    PAGE.margin,
+    306,
+    doc.page.width
+    -
+    PAGE.margin * 2
+  );
+
+
+  let y =
+    337;
+
+
+  const maxRowsFirstPage =
+    3;
+
+
+  rows
+    .slice(
+      0,
+      maxRowsFirstPage
+    )
+    .forEach(
+      row => {
+        y =
+          drawChainRow(
+            doc,
+            row,
+            type,
+            PAGE.margin,
+            y,
+            doc.page.width
+            -
+            PAGE.margin * 2
+          );
+      }
+    );
+
+
+  if (
+    rows.length
+    >
+    maxRowsFirstPage
+  ) {
+    doc.fillColor(
+      COLORS.muted
+    )
+      .font(
+        'Helvetica-Bold'
+      )
+      .fontSize(
+        8
+      )
+      .text(
+        `+ ${
+          rows.length
+          -
+          maxRowsFirstPage
+        } material(is) será(ão) apresentado(s) no detalhamento diário.`,
+        PAGE.margin,
+        y + 2,
+        {
+          width:
+            doc.page.width
+            -
+            PAGE.margin * 2
+        }
+      );
+
+
+    y +=
+      24;
+  }
+
+
+  const machinesY =
+    Math.max(
+      y + 4,
+      682
+    );
+
+
+  roundedPanel(
+    doc,
+    PAGE.margin,
+    machinesY,
+    doc.page.width
+    -
+    PAGE.margin * 2,
+    64,
+    {
+      fill:
+        '#EFF6FF',
+
+      stroke:
+        '#BFDBFE'
+    }
+  );
+
+
+  doc.fillColor(
+    '#1E3A8A'
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      7.5
+    )
+    .text(
+      'MÁQUINAS PREVISTAS',
+      PAGE.margin + 14,
+      machinesY + 11,
+      {
+        width:
+          doc.page.width
+          -
+          PAGE.margin * 2
+          -
+          28
+      }
+    );
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica'
+    )
+    .fontSize(
+      9
+    )
+    .text(
+      machines.length
+        ? machines.join(
+            ', '
+          )
+        : 'Não informado',
+      PAGE.margin + 14,
+      machinesY + 30,
+      {
+        width:
+          doc.page.width
+          -
+          PAGE.margin * 2
+          -
+          28,
+
+        height:
+          24
+      }
+    );
+}
+
+
+function drawDayHeader(
+  doc,
+  date,
+  events,
+  x,
+  y,
+  width
+) {
+  const machines =
+    uniqueMachines(
+      events
+    );
+
+
+  const minutes =
+    totalMinutes(
+      events
+    );
+
+
+  /*
+   * Cabeçalho compacto.
+   *
+   * Não existe mais "continuação"
+   * e não existe contagem de transporte.
+   */
+  roundedPanel(
+    doc,
+    x,
+    y,
+    width,
+    42,
+    {
+      fill:
+        COLORS.soft,
+
+      stroke:
+        COLORS.line
+    }
+  );
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      13.5
+    )
+    .text(
+      formatDate(
+        date
+      ),
+      x + 13,
+      y + 8,
+      {
+        width:
+          110,
+
+        height:
+          18
+      }
+    );
+
+
+  doc.fillColor(
+    COLORS.muted
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      7
+    )
+    .text(
+      weekdayLabel(
+        date
+      ),
+      x + 13,
+      y + 26,
+      {
+        width:
+          110
+      }
+    );
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      7.8
+    )
+    .text(
+      `${
+        events.length
+      } produção(ões)  |  ${
+        machines.length
+      } máquina(s)${
+        minutes
+          ? `  |  ${formatDuration(minutes)}`
+          : ''
+      }`,
+      x + 135,
+      y + 16,
+      {
+        width:
+          width - 150,
+
+        align:
+          'right'
+      }
+    );
+
+
+  return y + 50;
+}
+
+
+function drawCompactProductionCard(
+  doc,
+  event,
+  x,
+  y,
+  width
+) {
+  /*
+   * Antes o card ocupava ~132 px.
+   * Agora são somente 80 px.
+   *
+   * Isso reduz bastante a quantidade
+   * de páginas do planejamento.
+   */
+  const height =
+    80;
+
+
+  const accent =
+    productionColor(
+      event.productionIndex,
+      event.productionColor
+    );
+
+
+  roundedPanel(
+    doc,
+    x,
+    y,
+    width,
+    height,
+    {
+      fill:
+        COLORS.paper,
+
+      stroke:
+        COLORS.line,
+
+      accent
+    }
+  );
+
+
+  doc.fillColor(
+    accent
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      7
+    )
+    .text(
+      text(
+        event.productionTitle
+      ).toUpperCase(),
+      x + 14,
+      y + 8,
+      {
+        width:
+          105,
+
+        height:
+          13
+      }
+    );
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      9.5
+    )
+    .text(
+      event.materialName
+      ||
+      '-',
+      x + 125,
+      y + 8,
+      {
+        width:
+          width - 240,
+
+        height:
+          15
+      }
+    );
+
+
+  doc.fillColor(
+    COLORS.muted
+  )
+    .font(
+      'Helvetica'
+    )
+    .fontSize(
+      6.2
+    )
+    .text(
+      event.materialCode
+      ||
+      '',
+      x + 125,
+      y + 25,
+      {
+        width:
+          width - 240,
+
+        height:
+          9
+      }
+    );
+
+
+  pill(
+    doc,
+    'PRODUÇÃO',
+    x + width - 98,
+    y + 7,
+    82,
+    {
+      height:
+        20,
+
+      fontSize:
+        6.8
+    }
+  );
+
+
+  const fieldY =
+    y + 39;
+
+
+  const gap =
+    7;
+
+
+  const fieldW =
+    (
+      width
+      -
+      32
+      -
+      gap * 4
+    )
+    /
+    5;
+
+
+  const values = [
+    [
+      'Máquina',
+      event.machineName
+      ||
+      '-'
+    ],
+
+    [
+      'Pessoas',
+      formatPeople(
+        event.peopleCount
+      )
+    ],
+
+    [
+      'Previsto',
+      `${
+        formatNumber(
+          event.quantity
+        )
+      } ${
+        event.unit
+        ||
+        ''
+      }`.trim()
+    ],
+
+    [
+      'Tempo estimado',
+      event.durationMinutes
+        ? formatDuration(
+            event.durationMinutes
+          )
+        : '-'
+    ],
+
+    [
+      'Realizado',
+      '________________'
+    ]
+  ];
+
+
+  values.forEach(
+    (
+      item,
+      index
+    ) => {
+      const fx =
+        x
+        +
+        14
+        +
+        index
+        *
+        (
+          fieldW
+          +
+          gap
+        );
+
+
+      doc.fillColor(
+        COLORS.muted
+      )
+        .font(
+          'Helvetica-Bold'
+        )
+        .fontSize(
+          5.8
+        )
+        .text(
+          item[0].toUpperCase(),
+          fx,
+          fieldY,
+          {
+            width:
+              fieldW
+          }
+        );
+
+
+      doc.fillColor(
+        COLORS.ink
+      )
+        .font(
+          index === 4
+            ? 'Helvetica'
+            : 'Helvetica-Bold'
+        )
+        .fontSize(
+          7.4
+        )
+        .text(
+          item[1],
+          fx,
+          fieldY + 12,
+          {
+            width:
+              fieldW,
+
+            height:
+              18
+          }
+        );
+    }
+  );
+
+
+  doc.strokeColor(
+    COLORS.line
+  )
+    .lineWidth(
+      0.6
+    )
+    .moveTo(
+      x + 14,
+      y + 67
+    )
+    .lineTo(
+      x + width - 14,
+      y + 67
+    )
+    .stroke();
+
+
+  doc.fillColor(
+    COLORS.muted
+  )
+    .font(
+      'Helvetica'
+    )
+    .fontSize(
+      6.6
+    )
+    .text(
+      'Observação: _________________________________________________________________',
+      x + 14,
+      y + 70,
+      {
+        width:
+          width - 28,
+
+        height:
+          10
+      }
+    );
+
+
+  return (
+    y
+    +
+    height
+    +
+    7
+  );
+}
+
+
+function drawDailySchedulePages(
+  doc,
+  plan,
+  type,
+  events,
+  pageNumberRef
+) {
+  const byDate =
+    new Map();
+
+
+  events.forEach(
+    event => {
+      if (
+        !event.date
+      ) {
+        return;
+      }
+
+
+      if (
+        !byDate.has(
+          event.date
+        )
+      ) {
+        byDate.set(
+          event.date,
+          []
+        );
+      }
+
+
+      byDate
+        .get(
+          event.date
+        )
+        .push(
+          event
+        );
+    }
+  );
+
+
+  const dates =
+    [
+      ...byDate.keys()
+    ].sort();
+
+
+  if (
+    !dates.length
+  ) {
+    return;
+  }
+
+
+  let pageOpen =
+    false;
+
+
+  let cursorY =
+    0;
+
+
+  const openPage =
+    (
+      date,
+      dayEvents
+    ) => {
+      addPage(
+        doc,
+        `PROGRAMAÇÃO OPERACIONAL · ${type.toUpperCase()}`,
+        plan,
+        pageNumberRef,
+        type
+      );
+
+
+      cursorY =
+        drawDayHeader(
+          doc,
+          date,
+          dayEvents,
+          PAGE.margin,
+          106,
+          doc.page.width
+          -
+          PAGE.margin * 2
+        );
+
+
+      pageOpen =
+        true;
+    };
+
+
+  for (
+    const date
+    of dates
+  ) {
+    const dayEvents =
+      byDate
+        .get(
+          date
+        )
+        .sort(
+          compareScheduleEvents
+        );
+
+
+    if (
+      !pageOpen
+      ||
+      cursorY + 132
+      >
+      PAGE.bottom
+    ) {
+      openPage(
+        date,
+        dayEvents
+      );
     } else {
-      mergeFlowNode(nodes.get(key), node);
+      cursorY +=
+        5;
+
+
+      cursorY =
+        drawDayHeader(
+          doc,
+          date,
+          dayEvents,
+          PAGE.margin,
+          cursorY,
+          doc.page.width
+          -
+          PAGE.margin * 2
+        );
     }
-    return key;
-  }
 
-  function visit(node, parentKey = null, stack = []) {
-    if (!node) return;
-    const key = ensureNode(node);
-    if (parentKey && parentKey !== key) {
-      incoming.get(parentKey).add(key);
-      outgoing.get(key).add(parentKey);
+
+    for (
+      const event
+      of dayEvents
+    ) {
+      /*
+       * Caso um mesmo dia continue na próxima página,
+       * apenas repetimos o card do dia.
+       *
+       * Não escrevemos mais "continuação".
+       */
+      if (
+        cursorY + 88
+        >
+        PAGE.bottom
+      ) {
+        openPage(
+          date,
+          dayEvents
+        );
+      }
+
+
+      cursorY =
+        drawCompactProductionCard(
+          doc,
+          event,
+          PAGE.margin,
+          cursorY,
+          doc.page.width
+          -
+          PAGE.margin * 2
+        );
     }
-    if (stack.includes(key)) return;
-    (node.children || []).forEach(child => visit(child, key, [...stack, key]));
   }
-
-  roots.forEach(root => visit(root));
-  const levels = new Map();
-  const sourceKeys = [...nodes.keys()].filter(key => !(incoming.get(key)?.size));
-  function assignLevel(key, level, stack = []) {
-    if (stack.includes(key)) return;
-    levels.set(key, Math.max(levels.get(key) ?? 0, level));
-    for (const childKey of outgoing.get(key) || []) assignLevel(childKey, level + 1, [...stack, key]);
-  }
-  sourceKeys.forEach(key => assignLevel(key, 0));
-
-  const columns = [];
-  for (const [key, node] of nodes.entries()) {
-    const level = levels.get(key) ?? 0;
-    if (!columns[level]) columns[level] = [];
-    columns[level].push(node);
-  }
-  columns.forEach(column => column.sort((left, right) => Number(left.flowOrder || 0) - Number(right.flowOrder || 0)));
-  const edges = [];
-  for (const [from, children] of outgoing.entries()) {
-    for (const to of children) edges.push({ from, to });
-  }
-  return { columns, edges };
 }
 
-function nodeUsesStockBalance(node) {
-  if (!node || node.isInitialRawMaterial || node.isFinalProduct === true) return false;
-  const requiredQty = Number(node.requiredQty || 0);
-  const produceQty = Number(node.produceQty || 0);
-  const stockUsedQty = Number(node.stockUsedQty || 0);
-  return stockUsedQty > 0 || (requiredQty > 0 && produceQty <= 0);
-}
 
-function nodeStatus(node) {
-  const stockQty = Number(node.stockQty || 0);
-  const requiredQty = Number(node.requiredQty || 0);
-  const produceQty = Number(node.produceQty || 0);
-  if (node.isInitialRawMaterial) return stockQty >= requiredQty ? 'Estoque suficiente' : 'Comprar / matéria-prima inicial';
-  if (nodeUsesStockBalance(node)) return '✓ Utilizando saldo';
-  if (produceQty > 0) return 'Produção cheia';
-  return 'Estoque atende';
-}
+function drawLinedSection(
+  doc,
+  title,
+  x,
+  y,
+  width,
+  height,
+  options = {}
+) {
+  roundedPanel(
+    doc,
+    x,
+    y,
+    width,
+    height,
+    {
+      fill:
+        options.fill
+        ||
+        COLORS.paper,
 
-function drawFlowCard(doc, node, x, y, width, height, positions) {
-  const productionIndex = Number(node.productions?.[0]?.index || node.productionIndex || 0);
-  const theme = THEMES[productionIndex % THEMES.length];
-  const warning = node.isInitialRawMaterial && Number(node.stockQty || 0) < Number(node.requiredQty || 0);
-  const border = warning ? '#D97706' : theme.border;
-  doc.roundedRect(x, y, width, height, 7).fillAndStroke('#ffffff', border);
-  doc.rect(x, y, 5, height).fill(border);
-  const compact = height < 96;
-  const ultra = height < 80;
-  doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(ultra ? 6.4 : compact ? 7.2 : 8.5).text(node.materialName || '-', x + 10, y + 8, { width: width - 18, height: ultra ? 14 : compact ? 18 : 22 });
-  doc.fillColor('#6B7280').font('Helvetica').fontSize(ultra ? 5.8 : 6.4).text(node.materialCode || '', x + 10, y + (ultra ? 22 : compact ? 25 : 29), { width: width - 18 });
-  doc.roundedRect(x + 10, y + (ultra ? 31 : compact ? 36 : 43), width - 20, ultra ? 13 : compact ? 15 : 17, 8).fill(theme.soft);
-  doc.fillColor(theme.text).font('Helvetica-Bold').fontSize(ultra ? 5.3 : compact ? 5.9 : 6.7).text(nodeStatus(node), x + 16, y + (ultra ? 35 : compact ? 40 : 48), { width: width - 32 });
-  doc.fillColor('#6B7280').font('Helvetica').fontSize(ultra ? 5.7 : compact ? 6.2 : 7).text(`Necessário: ${formatNumber(node.requiredQty)} ${node.unit || ''}`, x + 10, y + (ultra ? 50 : compact ? 57 : 69), { width: width - 20 });
-  doc.text(`Saldo: ${formatNumber(node.stockQty)} ${node.unit || ''}`, x + 10, y + (ultra ? 58 : compact ? 67 : 81), { width: width - 20 });
-  const origin = node.isInitialRawMaterial ? 'Origem: Compra / base' : `A produzir: ${formatNumber(node.produceQty)} ${node.unit || ''}`;
-  doc.text(origin, x + 10, y + (ultra ? 66 : compact ? 77 : 93), { width: width - 20 });
-  positions.set(node.flowKey, { x, y, width, height });
-}
+      stroke:
+        options.stroke
+        ||
+        COLORS.line
+    }
+  );
 
-function drawFlowGraph(doc, tree) {
-  const roots = treeRoots(tree);
-  if (!roots.length) {
-    doc.fillColor('#6B7280').font('Helvetica').fontSize(10).text('Fluxo produtivo não registrado.');
-    return;
-  }
-  const graph = buildFlowGraph(roots);
-  const left = 42;
-  const top = 112;
-  const availableWidth = doc.page.width - 84;
-  const availableHeight = doc.page.height - top - 58;
-  const cardGap = 12;
-  const levelsCount = Math.max(graph.columns.length, 1);
-  const rowGap = levelsCount > 6 ? 12 : 28;
-  const maxCardsInLevel = Math.max(1, ...graph.columns.map(column => column.length));
-  const cardWidth = Math.max(96, Math.min(158, (availableWidth - cardGap * (maxCardsInLevel - 1)) / maxCardsInLevel));
-  const cardHeight = Math.max(68, Math.min(104, (availableHeight - rowGap * (levelsCount - 1)) / levelsCount));
-  const positions = new Map();
 
-  graph.columns.forEach((column, levelIndex) => {
-    const totalWidth = column.length * cardWidth + Math.max(column.length - 1, 0) * cardGap;
-    let x = left + Math.max((availableWidth - totalWidth) / 2, 0);
-    const y = top + levelIndex * (cardHeight + rowGap);
-    column.forEach(node => {
-      drawFlowCard(doc, node, x, y, cardWidth, cardHeight, positions);
-      x += cardWidth + cardGap;
-    });
-  });
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      11.5
+    )
+    .text(
+      title,
+      x + 15,
+      y + 13,
+      {
+        width:
+          width - 30
+      }
+    );
 
-  graph.edges.forEach(edge => {
-    const from = positions.get(edge.from);
-    const to = positions.get(edge.to);
-    if (!from || !to) return;
-    const startX = from.x + from.width / 2;
-    const startY = from.y + from.height;
-    const endX = to.x + to.width / 2;
-    const endY = to.y;
-    const mid = Math.max(12, (endY - startY) / 2);
-    doc.save();
-    doc.strokeColor('#9CA3AF').lineWidth(1.5)
-      .moveTo(startX, startY)
-      .bezierCurveTo(startX, startY + mid, endX, endY - mid, endX, endY)
+
+  for (
+    let lineY =
+      y + 48;
+
+    lineY
+      <=
+      y + height - 20;
+
+    lineY +=
+      31
+  ) {
+    doc.strokeColor(
+      '#CBD5E1'
+    )
+      .lineWidth(
+        0.8
+      )
+      .moveTo(
+        x + 15,
+        lineY
+      )
+      .lineTo(
+        x + width - 15,
+        lineY
+      )
       .stroke();
-    doc.polygon([endX, endY], [endX - 5, endY - 6], [endX + 5, endY - 6]).fill('#9CA3AF');
-    doc.restore();
-  });
-}
-
-function drawPage1(doc, plan, rows, operations, transports, pageNumberRef) {
-  addPage(doc, 'PLANEJAMENTO DE PRODUÇÃO', plan, pageNumberRef);
-  const firstOperation = operations[0];
-  const lastOperation = operations[operations.length - 1];
-  const period = operationPeriod(operations, plan.start_date, plan.end_date);
-  doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(18).text('PLANEJAMENTO DE PRODUÇÃO', 42, 106, { width: 510 });
-  doc.fillColor('#6B7280').font('Helvetica').fontSize(8).text(`Emitido em ${new Date().toLocaleString('pt-BR')}`, 42, 130);
-  pill(doc, statusLabel(plan.status), 424, 108, 126, isCanceledPlan(plan) ? '#DC2626' : '#1F2937');
-
-  const infoY = 154;
-  const info = [
-    ['Código', plan.code || plan.id],
-    ['Emissão', new Date().toLocaleDateString('pt-BR')],
-    ['Período', `${formatDate(period.startDate)} até ${formatDate(period.endDate)}`],
-    ['Responsável', 'PCP'],
-    ['Turno', formatHourDuration(plan.hours_per_day)],
-    ['Status', statusLabel(plan.status)]
-  ];
-  info.forEach((item, index) => {
-    const x = 42 + (index % 3) * 170;
-    const y = infoY + Math.floor(index / 3) * 40;
-    doc.fillColor('#6B7280').font('Helvetica-Bold').fontSize(7).text(item[0].toUpperCase(), x, y);
-    doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(9.5).text(String(item[1] || '-'), x, y + 14, { width: 150 });
-  });
-
-  const cardY = 244;
-  const cardW = 158;
-  summaryCard(doc, 'Produções', rows.length, 42, cardY, cardW, 50);
-  summaryCard(doc, 'Operações', operations.length, 42 + cardW + 14, cardY, cardW, 50);
-  summaryCard(doc, 'Transportes', transports.length, 42 + (cardW + 14) * 2, cardY, cardW, 50);
-  summaryCard(doc, 'Início previsto', formatDateTime(firstOperation?.startDate, firstOperation?.startTime), 42, cardY + 64, cardW, 50);
-  summaryCard(doc, 'Fim previsto', formatDateTime(lastOperation?.endDate, lastOperation?.endTime), 42 + cardW + 14, cardY + 64, cardW, 50);
-  summaryCard(doc, 'Turno operacional', formatHourDuration(plan.hours_per_day), 42 + (cardW + 14) * 2, cardY + 64, cardW, 50);
-  return cardY + 132;
-}
-
-function productionColumns() {
-  return [
-    { label: 'Produção', width: 76, render: row => row.title },
-    { label: 'Material', width: 150, render: row => [row.material, row.code].filter(Boolean).join('\n') },
-    { label: 'Quantidade', width: 82, render: row => `${formatNumber(row.quantity)} ${row.unit || ''}`.trim() },
-    { label: 'Máquina', width: 78, render: row => row.machine || '-' },
-    { label: 'Pessoas', width: 52, render: row => row.people || '-' },
-    { label: 'Modelo', width: 92, render: row => row.model || '-' }
-  ];
-}
-
-function operationColumns() {
-  return [
-    { label: 'Data', width: 58, render: row => formatDate(row.startDate) },
-    { label: 'Hora', width: 54, render: row => `${row.startTime || ''} - ${row.endTime || ''}` },
-    { label: 'Operação', width: 95, render: row => row.operationType === 'transport' ? 'Transporte' : 'Produção' },
-    { label: 'Material', width: 122, render: row => row.materialName || '-' },
-    { label: 'Máquina', width: 70, render: row => row.machineName || '-' },
-    { label: 'Duração', width: 58, render: row => formatDuration(row.totalMinutes) },
-    { label: 'Vínculo', width: 92, render: linkedProductions }
-  ];
-}
-
-function drawSignatures(doc, plan, pageNumberRef) {
-  addPage(doc, 'ASSINATURAS', plan, pageNumberRef);
-  const items = ['PCP', 'Supervisor Produção', 'Data'];
-  let y = 190;
-  items.forEach(label => {
-    doc.fillColor('#1F2937').font('Helvetica-Bold').fontSize(12).text(label, 90, y);
-    doc.strokeColor('#D1D5DB').lineWidth(1).moveTo(90, y + 54).lineTo(500, y + 54).stroke();
-    y += 130;
-  });
-}
-
-export function createPlanningPdf(plan, days, tree = null, operations = []) {
-  tree = normalizeObject(tree);
-  operations = normalizeArray(operations);
-  const doc = new PDFDocument({ margin: 42, size: 'A4', bufferPages: false });
-  const chunks = [];
-  const pageNumberRef = { value: 0 };
-  const rows = productionRows(tree, plan);
-  const operationRows = operations.map((operation, index) => ({ ...operation, sequence: index + 1 }));
-  const transports = operations.filter(operation => operation.operationType === 'transport');
-
-  doc.on('data', chunk => chunks.push(chunk));
-
-  const page1TableY = drawPage1(doc, plan, rows, operations, transports, pageNumberRef);
-  sectionTitle(doc, 'PRODUÇÕES PLANEJADAS', 42, page1TableY);
-  const page1Rows = rows.slice(0, 6);
-  const remainingProductionRows = rows.slice(page1Rows.length);
-  drawTable(doc, productionColumns(), page1Rows, 42, page1TableY + 26, 511, { rowHeight: 30, fontSize: 6.8 });
-
-  addPage(doc, 'PRODUÇÕES E CRONOGRAMA', plan, pageNumberRef);
-  let cursorY = 116;
-  if (remainingProductionRows.length) {
-    sectionTitle(doc, 'PRODUÇÕES PLANEJADAS (CONTINUAÇÃO)', 42, cursorY);
-    cursorY = drawTable(doc, productionColumns(), remainingProductionRows, 42, cursorY + 26, 511, { rowHeight: 30, fontSize: 6.8 }) + 20;
   }
-  sectionTitle(doc, 'CRONOGRAMA OPERACIONAL', 42, cursorY);
-  drawTable(doc, operationColumns(), operationRows, 42, cursorY + 26, 511, { rowHeight: 24, fontSize: 6.4 });
+}
 
-  addPage(doc, 'FLUXO PRODUTIVO', plan, pageNumberRef);
-  drawFlowGraph(doc, tree);
 
-  drawAlertsPage(doc, plan, tree, operations, pageNumberRef);
+function drawNotesPage(
+  doc,
+  plan,
+  type,
+  pageNumberRef
+) {
+  addPage(
+    doc,
+    `OBSERVAÇÕES E DESVIOS · ${type.toUpperCase()}`,
+    plan,
+    pageNumberRef,
+    type
+  );
 
-  drawSignatures(doc, plan, pageNumberRef);
+
+  sectionTitle(
+    doc,
+    'OBSERVAÇÕES / DESVIOS / OCORRÊNCIAS',
+    PAGE.margin,
+    108,
+    doc.page.width
+    -
+    PAGE.margin * 2
+  );
+
+
+  drawLinedSection(
+    doc,
+    'Observações gerais',
+    PAGE.margin,
+    143,
+    doc.page.width
+    -
+    PAGE.margin * 2,
+    175
+  );
+
+
+  drawLinedSection(
+    doc,
+    'Desvios / paradas / ocorrências',
+    PAGE.margin,
+    333,
+    doc.page.width
+    -
+    PAGE.margin * 2,
+    185,
+    {
+      fill:
+        '#FFFBEB',
+
+      stroke:
+        '#FDE68A'
+    }
+  );
+
+
+  drawLinedSection(
+    doc,
+    'Ações / decisões / replanejamento',
+    PAGE.margin,
+    533,
+    doc.page.width
+    -
+    PAGE.margin * 2,
+    185,
+    {
+      fill:
+        '#EFF6FF',
+
+      stroke:
+        '#BFDBFE'
+    }
+  );
+
+
+  doc.fillColor(
+    COLORS.muted
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      8
+    )
+    .text(
+      'Replanejamento necessário:   [  ] Sim      [  ] Não',
+      PAGE.margin + 15,
+      736,
+      {
+        width:
+          doc.page.width
+          -
+          PAGE.margin * 2
+          -
+          30
+      }
+    );
+}
+
+
+function drawSignatureBlock(
+  doc,
+  title,
+  x,
+  y,
+  width
+) {
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      14
+    )
+    .text(
+      title,
+      x,
+      y,
+      {
+        width
+      }
+    );
+
+
+  /*
+   * Nome
+   */
+  doc.fillColor(
+    COLORS.muted
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      7.5
+    )
+    .text(
+      'NOME',
+      x,
+      y + 43,
+      {
+        width
+      }
+    );
+
+
+  doc.strokeColor(
+    COLORS.strongLine
+  )
+    .lineWidth(
+      1
+    )
+    .moveTo(
+      x,
+      y + 71
+    )
+    .lineTo(
+      x + width,
+      y + 71
+    )
+    .stroke();
+
+
+  /*
+   * Assinatura
+   */
+  doc.fillColor(
+    COLORS.muted
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      7.5
+    )
+    .text(
+      'ASSINATURA',
+      x,
+      y + 95,
+      {
+        width
+      }
+    );
+
+
+  doc.strokeColor(
+    COLORS.strongLine
+  )
+    .lineWidth(
+      1
+    )
+    .moveTo(
+      x,
+      y + 127
+    )
+    .lineTo(
+      x + width,
+      y + 127
+    )
+    .stroke();
+
+
+  /*
+   * Data
+   *
+   * Não existe mais a linha horizontal
+   * adicional.
+   *
+   * Fica somente o campo:
+   *
+   * ____ / ____ / ________
+   */
+  doc.fillColor(
+    COLORS.muted
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      7.5
+    )
+    .text(
+      'DATA',
+      x,
+      y + 151,
+      {
+        width
+      }
+    );
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica'
+    )
+    .fontSize(
+      10.5
+    )
+    .text(
+      '____ / ____ / ________',
+      x,
+      y + 174,
+      {
+        width:
+          170,
+
+        align:
+          'left'
+      }
+    );
+}
+
+
+function drawSignatures(
+  doc,
+  plan,
+  type,
+  pageNumberRef
+) {
+  addPage(
+    doc,
+    `ASSINATURAS · ${type.toUpperCase()}`,
+    plan,
+    pageNumberRef,
+    type
+  );
+
+
+  doc.fillColor(
+    COLORS.ink
+  )
+    .font(
+      'Helvetica-Bold'
+    )
+    .fontSize(
+      19
+    )
+    .text(
+      'APROVAÇÃO DO PLANEJAMENTO',
+      PAGE.margin,
+      108,
+      {
+        width:
+          doc.page.width
+          -
+          PAGE.margin * 2
+      }
+    );
+
+
+  doc.fillColor(
+    COLORS.muted
+  )
+    .font(
+      'Helvetica'
+    )
+    .fontSize(
+      9
+    )
+    .text(
+      `Documento ${
+        type.toUpperCase()
+      } · Planejamento ${
+        plan.code
+        ||
+        plan.id
+        ||
+        '-'
+      }`,
+      PAGE.margin,
+      138,
+      {
+        width:
+          doc.page.width
+          -
+          PAGE.margin * 2
+      }
+    );
+
+
+  drawSignatureBlock(
+    doc,
+    'PCP',
+    76,
+    196,
+    doc.page.width - 152
+  );
+
+
+  drawSignatureBlock(
+    doc,
+    'SUPERVISOR DE PRODUÇÃO',
+    76,
+    446,
+    doc.page.width - 152
+  );
+}
+
+
+function documentHasContent(
+  rows,
+  events
+) {
+  return (
+    rows.length > 0
+    ||
+    events.length > 0
+  );
+}
+
+
+function drawDocument(
+  doc,
+  plan,
+  days,
+  tree,
+  operations,
+  allEvents,
+  type,
+  pageNumberRef
+) {
+  const events =
+    filterEventsForDocument(
+      allEvents,
+      type
+    );
+
+
+  const rows =
+    productionRowsForDocument(
+      type,
+      tree,
+      plan,
+      allEvents
+    );
+
+
+  if (
+    !documentHasContent(
+      rows,
+      events
+    )
+  ) {
+    return false;
+  }
+
+
+  /*
+   * 1. Capa / resumo
+   */
+  drawExecutivePage(
+    doc,
+    plan,
+    type,
+    rows,
+    events,
+    pageNumberRef
+  );
+
+
+  /*
+   * 2. Programação operacional diária
+   */
+  drawDailySchedulePages(
+    doc,
+    plan,
+    type,
+    events,
+    pageNumberRef
+  );
+
+
+  /*
+   * Não existem mais:
+   *
+   * - Fluxo produtivo
+   * - Detalhamento da cadeia em páginas
+   * - Resumo extra de recursos
+   *
+   * A cadeia necessária já aparece
+   * compacta na primeira página.
+   */
+
+
+  /*
+   * 3. Observações / desvios
+   */
+  drawNotesPage(
+    doc,
+    plan,
+    type,
+    pageNumberRef
+  );
+
+
+  /*
+   * 4. Assinaturas
+   */
+  drawSignatures(
+    doc,
+    plan,
+    type,
+    pageNumberRef
+  );
+
+
+  return true;
+}
+
+
+function normalizedDocumentType(value) {
+  const type =
+    text(value)
+      .trim()
+      .toLowerCase();
+
+
+  if (
+    type
+    ===
+    DOCUMENT_TYPES.MATRIZ
+  ) {
+    return DOCUMENT_TYPES.MATRIZ;
+  }
+
+
+  if (
+    type
+    ===
+    DOCUMENT_TYPES.FEITAL
+  ) {
+    return DOCUMENT_TYPES.FEITAL;
+  }
+
+
+  return '';
+}
+
+
+export function createPlanningPdf(
+  plan,
+  days,
+  tree = null,
+  operations = [],
+  documentType = null
+) {
+  tree =
+    normalizeObject(
+      tree
+      ||
+      plan.schedule_tree
+    );
+
+
+  operations =
+    normalizeArray(
+      operations
+      ||
+      plan.operations
+    );
+
+
+  const doc =
+    new PDFDocument({
+      autoFirstPage:
+        false,
+
+      size:
+        'A4',
+
+      margin:
+        PAGE.margin,
+
+      bufferPages:
+        false,
+
+      info: {
+        Title:
+          `Planejamento de Produção ${
+            plan.code
+            ||
+            plan.id
+            ||
+            ''
+          }`.trim(),
+
+        Author:
+          'Aço-Fer',
+
+        Subject:
+          'Planejamento operacional de produção'
+      }
+    });
+
+
+  const chunks =
+    [];
+
+
+  const pageNumberRef = {
+    value:
+      0
+  };
+
+
+  const events =
+    buildScheduleEvents(
+      plan,
+      days,
+      operations
+    );
+
+
+  const requestedType =
+    normalizedDocumentType(
+      documentType
+      ||
+      plan.pdf_document_type
+      ||
+      plan.pdfDocumentType
+    );
+
+
+  doc.on(
+    'data',
+    chunk =>
+      chunks.push(
+        chunk
+      )
+  );
+
+
+  if (
+    requestedType
+  ) {
+    /*
+     * Quando a rota informar explicitamente:
+     *
+     * matriz
+     *
+     * ou:
+     *
+     * feital
+     *
+     * gera somente o documento solicitado.
+     */
+    drawDocument(
+      doc,
+      plan,
+      days,
+      tree,
+      operations,
+      events,
+      requestedType,
+      pageNumberRef
+    );
+  } else {
+    /*
+     * COMPATIBILIDADE COM A ROTA ATUAL
+     *
+     * Hoje a rota chama:
+     *
+     * createPlanningPdf(
+     *   plan,
+     *   days,
+     *   tree,
+     *   operations
+     * )
+     *
+     * sem informar Matriz ou Feital.
+     *
+     * Para não quebrar nada agora,
+     * geramos os dois cadernos dentro
+     * do mesmo PDF:
+     *
+     * 1. MATRIZ
+     * 2. FEITAL
+     *
+     * Depois, se criarmos dois botões,
+     * basta passar o 5º argumento.
+     */
+
+    const matrixDrawn =
+      drawDocument(
+        doc,
+        plan,
+        days,
+        tree,
+        operations,
+        events,
+        DOCUMENT_TYPES.MATRIZ,
+        pageNumberRef
+      );
+
+
+    const feitalDrawn =
+      drawDocument(
+        doc,
+        plan,
+        days,
+        tree,
+        operations,
+        events,
+        DOCUMENT_TYPES.FEITAL,
+        pageNumberRef
+      );
+
+
+    /*
+     * Proteção para planejamento antigo
+     * ou sem informações de calendário.
+     */
+    if (
+      !matrixDrawn
+      &&
+      !feitalDrawn
+    ) {
+      addPage(
+        doc,
+        'PLANEJAMENTO DE PRODUÇÃO',
+        plan,
+        pageNumberRef,
+        DOCUMENT_TYPES.FEITAL
+      );
+
+
+      doc.fillColor(
+        COLORS.muted
+      )
+        .font(
+          'Helvetica'
+        )
+        .fontSize(
+          11
+        )
+        .text(
+          'Não foram encontradas operações produtivas para este planejamento.',
+          PAGE.margin,
+          132,
+          {
+            width:
+              doc.page.width
+              -
+              PAGE.margin * 2
+          }
+        );
+    }
+  }
+
+
   doc.end();
 
-  return new Promise(resolve => {
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-  });
+
+  return new Promise(
+    (
+      resolve,
+      reject
+    ) => {
+      doc.on(
+        'end',
+        () =>
+          resolve(
+            Buffer.concat(
+              chunks
+            )
+          )
+      );
+
+
+      doc.on(
+        'error',
+        reject
+      );
+    }
+  );
+}
+
+
+/*
+ * Exportações já preparadas para quando
+ * criarmos dois botões separados:
+ *
+ * - PDF Matriz
+ * - PDF Feital
+ */
+export function createPlanningPdfMatriz(
+  plan,
+  days,
+  tree = null,
+  operations = []
+) {
+  return createPlanningPdf(
+    plan,
+    days,
+    tree,
+    operations,
+    DOCUMENT_TYPES.MATRIZ
+  );
+}
+
+
+export function createPlanningPdfFeital(
+  plan,
+  days,
+  tree = null,
+  operations = []
+) {
+  return createPlanningPdf(
+    plan,
+    days,
+    tree,
+    operations,
+    DOCUMENT_TYPES.FEITAL
+  );
 }

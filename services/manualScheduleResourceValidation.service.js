@@ -63,6 +63,17 @@ function unique(values) {
   return [...new Set(values.map(String).filter(Boolean))].sort();
 }
 
+function normalizedTeamMachineValue(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+}
+
+function teamPoolForAllocation(allocation = {}) {
+  const machine = normalizedTeamMachineValue([
+    allocation?.machineName, allocation?.machine_name, allocation?.machineId, allocation?.machine_id
+  ].filter(Boolean).join(' '));
+  return machine.includes('trefila') ? 'matrix' : 'feital';
+}
+
 function normalizeAllocation(allocation, index) {
   const allocationId = String(allocation?.allocationId ?? allocation?.id ?? `allocation-${index + 1}`);
   const date = String(allocation?.date ?? allocation?.startDate ?? '');
@@ -85,6 +96,8 @@ function normalizeAllocation(allocation, index) {
   return {
     allocationId,
     machineId: String(allocation?.machineId ?? allocation?.machine_id ?? allocation?.machineName ?? ''),
+    machineName: String(allocation?.machineName ?? allocation?.machine_name ?? allocation?.machineId ?? ''),
+    teamPool: teamPoolForAllocation(allocation),
     date,
     endDate,
     startTime,
@@ -109,6 +122,13 @@ function normalizeShift(shift, index) {
   ));
   const endClock = clockMinutes(endTime);
   const valid = startMinutes !== null && endClock !== null && startMinutes !== endClock;
+  const legacyAvailable = Number(shift?.availablePeople ?? shift?.teamAvailable);
+  const suppliedMatrix = Number(shift?.matrixAvailablePeople ?? shift?.matrixTeamAvailable);
+  const matrixAvailablePeople = Number.isInteger(suppliedMatrix) && suppliedMatrix >= 0 ? suppliedMatrix : 1;
+  const suppliedFeital = Number(shift?.feitalAvailablePeople ?? shift?.feitalTeamAvailable);
+  const feitalAvailablePeople = Number.isInteger(suppliedFeital) && suppliedFeital >= 0
+    ? suppliedFeital
+    : (Number.isFinite(legacyAvailable) ? Math.max(legacyAvailable - matrixAvailablePeople, 0) : 5);
   return {
     shiftId: String(shift?.shiftId ?? shift?.id ?? `shift-${index + 1}`),
     label: String(shift?.label ?? `Turno ${index + 1}`),
@@ -116,7 +136,9 @@ function normalizeShift(shift, index) {
     endTime,
     startMinutes,
     endMinutes: valid ? endClock + (endClock < startMinutes ? MINUTES_PER_DAY : 0) : null,
-    availablePeople: Number(shift?.availablePeople ?? shift?.teamAvailable),
+    matrixAvailablePeople,
+    feitalAvailablePeople,
+    availablePeople: matrixAvailablePeople + feitalAvailablePeople,
     valid
   };
 }
@@ -314,12 +336,17 @@ function buildSetups({ allocations, shifts, setupMinutes, setupRules, setupOverr
 }
 
 function dailyOverrideEntries(input) {
-  if (Array.isArray(input)) return input.map(item => ({ date: item?.date, shiftId: item?.shiftId ?? item?.shift, availablePeople: item?.availablePeople ?? item?.teamAvailable }));
+  const normalizeEntry = (date, suppliedShiftId, availablePeople) => {
+    const rawShiftId = String(suppliedShiftId ?? '');
+    const match = /^(.*):(matrix|feital)$/i.exec(rawShiftId);
+    return { date, shiftId: match ? match[1] : rawShiftId, teamPool: match ? match[2].toLowerCase() : 'total', availablePeople };
+  };
+  if (Array.isArray(input)) return input.map(item => normalizeEntry(item?.date, item?.shiftId ?? item?.shift, item?.availablePeople ?? item?.teamAvailable));
   if (!input || typeof input !== 'object') return [];
   const result = [];
   Object.entries(input).sort(([left], [right]) => left.localeCompare(right)).forEach(([date, shifts]) => {
     if (shifts && typeof shifts === 'object' && !Array.isArray(shifts)) {
-      Object.entries(shifts).sort(([left], [right]) => left.localeCompare(right)).forEach(([shiftId, availablePeople]) => result.push({ date, shiftId, availablePeople }));
+      Object.entries(shifts).sort(([left], [right]) => left.localeCompare(right)).forEach(([shiftId, availablePeople]) => result.push(normalizeEntry(date, shiftId, availablePeople)));
     }
   });
   return result;
@@ -358,7 +385,7 @@ function teamIssue(code, group, interval, values = {}) {
   };
 }
 
-function buildTeamProjection({ allocations, shifts, dailyTeamOverrides, teamOverrides }) {
+function buildTeamProjectionLegacy({ allocations, shifts, dailyTeamOverrides, teamOverrides }) {
   const diagnostics = [];
   const overrideMap = new Map();
   dailyOverrideEntries(dailyTeamOverrides).forEach(entry => {
@@ -454,6 +481,66 @@ function buildTeamProjection({ allocations, shifts, dailyTeamOverrides, teamOver
       overrideUsed,
       intervals: intervals.map(interval => ({ ...interval, start: minuteFields(interval.start).timestamp, end: minuteFields(interval.end).timestamp }))
     };
+  });
+  return { diagnostics, byDate, maximumTeamPeak };
+}
+
+function buildTeamProjection({ allocations, shifts, dailyTeamOverrides, teamOverrides }) {
+  const diagnostics = [];
+  const overrideMap = new Map();
+  dailyOverrideEntries(dailyTeamOverrides).forEach(entry => {
+    const shift = shiftForOverride(shifts, entry.shiftId);
+    const available = Number(entry.availablePeople);
+    const teamPool = ['matrix', 'feital'].includes(entry.teamPool) ? entry.teamPool : 'total';
+    if (!DATE_PATTERN.test(String(entry.date || '')) || !shift || !Number.isFinite(available) || available < 0) {
+      diagnostics.push({ code: 'INVALID_TEAM_OVERRIDE', rule: 'invalid_team_override', message: 'dailyTeamOverride inválido.', allocationIds: [], machineIds: [], date: DATE_PATTERN.test(String(entry.date || '')) ? String(entry.date) : null, shiftIds: shift ? [shift.shiftId] : [], availablePeople: Number.isFinite(available) ? available : null, requiredPeople: null, excessPeople: null, intervals: [], overrideId: null, details: { suppliedShiftId: String(entry.shiftId ?? ''), teamPool } });
+      return;
+    }
+    overrideMap.set(`${entry.date}|${shift.shiftId}|${teamPool}`, available);
+  });
+  const explicitOverrides = (Array.isArray(teamOverrides) ? teamOverrides : []).map(item => ({ overrideId: String(item?.overrideId ?? ''), date: String(item?.date ?? ''), shiftId: String(item?.shiftId ?? ''), allowedPeople: Number(item?.allowedPeople), allocationIds: unique(Array.isArray(item?.allocationIds) ? item.allocationIds : []), reason: String(item?.reason ?? '') }));
+  const validExplicit = explicitOverrides.filter(item => item.overrideId && DATE_PATTERN.test(item.date) && shifts.some(shift => shift.shiftId === item.shiftId) && Number.isFinite(item.allowedPeople) && item.allowedPeople >= 0 && item.allocationIds.length && item.reason);
+  explicitOverrides.filter(item => !validExplicit.includes(item)).forEach(item => diagnostics.push({ code: 'INVALID_TEAM_OVERRIDE', rule: 'invalid_team_override', message: 'teamOverride extraordinário inválido.', allocationIds: item.allocationIds, machineIds: [], date: DATE_PATTERN.test(item.date) ? item.date : null, shiftIds: item.shiftId ? [item.shiftId] : [], availablePeople: Number.isFinite(item.allowedPeople) ? item.allowedPeople : null, requiredPeople: null, excessPeople: null, intervals: [], overrideId: item.overrideId || null, details: {} }));
+  const groups = new Map();
+  allocations.filter(item => item.valid).forEach(allocation => {
+    const shiftIntervals = shiftIntervalsBetween(shifts, allocation.start, allocation.end);
+    shiftIntervals.forEach(shiftInterval => {
+      const start = Number(allocation.capacityPercent) >= 100 ? shiftInterval.start : Math.max(allocation.start, shiftInterval.start);
+      const end = Number(allocation.capacityPercent) >= 100 ? shiftInterval.end : Math.min(allocation.end, shiftInterval.end);
+      if (start >= end) return;
+      const date = minuteFields(shiftInterval.start).date;
+      const teamPool = allocation.teamPool === 'matrix' ? 'matrix' : 'feital';
+      const key = `${date}|${shiftInterval.shiftId}|${teamPool}`;
+      if (!groups.has(key)) groups.set(key, { date, shiftId: shiftInterval.shiftId, teamPool, segments: [] });
+      groups.get(key).segments.push({ start, end, allocationId: allocation.allocationId, machineId: allocation.machineId, peopleCount: allocation.peopleCount });
+    });
+    if (!intervalCovered(allocation.start, allocation.end, shiftIntervals)) diagnostics.push({ code: 'TEAM_SHIFT_NOT_FOUND', rule: 'team_shift_not_found', message: `Não há turno para avaliar integralmente a equipe da allocation ${allocation.allocationId}.`, allocationIds: [allocation.allocationId], machineIds: [allocation.machineId], date: allocation.date, shiftIds: unique(shiftIntervals.map(item => item.shiftId)), availablePeople: null, requiredPeople: allocation.peopleCount, excessPeople: null, intervals: [{ start: minuteFields(allocation.start).timestamp, end: minuteFields(allocation.end).timestamp }], overrideId: null, details: { teamPool: allocation.teamPool } });
+  });
+  const poolAvailableFor = (date, shift, teamPool) => {
+    const key = `${date}|${shift.shiftId}|${teamPool}`;
+    if (overrideMap.has(key)) return overrideMap.get(key);
+    const totalKey = `${date}|${shift.shiftId}|total`;
+    if (overrideMap.has(totalKey)) {
+      const total = Math.max(Number(overrideMap.get(totalKey)) || 0, 0);
+      const matrix = Math.min(Math.max(Number(shift.matrixAvailablePeople) || 0, 0), total);
+      return teamPool === 'matrix' ? matrix : Math.max(total - matrix, 0);
+    }
+    return Math.max(Number(teamPool === 'matrix' ? shift.matrixAvailablePeople : shift.feitalAvailablePeople) || 0, 0);
+  };
+  const byDate = {};
+  let maximumTeamPeak = 0;
+  [...groups.values()].sort((a, b) => a.date.localeCompare(b.date) || a.shiftId.localeCompare(b.shiftId) || a.teamPool.localeCompare(b.teamPool)).forEach(group => {
+    const shift = shifts.find(item => item.shiftId === group.shiftId);
+    const availablePeople = poolAvailableFor(group.date, shift, group.teamPool);
+    const events = group.segments.flatMap(segment => [{ point: segment.start, type: 1, segment }, { point: segment.end, type: 0, segment }]).sort((a, b) => a.point - b.point || a.type - b.type || a.segment.allocationId.localeCompare(b.segment.allocationId));
+    const active = new Map(); const intervals = []; let cursor = null; let eventIndex = 0;
+    while (eventIndex < events.length) { const point = events[eventIndex].point; if (cursor !== null && cursor < point && active.size) { const items = [...active.values()].sort((a, b) => a.allocationId.localeCompare(b.allocationId)); intervals.push({ start: cursor, end: point, requiredPeople: items.reduce((sum, item) => sum + item.peopleCount, 0), allocationIds: unique(items.map(item => item.allocationId)), machineIds: unique(items.map(item => item.machineId)) }); } while (eventIndex < events.length && events[eventIndex].point === point && events[eventIndex].type === 0) active.delete(events[eventIndex++].segment.allocationId); while (eventIndex < events.length && events[eventIndex].point === point) active.set(events[eventIndex].segment.allocationId, events[eventIndex++].segment); cursor = point; }
+    let overrideUsed = false;
+    intervals.filter(interval => interval.requiredPeople > availablePeople).forEach(interval => { const matches = validExplicit.filter(item => item.date === group.date && item.shiftId === group.shiftId && interval.allocationIds.every(id => item.allocationIds.includes(id))); const explicit = matches.filter(item => item.allowedPeople >= interval.requiredPeople).sort((a, b) => a.allowedPeople - b.allowedPeople || a.overrideId.localeCompare(b.overrideId))[0] || matches.sort((a, b) => b.allowedPeople - a.allowedPeople || a.overrideId.localeCompare(b.overrideId))[0]; const details = { ...(explicit ? { allowedPeople: explicit.allowedPeople, reason: explicit.reason } : {}), teamPool: group.teamPool }; if (explicit && interval.requiredPeople <= explicit.allowedPeople) { overrideUsed = true; diagnostics.push(teamIssue('TEAM_CAPACITY_OVERRIDE_USED', group, interval, { severity: 'warning', blocking: false, availablePeople, overrideId: explicit.overrideId, details })); } else diagnostics.push(teamIssue('TEAM_CAPACITY_EXCEEDED', group, interval, { availablePeople, overrideId: explicit?.overrideId || null, details })); });
+    const peakPeople = intervals.reduce((max, interval) => Math.max(max, interval.requiredPeople), 0);
+    const projection = (byDate[group.date] ||= { shifts: {} }).shifts[group.shiftId] ||= { matrixAvailablePeople: poolAvailableFor(group.date, shift, 'matrix'), matrixPeakPeople: 0, matrixOverrideUsed: false, feitalAvailablePeople: poolAvailableFor(group.date, shift, 'feital'), feitalPeakPeople: 0, feitalOverrideUsed: false, availablePeople: 0, peakPeople: 0, utilizationPercent: 0, overrideUsed: false, intervals: [] };
+    if (group.teamPool === 'matrix') { projection.matrixAvailablePeople = availablePeople; projection.matrixPeakPeople = peakPeople; projection.matrixOverrideUsed = overrideUsed; } else { projection.feitalAvailablePeople = availablePeople; projection.feitalPeakPeople = peakPeople; projection.feitalOverrideUsed = overrideUsed; }
+    projection.availablePeople = projection.matrixAvailablePeople + projection.feitalAvailablePeople; projection.peakPeople = projection.matrixPeakPeople + projection.feitalPeakPeople; projection.utilizationPercent = projection.availablePeople > 0 ? Number(((projection.peakPeople / projection.availablePeople) * 100).toFixed(2)) : (projection.peakPeople > 0 ? null : 0); projection.overrideUsed = projection.matrixOverrideUsed || projection.feitalOverrideUsed; projection.intervals.push(...intervals.map(interval => ({ ...interval, teamPool: group.teamPool, start: minuteFields(interval.start).timestamp, end: minuteFields(interval.end).timestamp }))); maximumTeamPeak = Math.max(maximumTeamPeak, projection.peakPeople);
   });
   return { diagnostics, byDate, maximumTeamPeak };
 }

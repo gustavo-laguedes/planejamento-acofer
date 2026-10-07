@@ -482,12 +482,170 @@ function operationRequirements(operations = []) {
   return result;
 }
 
-function mergeRequirements(scheduleTree, operations) {
-  const fromTree = treeRequirements(scheduleTree);
-  const fromOperations = operationRequirements(operations);
-  // The tree includes raw materials; operation requirements override matching edges with scheduler-normalized quantities.
-  for (const [key, requirement] of fromOperations) fromTree.set(key, requirement);
-  return [...fromTree.values()];
+function operationRequirementAliases(
+  operations = []
+) {
+  const aliases =
+    new Map();
+
+  for (
+    const operation
+    of operations
+  ) {
+    const canonicalId =
+      parentOperationId(
+        operation
+      );
+
+    if (!canonicalId) {
+      continue;
+    }
+
+    [
+      operation?.operationId,
+      operation?.parentOperationId,
+      operation?.calendarParentOperationId,
+      operation?.splitParentOperationId,
+
+      ...(
+        Array.isArray(
+          operation?.groupedOperationIds
+        )
+          ? operation.groupedOperationIds
+          : []
+      ),
+
+      ...(
+        Array.isArray(
+          operation?.productionBreakdown
+        )
+
+          ? operation
+              .productionBreakdown
+              .map(
+                item =>
+                  item?.operationId
+              )
+
+          : []
+      )
+    ]
+      .forEach(
+        value => {
+          const alias =
+            parentOperationId({
+              operationId:
+                value
+            });
+
+          if (alias) {
+            aliases.set(
+              alias,
+              canonicalId
+            );
+          }
+        }
+      );
+  }
+
+  return aliases;
+}
+
+
+function remapTreeRequirements(
+  requirements,
+  operations
+) {
+  const aliases =
+    operationRequirementAliases(
+      operations
+    );
+
+  const remapped =
+    new Map();
+
+  for (
+    const requirement
+    of requirements.values()
+  ) {
+    const consumerParentOperationId =
+      aliases.get(
+        requirement
+          .consumerParentOperationId
+      )
+      ||
+      requirement
+        .consumerParentOperationId;
+
+    const key =
+      `${consumerParentOperationId}\u0000${requirement.materialId}`;
+
+    const current =
+      remapped.get(key)
+      || {
+        ...requirement,
+
+        consumerParentOperationId,
+
+        requiredQuantity:
+          0
+      };
+
+    current.requiredQuantity +=
+      number(
+        requirement.requiredQuantity
+      );
+
+    remapped.set(
+      key,
+      current
+    );
+  }
+
+  return remapped;
+}
+
+
+function mergeRequirements(
+  scheduleTree,
+  operations
+) {
+  const fromTree =
+    remapTreeRequirements(
+      treeRequirements(
+        scheduleTree
+      ),
+      operations
+    );
+
+  const fromOperations =
+    operationRequirements(
+      operations
+    );
+
+  /*
+   * A árvore inclui também materiais atendidos
+   * somente por estoque.
+   *
+   * As operações sobrescrevem arestas equivalentes
+   * com a quantidade normalizada pelo scheduler.
+   */
+  for (
+    const [
+      key,
+      requirement
+    ]
+    of fromOperations
+  ) {
+    fromTree.set(
+      key,
+      requirement
+    );
+  }
+
+  return [
+    ...fromTree.values()
+  ];
 }
 
 function normalizeAllocations(allocations = []) {

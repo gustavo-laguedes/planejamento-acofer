@@ -1,16 +1,24 @@
 const PRODUCTION_DISPLAY_PALETTE = Object.freeze([
-  '#2563EB',
-  '#EA580C',
-  '#16A34A',
-  '#7C3AED',
-  '#CA8A04',
-  '#0891B2',
-  '#DB2777',
-  '#475569',
-  '#65A30D',
-  '#0F766E',
-  '#C2410C',
-  '#9333EA'
+  '#1D4ED8', // 01 - azul escuro
+  '#F97316', // 02 - laranja
+  '#16A34A', // 03 - verde
+  '#7E22CE', // 04 - roxo
+  '#DC2626', // 05 - vermelho
+  '#06B6D4', // 06 - ciano
+  '#D97706', // 07 - dourado
+  '#EC4899', // 08 - rosa
+  '#0F766E', // 09 - teal
+  '#FB7185', // 10 - coral
+  '#4338CA', // 11 - índigo
+  '#65A30D', // 12 - verde-limão
+  '#9F1239', // 13 - vinho
+  '#38BDF8', // 14 - azul claro
+  '#9333EA', // 15 - violeta
+  '#F59E0B', // 16 - âmbar
+  '#059669', // 17 - esmeralda
+  '#DB2777', // 18 - pink
+  '#0E7490', // 19 - azul petróleo
+  '#F87171'  // 20 - vermelho claro
 ]);
 
 function firstExisting(...values) {

@@ -219,6 +219,8 @@ function formatMinutes(value) {
 }
 
 function productionLabel(task) {
+  const number = Number(task?.productionNumber);
+  if (Number.isInteger(number) && number > 0) return `Produção ${number}`;
   if (
     task?.productionIndex === null
     || task?.productionIndex === undefined
@@ -230,10 +232,18 @@ function productionLabel(task) {
 }
 
 function productionNumbers(task) {
-  return [...new Set(ganttApsProductionVisuals(task)
-    .map(production => production.productionIndex)
-    .filter(Number.isFinite)
-    .map(index => index + 1))];
+  return [
+    ...new Set(
+      ganttApsProductionVisuals(task)
+        .map(production => {
+          const number = Number(production?.productionNumber);
+          if (Number.isInteger(number) && number > 0) return number;
+          const index = Number(production?.productionIndex);
+          return Number.isFinite(index) ? index + 1 : null;
+        })
+        .filter(Number.isFinite)
+    )
+  ];
 }
 
 function productionColumnLabel(task) {
@@ -272,6 +282,13 @@ function formatPeople(value) {
 
 function dayTeamLabel(day = {}) {
   const team = day.team || {};
+  const matrix = team.matrix || {};
+  const feital = team.feital || {};
+  const hasSplitTeam = matrix.peakPeople !== undefined || matrix.availablePeople !== undefined
+    || feital.peakPeople !== undefined || feital.availablePeople !== undefined;
+  if (hasSplitTeam) {
+    return `Equipe: M ${formatNumber(matrix.peakPeople ?? 0, 0)}/${formatNumber(matrix.availablePeople ?? 0, 0)} • F ${formatNumber(feital.peakPeople ?? 0, 0)}/${formatNumber(feital.availablePeople ?? 0, 0)}`;
+  }
   if (team.peakPeople === undefined && team.availablePeople === undefined) return 'Equipe: -';
   return `Equipe: ${formatNumber(team.peakPeople, 0)} / ${formatNumber(team.availablePeople, 0)}`;
 }
@@ -589,7 +606,14 @@ function ganttApsApplyBarHorizontalInset(left, width) {
   };
 }
 
-function ganttApsVisualBarGeometry(geometry, window, pixelsPerHour, dayWidth, capacityPercent) {
+function ganttApsVisualBarGeometry(
+  geometry,
+  window,
+  pixelsPerHour,
+  dayWidth,
+  capacityPercent,
+  startCapacityPercent = 0
+) {
   const rangeStart = window.startDay * 1440;
   const rangeEnd = (window.endDay + 1) * 1440;
   const clippedStart = Math.max(geometry.start, rangeStart);
@@ -597,49 +621,27 @@ function ganttApsVisualBarGeometry(geometry, window, pixelsPerHour, dayWidth, ca
   const clippedLeft = (clippedStart - rangeStart) * pixelsPerHour / 60;
   const clippedWidth = Math.max(3, (clippedEnd - clippedStart) * pixelsPerHour / 60);
   const durationMinutes = geometry.end - geometry.start;
-
   if (durationMinutes > 1440) {
     const insetGeometry = ganttApsApplyBarHorizontalInset(clippedLeft, clippedWidth);
-    return {
-      left: insetGeometry.left,
-      width: insetGeometry.width,
-      clipped: clippedStart !== geometry.start || clippedEnd !== geometry.end
-    };
+    return { left: insetGeometry.left, width: insetGeometry.width, clipped: clippedStart !== geometry.start || clippedEnd !== geometry.end };
   }
-
   const visualCapacityPercent = ganttApsVisualCapacityPercent(capacityPercent);
   if (visualCapacityPercent == null) {
     const insetGeometry = ganttApsApplyBarHorizontalInset(clippedLeft, clippedWidth);
-    return {
-      left: insetGeometry.left,
-      width: insetGeometry.width,
-      clipped: clippedStart !== geometry.start || clippedEnd !== geometry.end
-    };
+    return { left: insetGeometry.left, width: insetGeometry.width, clipped: clippedStart !== geometry.start || clippedEnd !== geometry.end };
   }
-
+  const visualStartCapacityPercent = ganttApsVisualCapacityPercent(startCapacityPercent) ?? 0;
   const startDay = Math.floor(geometry.start / 1440);
-  const visualLeft = (startDay - window.startDay) * dayWidth;
+  const visualLeft = (startDay - window.startDay) * dayWidth + (dayWidth * visualStartCapacityPercent / 100);
   const visibleTimelineWidth = (window.endDay - window.startDay + 1) * dayWidth;
   if (visualLeft < 0 || visualLeft >= visibleTimelineWidth) {
     const insetGeometry = ganttApsApplyBarHorizontalInset(clippedLeft, clippedWidth);
-    return {
-      left: insetGeometry.left,
-      width: insetGeometry.width,
-      clipped: true
-    };
+    return { left: insetGeometry.left, width: insetGeometry.width, clipped: true };
   }
-
-  const insetGeometry = ganttApsApplyBarHorizontalInset(
-    visualLeft,
-    dayWidth * visualCapacityPercent / 100
-  );
-  return {
-    left: insetGeometry.left,
-    width: insetGeometry.width,
-    clipped: clippedStart !== geometry.start || clippedEnd !== geometry.end
-  };
+  const visibleCapacityPercent = Math.max(0, Math.min(visualCapacityPercent, 100 - visualStartCapacityPercent));
+  const insetGeometry = ganttApsApplyBarHorizontalInset(visualLeft, dayWidth * visibleCapacityPercent / 100);
+  return { left: insetGeometry.left, width: insetGeometry.width, clipped: clippedStart !== geometry.start || clippedEnd !== geometry.end };
 }
-
 function ganttApsTransportVisualBarGeometry(
   task = {},
   window = {},
@@ -758,6 +760,54 @@ function ganttApsTransportVisualBarGeometry(
   };
 }
 
+function ganttApsTransportDayVisualFragments(tasks = [], window = {}, dayWidth = 0) {
+  const byDay = new Map();
+  (Array.isArray(tasks) ? tasks : []).forEach(task => {
+    const isTransport = task?.scheduleType === 'transport' || Boolean(task?.transportId);
+    if (!isTransport) return;
+    const startDay = civilDayNumber(task?.start?.date ?? task?.date);
+    const endDay = civilDayNumber(task?.end?.date ?? task?.endDate ?? task?.start?.date ?? task?.date);
+    if (startDay === null || endDay === null || window?.startDay == null || window?.endDay == null) return;
+    const firstDay = Math.max(startDay, window.startDay);
+    const lastDay = Math.min(Math.max(endDay, startDay), window.endDay);
+    for (let dayNumber = firstDay; dayNumber <= lastDay; dayNumber += 1) {
+      const dayTasks = byDay.get(dayNumber) || [];
+      dayTasks.push(task);
+      byDay.set(dayNumber, dayTasks);
+    }
+  });
+
+  return [...byDay.entries()]
+    .sort(([leftDay], [rightDay]) => leftDay - rightDay)
+    .flatMap(([dayNumber, dayTasks]) => {
+      const orderedTasks = [...dayTasks].sort((left, right) => {
+        const leftIndex = Number(left?.productionIndex);
+        const rightIndex = Number(right?.productionIndex);
+        const leftHasIndex = Number.isFinite(leftIndex);
+        const rightHasIndex = Number.isFinite(rightIndex);
+        if (leftHasIndex && rightHasIndex && leftIndex !== rightIndex) return leftIndex - rightIndex;
+        if (leftHasIndex) return -1;
+        if (rightHasIndex) return 1;
+        return String(left?.id || '').localeCompare(String(right?.id || ''), 'pt-BR', { numeric: true });
+      });
+      const slotCount = Math.max(1, orderedTasks.length);
+      return orderedTasks.map((task, slotIndex) => {
+        const insetGeometry = ganttApsApplyBarHorizontalInset(
+          (dayNumber - window.startDay) * dayWidth + (dayWidth * slotIndex / slotCount),
+          dayWidth / slotCount
+        );
+        return {
+          task,
+          date: window.days?.[dayNumber - window.startDay]?.date || null,
+          dayNumber,
+          slotIndex,
+          slotCount,
+          visualBar: { left: insetGeometry.left, width: insetGeometry.width, clipped: false }
+        };
+      });
+    });
+}
+
 function pagedResourceSegments(resources, tasks, window, rowBudget = GANTT_APS_ROWS_PER_PAGE) {
   const pages = [];
   let page = [];
@@ -772,29 +822,13 @@ function pagedResourceSegments(resources, tasks, window, rowBudget = GANTT_APS_R
       String(task.resourceId ?? '') === String(resource.id)
       && taskFitsWindow(task, window)
     )));
-    if (!resourceTasks.length) {
-      if (used >= rowBudget || page.length >= rowBudget) pushPage();
-      page.push({ resource, tasks: [], continuation: false });
-      return;
-    }
-    let offset = 0;
-    while (offset < resourceTasks.length) {
-      if (used >= rowBudget) pushPage();
-      const count = Math.min(rowBudget - used, resourceTasks.length - offset);
-      page.push({
-        resource,
-        tasks: resourceTasks.slice(offset, offset + count),
-        continuation: offset > 0
-      });
-      offset += count;
-      used += count;
-      if (used >= rowBudget && offset < resourceTasks.length) pushPage();
-    }
+    if (used >= rowBudget && page.length) pushPage();
+    page.push({ resource, tasks: resourceTasks, continuation: false });
+    used += 1;
   });
   pushPage();
   return pages.length ? pages : [[]];
 }
-
 function appendPager(parent, { actionPrefix, page, pageCount, label }) {
   if (pageCount <= 1) return;
   const pager = element('div', 'gantt-aps__pager');
@@ -831,6 +865,7 @@ export function ganttApsProductionVisuals(task = {}) {
     {
       productionId: task?.productionId,
       productionIndex: task?.productionIndex,
+      productionNumber: task?.productionNumber,
       productionTitle: presented(task, 'productionTitle'),
       productionColor: presented(task, 'productionColor')
     },
@@ -895,6 +930,64 @@ export function ganttApsProductionBackground(task = {}) {
   return `linear-gradient(90deg, ${stops.join(', ')})`;
 }
 
+
+function ganttApsResourceLaneProductionVisuals(tasks = []) {
+  const byIdentity = new Map();
+  (Array.isArray(tasks) ? tasks : []).forEach(task => {
+    ganttApsProductionVisuals(task).forEach(production => {
+      if (!byIdentity.has(production.identity)) byIdentity.set(production.identity, production);
+    });
+  });
+  return [...byIdentity.values()].sort((left, right) => {
+    const leftIndex = Number(left?.productionIndex);
+    const rightIndex = Number(right?.productionIndex);
+    const leftHasIndex = Number.isFinite(leftIndex);
+    const rightHasIndex = Number.isFinite(rightIndex);
+    if (leftHasIndex && rightHasIndex) return leftIndex - rightIndex;
+    if (leftHasIndex) return -1;
+    if (rightHasIndex) return 1;
+    return String(left?.identity || '').localeCompare(String(right?.identity || ''), 'pt-BR', { numeric: true });
+  });
+}
+
+function ganttApsResourceLaneMaterials(tasks = []) {
+  return [...new Set((Array.isArray(tasks) ? tasks : []).map(task => String(materialLabel(task) || '').trim()).filter(Boolean))];
+}
+
+function ganttApsResourceLaneDailyCapacityLabel(tasks = []) {
+  const labels = [...new Set((Array.isArray(tasks) ? tasks : []).map(task => {
+    const capacity = dailyCapacityValue(task);
+    if (capacity === null || capacity === undefined) return null;
+    const unit = String(task?.unit || '').trim();
+    return `${formatNumber(capacity)}${unit ? ` ${unit}` : ''}/dia`;
+  }).filter(Boolean))];
+  return labels.length ? labels.join(' / ') : '—';
+}
+
+function ganttApsResourceLanePeopleLabel(tasks = []) {
+  const labels = [...new Set((Array.isArray(tasks) ? tasks : []).map(task => formatPeople(task?.peopleCount)).filter(value => value && value !== '—'))];
+  return labels.length ? labels.join(' / ') : '—';
+}
+
+function ganttApsResourceLaneDailyUtilization(tasks = []) {
+  const byDate = new Map();
+  (Array.isArray(tasks) ? tasks : []).forEach(task => {
+    if (task?.scheduleType === 'transport' || Boolean(task?.transportId)) return;
+    const date = String(task?.start?.date ?? task?.date ?? '').trim();
+    const capacityPercent = Number(task?.capacityPercent);
+    if (!date || !Number.isFinite(capacityPercent)) return;
+    byDate.set(date, (byDate.get(date) || 0) + Math.max(capacityPercent, 0));
+  });
+  return byDate;
+}
+
+function ganttApsResourceLaneUtilizationLabel(tasks = []) {
+  const byDate = ganttApsResourceLaneDailyUtilization(tasks);
+  if (!byDate.size) return '—';
+  const values = [...byDate.values()];
+  const average = values.reduce((total, value) => total + value, 0) / values.length;
+  return `${formatPercent(average)} média`;
+}
 function isNonWorkingDay(day) {
   if (day?.isWorkingDay === true || day?.isManuallyEnabled === true) return false;
   if (day?.isWorkingDay === false || day?.isNonWorkingDay === true || day?.holiday) return true;
@@ -1251,16 +1344,18 @@ function buildDayDetailsPanel(day, { canEditDaySettings = false } = {}) {
   if (canEditDaySettings && Array.isArray(day?.team?.shifts) && day.team.shifts.length) {
     const form = element('div', 'gantt-aps__day-team-form');
     day.team.shifts.forEach(shift => {
-      const label = element('label', '', `${shift.label || shift.shiftId || 'Turno'} `);
-      const input = element('input');
-      input.type = 'number';
-      input.min = '0';
-      input.step = '1';
-      input.required = true;
-      input.value = String(Number.isFinite(Number(shift.availablePeople)) ? Number(shift.availablePeople) : 0);
-      input.dataset.shiftId = String(shift.shiftId || '');
-      label.append(input);
-      form.append(label);
+      const shiftId = String(shift.shiftId || '');
+      const shiftLabel = String(shift.label || shift.shiftId || 'Turno');
+      [['matrix', 'Matriz', shift.matrixAvailablePeople], ['feital', 'Feital', shift.feitalAvailablePeople]].forEach(([teamPool, poolLabel, availablePeople]) => {
+        const label = element('label', '', `${shiftLabel} — ${poolLabel} `);
+        const input = element('input');
+        input.type = 'number'; input.min = '0'; input.step = '1'; input.required = true;
+        input.value = String(Number.isFinite(Number(availablePeople)) ? Number(availablePeople) : 0);
+        input.dataset.shiftId = shiftId;
+        input.dataset.teamPool = teamPool;
+        label.append(input);
+        form.append(label);
+      });
     });
     const restore = element('button', 'gantt-aps__inspect-close', 'Restaurar padrão');
     restore.type = 'button';
@@ -1697,11 +1792,20 @@ resourcesWithAllocatedProduction.forEach(
     const header = element('div', 'gantt-aps__row gantt-aps__row--header');
     header.setAttribute('role', 'row');
     const tableHeader = element('div', 'gantt-aps__table gantt-aps__table--header');
-    ['M\u00c1QUINA', 'Produção', 'Material', 'Quantidade / Capacidade', 'Pessoas', 'Capacidade utilizada']
+    [
+      'MÁQUINA /\nPRODUÇÃO',
+      'MATERIAL',
+      'CAPACIDADE / DIA',
+      'PESSOAS',
+      'CAPACIDADE UTILIZADA'
+    ]
       .forEach((label, index) => {
         const cell = element('div', 'gantt-aps__cell', label);
+        cell.style.minHeight = '80px';
+        cell.style.fontSize = '11px';
+        cell.style.fontWeight = '700';
         cell.setAttribute('role', 'columnheader');
-        if (index === 5) {
+if (index === 4) {
           cell.classList.add('gantt-aps__cell--capacity-used');
           cell.textContent = '';
           cell.append(
@@ -1715,6 +1819,13 @@ resourcesWithAllocatedProduction.forEach(
       const timelineHeader = element('div', 'gantt-aps__timeline gantt-aps__timeline--header');
     window.days.forEach(day => {
       const dayHeader = element('div', 'gantt-aps__day-header');
+      dayHeader.style.display = 'flex';
+      dayHeader.style.flexDirection = 'column';
+      dayHeader.style.justifyContent = 'space-between';
+      dayHeader.style.alignItems = 'stretch';
+      dayHeader.style.minHeight = '84px';
+      dayHeader.style.paddingTop = '6px';
+      dayHeader.style.paddingBottom = '6px';
       const presentation = ganttApsDayHeaderPresentation(day, dayWidth);
       dayHeader.dataset.date = day.date;
       dayHeader.dataset.labelMode = presentation.mode;
@@ -1733,13 +1844,16 @@ resourcesWithAllocatedProduction.forEach(
     'gantt-aps__day-title-line'
   );
 
-titleLine.append(
-  element(
-    'strong',
-    '',
-    presentation.dateLabel
-  )
-);
+titleLine.style.display = 'flex';
+titleLine.style.alignItems = 'center';
+titleLine.style.justifyContent = 'space-between';
+titleLine.style.width = '100%';
+titleLine.style.gap = '5px';
+const dateLabel = element('strong', '', presentation.dateLabel);
+dateLabel.style.fontSize = '12px';
+const weekdayLine = element('span', 'gantt-aps__day-weekday', presentation.secondaryLabel);
+weekdayLine.style.fontSize = '11px';
+titleLine.append(dateLabel, weekdayLine);
 
 if (
   dayHasCapacityWarning(
@@ -1766,15 +1880,7 @@ if (
   );
 }
 
-dayHeader.append(
-  titleLine,
-
-  element(
-    'span',
-    '',
-    presentation.secondaryLabel
-  )
-);
+dayHeader.append(titleLine);
 
 const metrics =
   element(
@@ -1782,7 +1888,13 @@ const metrics =
     'gantt-aps__day-metrics'
   );
 
-metrics.append(
+metrics.style.display = 'flex';
+metrics.style.flexDirection = 'column';
+metrics.style.flex = '1';
+metrics.style.alignItems = 'stretch';
+metrics.style.justifyContent = 'space-between';
+
+const teamLine =
   element(
     'span',
     'gantt-aps__day-team',
@@ -1792,8 +1904,13 @@ metrics.append(
       /^Equipe:\s*/,
       'Eq. '
     )
-  ),
+  );
 
+teamLine.style.alignSelf = 'center';
+teamLine.style.fontSize = '12px';
+teamLine.style.fontWeight = '600';
+
+const productivityLine =
   element(
     'span',
     'gantt-aps__day-productivity',
@@ -1803,11 +1920,25 @@ metrics.append(
       /^Prod\.\:\s*/,
       'Prod. '
     )
-  ),
+  );
 
+productivityLine.style.alignSelf = 'center';
+productivityLine.style.fontSize = '12px';
+productivityLine.style.fontWeight = '600';
+
+const alertsLine =
   buildDayStockSummary(
     day
-  )
+  );
+
+alertsLine.style.alignSelf = 'center';
+alertsLine.style.marginTop = '3px';
+alertsLine.style.transform = 'scale(1.06)';
+
+metrics.append(
+  teamLine,
+  productivityLine,
+  alertsLine
 );
 
 dayHeader.append(
@@ -1888,148 +2019,139 @@ if (isTransportResource) {
       viewport.append(groupRow);
 
       if (collapsedResources.has(resourceId)) return;
-            buildGanttApsProductionTotalBlocks(segment.tasks).forEach(totalRow => {
-        const { task } = totalRow;
 
+      const laneTasks = Array.isArray(segment.tasks) ? segment.tasks : [];
+      if (!laneTasks.length) return;
 
-        /*
-         * Precisamos saber se é transporte
-         * ANTES de calcular a geometria visual.
-         */
-        const isTransportAllocation =
-          task?.scheduleType === 'transport'
-          ||
-          Boolean(
-            task?.transportId
-          );
+      const row = element('div', 'gantt-aps__row gantt-aps__row--allocation');
+      row.dataset.resourceId = resourceId;
+      const isTransportLane = laneTasks.every(task => (
+        task?.scheduleType === 'transport' || Boolean(task?.transportId)
+      ));
+      if (isTransportLane) row.dataset.transportAllocation = 'true';
+      row.setAttribute('role', 'row');
+      row.setAttribute('aria-level', '2');
 
+      const table = element('div', 'gantt-aps__table gantt-aps__allocation-table');
+      const productionCell = element(
+        'div',
+        'gantt-aps__cell gantt-aps__cell--1 gantt-aps__cell--machine-production'
+      );
+      productionCell.setAttribute('role', 'gridcell');
+      const laneProductions = ganttApsResourceLaneProductionVisuals(laneTasks);
+      const productionSegments = element('div', 'gantt-aps__machine-production-segments');
+      laneProductions.forEach(production => {
+        const productionIndex = Number(production?.productionIndex);
+        const productionNumber = Number(production?.productionNumber);
+        const displayNumber = Number.isInteger(productionNumber) && productionNumber > 0
+          ? productionNumber
+          : (Number.isFinite(productionIndex) ? productionIndex + 1 : null);
+        const label = displayNumber ? `#${displayNumber}` : '#';
+        const segment = element('span', 'gantt-aps__machine-production-segment', label);
+        segment.style.setProperty('--gantt-aps-production-color', production?.color || '#64748b');
+        segment.title = displayNumber ? `Produção ${displayNumber}` : 'Produção';
+        productionSegments.append(segment);
+      });
+      if (!laneProductions.length) {
+        productionSegments.append(element('span', 'gantt-aps__machine-production-empty', '—'));
+      }
+      productionCell.append(productionSegments);
+      productionCell.setAttribute(
+        'aria-label',
+        laneProductions.length
+          ? `Produções ${laneProductions.map(production => {
+            const index = Number(production?.productionIndex);
+            const number = Number(production?.productionNumber);
+            const displayNumber = Number.isInteger(number) && number > 0
+              ? number
+              : (Number.isFinite(index) ? index + 1 : null);
+            return displayNumber ? `#${displayNumber}` : '#';
+          }).join(', ')}`
+          : 'Sem produção'
+      );
 
-        /*
-         * A geometria REAL continua existindo.
-         *
-         * Ela continua usando 23:58 -> 23:59
-         * e serve para todas as regras normais.
-         */
-        const geometry =
-          taskGeometry(
-            task,
-            window,
-            pixelsPerHour
-          );
+      const laneMaterials = ganttApsResourceLaneMaterials(laneTasks);
+      const materialsLabel = laneMaterials.length ? laneMaterials.join(' / ') : '—';
+      const materialCell = element('div', 'gantt-aps__cell gantt-aps__cell--2 gantt-aps__cell--materials');
+      materialCell.setAttribute('role', 'gridcell');
+      materialCell.setAttribute('aria-label', materialsLabel);
+      materialCell.title = materialsLabel;
+      materialCell.append(element('span', 'gantt-aps__lane-materials', materialsLabel));
 
+      const capacityLabel = ganttApsResourceLaneDailyCapacityLabel(laneTasks);
+      const capacityCell = element('div', 'gantt-aps__cell gantt-aps__cell--3', capacityLabel);
+      capacityCell.setAttribute('role', 'gridcell');
+      capacityCell.title = capacityLabel;
+      const peopleLabel = ganttApsResourceLanePeopleLabel(laneTasks);
+      const peopleCell = element('div', 'gantt-aps__cell gantt-aps__cell--4', peopleLabel);
+      peopleCell.setAttribute('role', 'gridcell');
+      peopleCell.title = peopleLabel;
+      const utilizationLabel = ganttApsResourceLaneUtilizationLabel(laneTasks);
+      const utilizationCell = element('div', 'gantt-aps__cell gantt-aps__cell--5', utilizationLabel);
+      utilizationCell.setAttribute('role', 'gridcell');
+      utilizationCell.title = utilizationLabel;
+      table.append(productionCell, materialCell, capacityCell, peopleCell, utilizationCell);
 
-        if (!geometry) {
-          return;
-        }
+      const timeline = element('div', 'gantt-aps__timeline gantt-aps__lane');
+      timeline.dataset.resourceId = resourceId;
 
+      const dailyUtilizationByDate = isTransportLane
+        ? new Map()
+        : ganttApsResourceLaneDailyUtilization(laneTasks);
+      const utilizationTooltip = dailyUtilizationByDate.size
+        ? element('span', 'gantt-aps__utilization-tooltip')
+        : null;
 
-        /*
-         * TRANSPORTE:
-         * visual baseado nas DATAS.
-         *
-         * PRODUÇÃO:
-         * continua exatamente como antes,
-         * baseada em hora/capacidade.
-         */
-        const visualBar =
-          isTransportAllocation
-
-            ? ganttApsTransportVisualBarGeometry(
-                task,
-                window,
-                dayWidth
-              )
-
-            : ganttApsVisualBarGeometry(
-                geometry,
-                window,
-                pixelsPerHour,
-                dayWidth,
-                task.capacityPercent
-              );
-
-
-        if (!visualBar) {
-          return;
-        }
-
-
-        const row =
-  element(
-    'div',
-    'gantt-aps__row gantt-aps__row--allocation'
-  );
-
-row.dataset.allocationId =
-  String(task.id);
-
-row.dataset.resourceId =
-  resourceId;
-
-
-if (isTransportAllocation) {
-  row.dataset.transportAllocation =
-    'true';
-}
-        row.setAttribute('role', 'row');
-        row.setAttribute('aria-level', '2');
-        const table = element('div', 'gantt-aps__table gantt-aps__allocation-table');
-        const values = [
-          '',
-          productionColumnLabel(task),
-          materialLabel(task),
-          quantityCapacityLabel(task),
-          formatPeople(task.peopleCount),
-          formatPercent(task.capacityPercent)
-        ];
-        values.forEach((value, index) => {
-          const cell = element('div', `gantt-aps__cell gantt-aps__cell--${index + 1}`, index === 1 ? undefined : value);
-          cell.setAttribute('role', 'gridcell');
-          cell.title = value;
-          if (index === 2 || index === 3) cell.setAttribute('aria-label', value);
-          if (index === 1) {
-            const productions = ganttApsProductionVisuals(task);
-            cell.dataset.productionCount = String(Math.max(1, productions.length));
-            cell.style.setProperty('--gantt-aps-production-background', ganttApsProductionBackground(task));
-            cell.append(element('span', 'gantt-aps__production-label', value));
+      if (utilizationTooltip) {
+        utilizationTooltip.dataset.visible = 'false';
+        timeline.append(utilizationTooltip);
+        const hideUtilizationTooltip = () => {
+          utilizationTooltip.dataset.visible = 'false';
+        };
+        timeline.addEventListener('pointermove', event => {
+          const rect = timeline.getBoundingClientRect();
+          const localX = event.clientX - rect.left;
+          const dayIndex = Math.floor(localX / dayWidth);
+          const day = window.days?.[dayIndex];
+          if (!day || dayIndex < 0 || dayIndex >= window.days.length) {
+            hideUtilizationTooltip();
+            return;
           }
-          table.append(cell);
+          const utilization = Math.max(Number(dailyUtilizationByDate.get(day.date) || 0), 0);
+          utilizationTooltip.textContent = `${formatPercent(utilization)} utilizado`;
+          utilizationTooltip.style.left = `${(dayIndex * dayWidth) + (dayWidth / 2)}px`;
+          utilizationTooltip.dataset.visible = 'true';
         });
-        const timeline = element('div', 'gantt-aps__timeline gantt-aps__lane');
-        timeline.dataset.resourceId = resourceId;
-        window.days.forEach((day, dayIndex) => {
-          const dropCell = element('span', 'gantt-aps__drop-cell');
-          dropCell.dataset.date = day.date;
-          dropCell.dataset.resourceId = resourceId;
-          dropCell.style.left = `${dayIndex * dayWidth}px`;
-          dropCell.style.width = `${dayWidth}px`;
-          timeline.append(dropCell);
-          const nonWorking = isNonWorkingDay(day);
-          if (!nonWorking && day.isManuallyEnabled !== true) return;
-          const band = element('span', 'gantt-aps__day-band');
-          band.dataset.date = day.date;
-          band.style.left = `${dayIndex * 24 * pixelsPerHour}px`;
-          if (nonWorking) band.dataset.nonWorking = 'true';
-          if (day.isManuallyEnabled === true) band.dataset.manualWorkDate = 'true';
-          timeline.append(band);
-        });
+        timeline.addEventListener('pointerleave', hideUtilizationTooltip);
+      }
+
+      window.days.forEach((day, dayIndex) => {
+        const dropCell = element('span', 'gantt-aps__drop-cell');
+        dropCell.dataset.date = day.date;
+        dropCell.dataset.resourceId = resourceId;
+        dropCell.style.left = `${dayIndex * dayWidth}px`;
+        dropCell.style.width = `${dayWidth}px`;
+        timeline.append(dropCell);
+        const nonWorking = isNonWorkingDay(day);
+        if (!nonWorking && day.isManuallyEnabled !== true) return;
+        const band = element('span', 'gantt-aps__day-band');
+        band.dataset.date = day.date;
+        band.style.left = `${dayIndex * 24 * pixelsPerHour}px`;
+        if (nonWorking) band.dataset.nonWorking = 'true';
+        if (day.isManuallyEnabled === true) band.dataset.manualWorkDate = 'true';
+        timeline.append(band);
+      });
+
+      const renderLaneTaskBar = (task, visualBar, { transportFragmentDate = null } = {}) => {
+        if (!visualBar) return;
         const bar = element('button', 'gantt-aps__bar');
         bar.type = 'button';
         bar.dataset.allocationId = String(task.id);
+        if (transportFragmentDate) bar.dataset.transportFragmentDate = String(transportFragmentDate);
         bar.dataset.persistable = String(task.persistable !== false);
-        const canDragTask =
-  nextModel.capabilities?.manualMove === true
-  &&
-  (
-    task.persistable !== false
-    ||
-    task?.scheduleType === 'transport'
-    ||
-    Boolean(task?.transportId)
-  );
-
-bar.dataset.draggable =
-  String(canDragTask);
+        const canDragTask = nextModel.capabilities?.manualMove === true
+          && (task.persistable !== false || task?.scheduleType === 'transport' || Boolean(task?.transportId));
+        bar.dataset.draggable = String(canDragTask);
         bar.dataset.selected = String(String(task.id) === String(selectedAllocationId));
         bar.dataset.labelDetail = visualBar.width >= 132 ? 'full' : visualBar.width >= 58 ? 'production' : 'none';
         if (visualBar.clipped) bar.dataset.clipped = 'true';
@@ -2042,15 +2164,33 @@ bar.dataset.draggable =
         bar.setAttribute('aria-label', taskLabel(task, resource.name || resource.id));
         bar.title = taskLabel(task, resource.name || resource.id);
         const main = element('span', 'gantt-aps__bar-main');
-        main.append(
-          element('strong', '', productionColumnLabel(task)),
-          element('span', '', materialLabel(task))
-        );
+        main.append(element('strong', '', productionColumnLabel(task)), element('span', '', materialLabel(task)));
         bar.append(main);
         timeline.append(bar);
-        row.append(table, timeline);
-        viewport.append(row);
+      };
+
+      laneTasks.forEach(task => {
+        const isTransportAllocation = task?.scheduleType === 'transport' || Boolean(task?.transportId);
+        if (isTransportAllocation) return;
+        const geometry = taskGeometry(task, window, pixelsPerHour);
+        if (!geometry) return;
+        renderLaneTaskBar(
+          task,
+          ganttApsVisualBarGeometry(
+            geometry, window, pixelsPerHour, dayWidth, task.capacityPercent, task.startCapacityPercent
+          )
+        );
       });
+
+      ganttApsTransportDayVisualFragments(laneTasks, window, dayWidth).forEach(fragment => {
+        renderLaneTaskBar(fragment.task, fragment.visualBar, {
+          transportFragmentDate: fragment.date
+        });
+      });
+
+      row.append(table, timeline);
+      viewport.append(row);
+
     });
 
     if (window.truncated) {
@@ -2726,7 +2866,10 @@ const destination =
       if (!Array.isArray(day?.team?.shifts) || !day.team.shifts.length) return;
       const overrides = {};
       day.team.shifts.forEach(shift => {
-        overrides[String(shift.shiftId || '')] = null;
+        const shiftId = String(shift.shiftId || '');
+        overrides[`${shiftId}:matrix`] = null;
+        overrides[`${shiftId}:feital`] = null;
+        overrides[shiftId] = null;
       });
       onRequestEditDailyTeam({
         date: actionNode?.dataset?.date,
@@ -2744,7 +2887,7 @@ const destination =
       const panel = actionNode?.closest?.('.gantt-aps__day-details');
       const overrides = {};
       let invalid = false;
-      panel?.querySelectorAll?.('input[data-shift-id]').forEach(input => {
+      panel?.querySelectorAll?.('input[data-shift-id][data-team-pool]').forEach(input => {
         const raw = String(input.value ?? '').trim();
         const value = Number(raw);
         if (
@@ -2755,7 +2898,13 @@ const destination =
         ) {
           invalid = true;
         }
-        overrides[input.dataset.shiftId] = value;
+        const shiftId = String(input.dataset.shiftId || '');
+        const teamPool = String(input.dataset.teamPool || '');
+        if (!shiftId || !['matrix', 'feital'].includes(teamPool)) {
+          invalid = true;
+          return;
+        }
+        overrides[`${shiftId}:${teamPool}`] = value;
       });
       onRequestEditDailyTeam({
         date: actionNode?.dataset?.date,

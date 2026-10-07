@@ -54,7 +54,7 @@ export function nextSortDirection(currentDirection) {
   return null;
 }
 
-export function DataTable({ columns, rows, emptyText = 'Nenhum registro encontrado.', rowClass = null }) {
+export function DataTable({ columns, rows, emptyText = 'Nenhum registro encontrado.', rowClass = null, onRowClick = null }) {
   const wrapper = document.createElement('div');
   wrapper.className = 'table-wrap';
 
@@ -88,6 +88,37 @@ export function DataTable({ columns, rows, emptyText = 'Nenhum registro encontra
       const className = typeof rowClass === 'function' ? rowClass(row) : '';
       if (className) tr.className = className;
       tr.innerHTML = columns.map(column => `<td>${column.render ? column.render(row) : row[column.key] ?? ''}</td>`).join('');
+
+      if (typeof onRowClick === 'function') {
+        tr.classList.add('data-table-clickable-row');
+        tr.tabIndex = 0;
+
+        tr.addEventListener('click', event => {
+          if (
+            event.target.closest(
+              'button, a, input, select, textarea, label'
+            )
+          ) {
+            return;
+          }
+
+          onRowClick(row);
+        });
+
+        tr.addEventListener('keydown', event => {
+          if (
+            !['Enter', ' '].includes(
+              event.key
+            )
+          ) {
+            return;
+          }
+
+          event.preventDefault();
+          onRowClick(row);
+        });
+      }
+
       body.appendChild(tr);
     });
   }

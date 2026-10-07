@@ -65,14 +65,6 @@ try {
     DELETE FROM import_history
   `;
 
-  // Limpa todo o histórico antigo de inventários.
-  await tx`
-    DELETE FROM inventory_count_items
-  `;
-
-  await tx`
-    DELETE FROM inventory_counts
-  `;
 });
     const after = await counts();
 
@@ -82,11 +74,10 @@ try {
 
     console.log('');
     console.log(
-  'Historicos antigos de CSV, estoque e inventario limpos com sucesso.'
+  'Historicos antigos de CSV e estoque importado limpos com sucesso.'
 );
-
 console.log(
-  'A estrutura do Estoque antigo foi preservada, mas os dados foram zerados.'
+  'Inventarios e demais dados operacionais foram preservados.'
 );
   }
 } finally {

@@ -204,24 +204,124 @@ export function buildManualScheduleStockLedger({
   (Array.isArray(stock) ? stock : []).forEach((item, index) => {
     const materialId = String(item?.materialId ?? item?.material_id ?? '');
     const locationId = String(item?.locationId ?? item?.location_id ?? DEFAULT_LOCATION_ID) || DEFAULT_LOCATION_ID;
-    const quantity = Number(item?.quantity);
-    const unit = String(item?.unit ?? '').trim();
-    if (!materialId || !Number.isFinite(quantity)) {
-      diagnostics.push(stockDiagnostic('INVALID_STOCK_CONFIGURATION', {
-        materialId,
-        locationId,
-        message: `A entrada de estoque ${index + 1} é inválida.`,
-        details: { index, materialId, locationId, quantity: item?.quantity }
-      }));
+    const rawQuantity =
+      Number(
+        item?.quantity
+      );
+
+    /*
+     * A projeção visual do planejamento já considera
+     * estoque físico negativo como zero.
+     *
+     * O ledger manual deve usar a MESMA semântica.
+     *
+     * Estoque negativo representa ausência de saldo
+     * disponível para novas programações; ele não deve
+     * virar uma dívida que consome uma produção ou um
+     * transporte recém-programado.
+     *
+     * Exemplo:
+     *
+     * estoque inicial = -5
+     * transporte recebido = 300
+     *
+     * disponibilidade operacional do planejamento:
+     * 0 + 300 = 300
+     *
+     * e NÃO:
+     * -5 + 300 = 295
+     */
+    const quantity =
+      Number.isFinite(
+        rawQuantity
+      )
+        ? Math.max(
+            rawQuantity,
+            0
+          )
+        : rawQuantity;
+
+    const unit =
+      String(
+        item?.unit
+        ?? ''
+      ).trim();
+
+    /*
+     * Mantém apenas o diagnóstico informativo
+     * de que o ERP forneceu saldo negativo.
+     *
+     * Para o planejamento manual esse saldo já
+     * foi normalizado para zero acima.
+     */
+    if (
+      !materialId
+      ||
+      !Number.isFinite(
+        quantity
+      )
+    ) {
+      diagnostics.push(
+        stockDiagnostic(
+          'INVALID_STOCK_CONFIGURATION',
+          {
+            materialId,
+            locationId,
+            message:
+              `A entrada de estoque ${index + 1} é inválida.`,
+            details: {
+              index,
+              materialId,
+              locationId,
+              quantity:
+                item?.quantity
+            }
+          }
+        )
+      );
       return;
     }
-    if (quantity < -epsilon) {
-      diagnostics.push(stockDiagnostic('NEGATIVE_INITIAL_STOCK', {
-        materialId, locationId, balanceAfter: quantity,
-        message: `O estoque inicial de ${materialId} não pode ser negativo.`,
-        details: { quantity }
-      }));
-      return;
+
+    if (
+      Number.isFinite(
+        rawQuantity
+      )
+      &&
+      rawQuantity < -epsilon
+    ) {
+      diagnostics.push(
+        stockDiagnostic(
+          'NEGATIVE_INITIAL_STOCK',
+          {
+            materialId,
+
+            locationId,
+
+            balanceAfter:
+              0,
+
+            severity:
+              'warning',
+
+            blocking:
+              false,
+
+            message:
+              `O estoque inicial de ${materialId} está negativo e será tratado como zero no planejamento manual.`,
+
+            details: {
+              originalQuantity:
+                rawQuantity,
+
+              normalizedQuantity:
+                0,
+
+              negativeInitialStockAllowed:
+                false
+            }
+          }
+        )
+      );
     }
     if (configuredLocations.size && !configuredLocations.has(locationId)) diagnostics.push(stockDiagnostic('STOCK_LOCATION_MISMATCH', {
       materialId,
@@ -304,16 +404,46 @@ export function buildManualScheduleStockLedger({
   const relevantPoints = new Set(outputProfiles.flatMap(profile => profile.segments.flatMap(segment => [segment.start, segment.end])));
   const requirements = [];
   normalizedDependencies.forEach(dependency => {
-    const consumers = normalizedAllocations.filter(allocation => allocation.parentOperationId === dependency.consumerParentOperationId && allocation.validDate && allocation.validTime);
-    const totalWeight = consumers.reduce((sum, allocation) => sum + (Number.isFinite(allocation.quantity) && allocation.quantity > 0 ? allocation.quantity : 0), 0);
-    consumers.forEach(allocation => {
-      const required = dependency.requiredQuantity * (allocation.quantity / totalWeight);
+    /*
+     * Uma allocation física pode consolidar componentes de
+     * operações lógicas diferentes. A dependência pertence ao
+     * COMPONENTE consumidor, não necessariamente ao
+     * parentOperationId principal da allocation.
+     */
+    const consumers = normalizedAllocations.flatMap(allocation => {
+      if (!allocation.validDate || !allocation.validTime) return [];
+
+      return (allocation.components || [])
+        .filter(component => (
+          component.parentOperationId
+          === dependency.consumerParentOperationId
+          && Number.isFinite(component.quantity)
+          && component.quantity > epsilon
+        ))
+        .map(component => ({
+          allocation,
+          component,
+          quantity: component.quantity
+        }));
+    });
+
+    const totalWeight = consumers.reduce(
+      (sum, consumer) => sum + consumer.quantity,
+      0
+    );
+
+    if (!(totalWeight > epsilon)) return;
+
+    consumers.forEach(({ allocation, component, quantity }) => {
+      const required = dependency.requiredQuantity * (quantity / totalWeight);
       const segments = productiveSegments(allocation);
       const locationId = dependency.targetLocation || allocation.targetLocation || allocation.sourceLocation || DEFAULT_LOCATION_ID;
+
       requirements.push({
-        requirementId: `${dependency.dependencyId}:${allocation.allocationId}`,
+        requirementId: `${dependency.dependencyId}:${allocation.allocationId}:${component.componentId}`,
         dependencyId: dependency.dependencyId,
         allocationId: allocation.allocationId,
+        componentId: component.componentId,
         parentOperationIds: [dependency.producerParentOperationId, dependency.consumerParentOperationId],
         materialId: dependency.materialId,
         locationId,
@@ -326,8 +456,13 @@ export function buildManualScheduleStockLedger({
         reservedRemaining: 0,
         consumed: 0
       });
+
       relevantPoints.add(allocation.start);
-      segments.forEach(segment => { relevantPoints.add(segment.start); relevantPoints.add(segment.end); });
+
+      segments.forEach(segment => {
+        relevantPoints.add(segment.start);
+        relevantPoints.add(segment.end);
+      });
     });
   });
 
@@ -690,6 +825,7 @@ export function buildManualScheduleStockLedger({
       if (available + epsilon < total) {
         reportLocationMismatch(ledger, point, commitments);
         const affected = commitments.flatMap(item => item.allocationIds);
+
         diagnostics.push(stockDiagnostic('STOCK_COMMITMENT_SHORTAGE', {
           materialId: ledger.materialId, locationId: ledger.locationId, point,
           allocationIds: affected, parentOperationIds: commitments.flatMap(item => item.parentOperationIds), dependencyIds: commitments.flatMap(item => item.dependencyIds),

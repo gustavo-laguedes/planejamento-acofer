@@ -3,6 +3,10 @@ import { me } from './shared/api.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { AppShell } from './pages/AppShell.js';
 
+const storedVisualTheme = localStorage.getItem('line_visual_theme');
+document.documentElement.dataset.theme =
+  storedVisualTheme === 'dark' ? 'dark' : 'light';
+
 const root = document.getElementById('app');
 const INITIAL_AUTH_TIMEOUT_MS = 7000;
 let renderRun = 0;

@@ -1,6 +1,5 @@
 import { acceptInvitationWithPassword, requestPasswordReset, signInWithPassword } from '../shared/clerkAuth.js';
 import { api, me } from '../shared/api.js';
-import { InstitutionalFooter } from '../shared/InstitutionalFooter.js';
 
 export function LoginPage(initialError = '') {
   const invitationTicket = new URLSearchParams(window.location.search).get('__clerk_ticket') || '';
@@ -8,14 +7,18 @@ export function LoginPage(initialError = '') {
   page.className = 'login-page';
   page.innerHTML = `
     <div class="login-shell">
-      <div class="login-logo">
-        <img src="/assets/logo-acofer.png" alt="A&ccedil;o-Fer" onerror="this.style.display='none'; this.nextElementSibling.style.display='grid'" />
-        <span class="logo-fallback large">A&ccedil;o-Fer</span>
-      </div>
-      <form class="login-card ${invitationTicket ? 'invitation-form' : ''}">
+      <div class="login-panel">
+        <section class="login-panel-brand" aria-label="Marcas do sistema">
+          <div class="login-panel-brand-row">
+<img class="login-panel-brand-line" src="/assets/logo-line-black-full.png" alt="LINE" />
+            <img class="login-panel-brand-acofer" src="/assets/logo-acofer.png" alt="Aço-Fer" />
+          </div>
+        </section>
+
+        <form class="login-form-panel ${invitationTicket ? 'invitation-form' : ''}">
         <div class="login-heading">
           <h1>${invitationTicket ? 'Criar senha' : 'Acesso ao sistema'}</h1>
-          <span>${invitationTicket ? 'Concluir convite A&ccedil;o-Fer' : 'Planejamento A&ccedil;o-Fer'}</span>
+          <span>LINE • AÇO-FER</span>
         </div>
         ${invitationTicket ? `
           <label>
@@ -43,9 +46,14 @@ export function LoginPage(initialError = '') {
         <p class="form-success" hidden></p>
         <p class="form-error" ${initialError ? '' : 'hidden'}>${initialError}</p>
       </form>
+
+        <div class="login-panel-footer">
+          <span>Powered by Catrion</span>
+          <img src="/assets/logo-catrion.png" alt="Catrion" loading="lazy" />
+        </div>
+      </div>
     </div>
   `;
-  page.querySelector('.login-shell').appendChild(InstitutionalFooter());
 
   page.querySelector('form').addEventListener('submit', async event => {
     event.preventDefault();
@@ -75,6 +83,16 @@ export function LoginPage(initialError = '') {
       }
       await api('/auth/session/activate', { method: 'POST', redirectOnAuthError: false });
       await me();
+      sessionStorage.removeItem('planejamento_active_tab');
+      sessionStorage.setItem('planejamento_active_tab', 'dashboardReports');
+
+      const loginUrl = new URL(window.location.href);
+      loginUrl.searchParams.set('tab', 'dashboardReports');
+      window.history.replaceState(
+        null,
+        '',
+        loginUrl.pathname + loginUrl.search + loginUrl.hash
+      );
       await api('/auth/events/login', { method: 'POST' }).catch(() => {});
       window.dispatchEvent(new CustomEvent('planejamento:navigate'));
     } catch (err) {

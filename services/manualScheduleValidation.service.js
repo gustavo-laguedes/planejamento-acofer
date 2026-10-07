@@ -407,47 +407,398 @@ function uniqueStrings(values) {
   return [...new Set((Array.isArray(values) ? values : [values]).map(String).filter(Boolean))].sort();
 }
 
+function normalizeOperationIdentity(value) {
+  return String(value ?? '')
+    .trim()
+    .replace(/:day-\d+$/i, '');
+}
+
+
 function operationParentId(operation = {}) {
-  return String(
+  return normalizeOperationIdentity(
     operation.parentOperationId
     ?? operation.calendarParentOperationId
     ?? operation.splitParentOperationId
     ?? operation.operationId
     ?? ''
-  ).replace(/:day-\d+$/i, '');
+  );
 }
 
-function normalizeDependencies(dependencies, operations) {
-  const operationList = Array.isArray(operations) ? operations : [];
-  const parentByOperationId = new Map();
-  operationList.forEach(operation => {
-    const parentId = operationParentId(operation);
-    [operation?.operationId, operation?.id, parentId].map(String).filter(Boolean)
-      .forEach(id => parentByOperationId.set(id.replace(/:day-\d+$/i, ''), parentId));
-  });
-  const resolveParent = value => {
-    const id = String(value ?? '').replace(/:day-\d+$/i, '');
-    return parentByOperationId.get(id) || id;
+
+/*
+ * =========================================================
+ * ALIASES DAS OPERAÇÕES AGRUPADAS
+ * =========================================================
+ *
+ * O planning.service pode agrupar uma operação e gerar:
+ *
+ *   group:41|Aço-8|CA60 5,0 Bobina|un
+ *
+ * enquanto o calendário manual continua trabalhando com:
+ *
+ *   0:41
+ *
+ * Os dois IDs representam a MESMA operação lógica.
+ *
+ * groupedOperationIds e productionBreakdown preservam
+ * justamente essa ligação entre o grupo e os IDs originais.
+ */
+function operationIdentityAliases(operation = {}) {
+
+  const breakdown =
+    Array.isArray(
+      operation?.productionBreakdown
+    )
+      ? operation.productionBreakdown
+      : [];
+
+
+  const rawIds = [
+
+    operation?.operationId,
+
+    operation?.id,
+
+    operation?.parentOperationId,
+
+    operation?.calendarParentOperationId,
+
+    operation?.splitParentOperationId,
+
+    operationParentId(
+      operation
+    ),
+
+
+    ...(
+      Array.isArray(
+        operation?.groupedOperationIds
+      )
+        ? operation.groupedOperationIds
+        : []
+    ),
+
+
+    ...breakdown.flatMap(
+      part => [
+
+        part?.operationId,
+
+        part?.id,
+
+        part?.parentOperationId,
+
+        part?.calendarParentOperationId,
+
+        part?.splitParentOperationId
+
+      ]
+    )
+
+  ];
+
+
+  return [
+    ...new Set(
+
+      rawIds
+
+        .filter(
+          value =>
+            value !== null
+            &&
+            value !== undefined
+            &&
+            String(
+              value
+            ).trim() !== ''
+        )
+
+        .map(
+          normalizeOperationIdentity
+        )
+
+        .filter(
+          Boolean
+        )
+
+    )
+  ];
+}
+
+
+/*
+ * Converte qualquer identidade conhecida de uma operação
+ * para a identidade canônica usada pelo planejamento.
+ *
+ * Exemplos:
+ *
+ * 0:41
+ * 0:41:day-1
+ * group:41|...
+ *
+ * todos passam a apontar para:
+ *
+ * group:41|...
+ */
+function buildOperationParentResolver(
+  operations = []
+) {
+
+  const parentByOperationId =
+    new Map();
+
+
+  (
+    Array.isArray(
+      operations
+    )
+      ? operations
+      : []
+  )
+    .forEach(
+      operation => {
+
+        const parentId =
+          operationParentId(
+            operation
+          );
+
+
+        if (!parentId) {
+          return;
+        }
+
+
+        operationIdentityAliases(
+          operation
+        )
+          .forEach(
+            alias => {
+
+              parentByOperationId.set(
+                alias,
+                parentId
+              );
+
+            }
+          );
+
+      }
+    );
+
+
+  return value => {
+
+    const id =
+      normalizeOperationIdentity(
+        value
+      );
+
+
+    return (
+      parentByOperationId.get(
+        id
+      )
+      ||
+      id
+    );
+
   };
-  const explicit = Array.isArray(dependencies) ? dependencies : [];
+}
+
+
+function normalizeDependencies(
+  dependencies,
+  operations,
+  normalizedAllocations = []
+) {
+
+  const operationList =
+    Array.isArray(
+      operations
+    )
+      ? operations
+      : [];
+
+
+    const resolveParent =
+    buildOperationParentResolver(
+      operationList
+    );
+
+
+  /*
+   * =====================================================
+   * LOCAL REAL DAS OPERAÇÕES MANUAIS
+   * =====================================================
+   *
+   * buildPlan() trabalha com operações agrupadas e elas
+   * nem sempre carregam sourceLocation / targetLocation.
+   *
+   * As allocations manuais já sabem onde estão:
+   *
+   * Bobina -> MATRIZ
+   * Reto   -> FEITAL
+   *
+   * Usamos isso como fonte de verdade para completar
+   * os locais das dependências.
+   */
+  const locationsByOperation =
+    new Map();
+
+
+  const registerAllocationLocation = (
+    operationId,
+    allocation
+  ) => {
+
+    const id =
+      normalizeOperationIdentity(
+        operationId
+      );
+
+
+    const locationId =
+      String(
+        allocation?.sourceLocation
+        ||
+        allocation?.targetLocation
+        ||
+        allocation?.locationId
+        ||
+        allocation?.location
+        ||
+        ''
+      ).trim();
+
+
+    if (
+      !id
+      ||
+      !locationId
+    ) {
+      return;
+    }
+
+
+    if (
+      !locationsByOperation.has(
+        id
+      )
+    ) {
+      locationsByOperation.set(
+        id,
+        new Set()
+      );
+    }
+
+
+    locationsByOperation
+      .get(id)
+      .add(locationId);
+
+  };
+
+
+  (
+    Array.isArray(
+      normalizedAllocations
+    )
+      ? normalizedAllocations
+      : []
+  ).forEach(
+    allocation => {
+
+      registerAllocationLocation(
+        allocation?.parentOperationId,
+        allocation
+      );
+
+
+      (
+        Array.isArray(
+          allocation?.components
+        )
+          ? allocation.components
+          : []
+      ).forEach(
+        component => {
+
+          registerAllocationLocation(
+            component?.parentOperationId,
+            allocation
+          );
+
+        }
+      );
+
+    }
+  );
+
+
+  const allocationLocation =
+    operationId => {
+
+      const values =
+        [
+          ...(
+            locationsByOperation.get(
+              normalizeOperationIdentity(
+                operationId
+              )
+            )
+            || []
+          )
+        ];
+
+
+      return values.length === 1
+        ? values[0]
+        : '';
+
+    };
+
+
+  const explicit =
+    Array.isArray(dependencies)
+      ? dependencies
+      : [];
   const derived = [];
+
   operationList.forEach(consumer => {
-    const requirements = Array.isArray(consumer?.dependencyRequirements) && consumer.dependencyRequirements.length
-      ? consumer.dependencyRequirements
-      : (consumer?.dependencyOperationIds || []).map(operationId => ({ operationId }));
-    requirements.forEach((requirement, index) => derived.push({
-      dependencyId: `dependency:${operationParentId(consumer)}:${index + 1}`,
-      producerParentOperationId: resolveParent(requirement?.producerParentOperationId ?? requirement?.operationId ?? requirement?.materialId),
-      consumerParentOperationId: operationParentId(consumer),
-      materialId: requirement?.materialId ?? operationList.find(item => operationParentId(item) === resolveParent(requirement?.operationId))?.materialId,
-      requiredQuantity: requirement?.requiredQuantity ?? requirement?.requiredQty,
-      sourceLocation: requirement?.sourceLocation ?? requirement?.originLocationId,
-      targetLocation: requirement?.targetLocation ?? consumer?.locationId ?? consumer?.destinationLocationId,
-      transportId: requirement?.transportId
-    }));
+    const requirements =
+      Array.isArray(consumer?.dependencyRequirements)
+      && consumer.dependencyRequirements.length
+        ? consumer.dependencyRequirements
+        : (consumer?.dependencyOperationIds || []).map(operationId => ({ operationId }));
+
+    requirements.forEach((requirement, index) => {
+      const producerParentOperationId = resolveParent(
+        requirement?.producerParentOperationId
+        ?? requirement?.operationId
+        ?? requirement?.materialId
+      );
+      derived.push({
+        dependencyId: `dependency:${operationParentId(consumer)}:${index + 1}`,
+        producerParentOperationId,
+        consumerParentOperationId: operationParentId(consumer),
+        materialId: requirement?.materialId
+          ?? operationList.find(item => (
+            operationParentId(item) === resolveParent(requirement?.operationId)
+          ))?.materialId,
+        requiredQuantity: requirement?.requiredQuantity ?? requirement?.requiredQty,
+        sourceLocation: requirement?.sourceLocation ?? requirement?.originLocationId,
+        targetLocation: requirement?.targetLocation
+          ?? consumer?.locationId
+          ?? consumer?.destinationLocationId,
+        transportId: requirement?.transportId
+      });
+    });
   });
+
   const source = explicit.length ? explicit : derived;
-  return source.map((dependency, index) => {
+  const normalized = source.map((dependency, index) => {
     const sourceParents = uniqueStrings(dependency?.sourceParentOperationIds || []);
     const producerParentOperationId = resolveParent(
       dependency?.producerParentOperationId
@@ -465,22 +816,99 @@ function normalizeDependencies(dependencies, operations) {
       ?? dependency?.targetOperationId
     );
     const materialId = String(dependency?.materialId ?? dependency?.material_id ?? '');
+
     return {
       dependencyId: String(dependency?.dependencyId ?? dependency?.id ?? `dependency-${index + 1}`),
       producerParentOperationId,
       consumerParentOperationId,
       materialId,
-      requiredQuantity: Number(dependency?.requiredQuantity ?? dependency?.requiredQty ?? dependency?.quantity),
-      sourceLocation: String(dependency?.sourceLocation ?? dependency?.originLocationId ?? dependency?.originLocation ?? ''),
-      targetLocation: String(dependency?.targetLocation ?? dependency?.destinationLocationId ?? dependency?.destinationLocation ?? ''),
+      requiredQuantity: Number(
+        dependency?.requiredQuantity
+        ?? dependency?.requiredQty
+        ?? dependency?.quantity
+      ),
+      sourceLocation: String(
+        dependency?.sourceLocation
+        || dependency?.originLocationId
+        || dependency?.originLocation
+        || allocationLocation(producerParentOperationId)
+        || ''
+      ),
+      targetLocation: String(
+        dependency?.targetLocation
+        || dependency?.destinationLocationId
+        || dependency?.destinationLocation
+        || allocationLocation(consumerParentOperationId)
+        || ''
+      ),
       transportId: String(dependency?.transportId ?? ''),
       unit: String(dependency?.unit ?? ''),
-      sourceParentOperationIds: uniqueStrings(sourceParents.length ? sourceParents : [producerParentOperationId])
+      sourceParentOperationIds: uniqueStrings(
+        (sourceParents.length ? sourceParents : [producerParentOperationId]).map(resolveParent)
+      )
     };
   });
+
+  if (explicit.length) {
+    return normalized;
+  }
+
+  const deduplicated = new Map();
+  normalized.forEach(dependency => {
+    const canonicalSourceParents = uniqueStrings(
+      (dependency?.sourceParentOperationIds || []).map(resolveParent)
+    );
+    const identity = JSON.stringify([
+      String(dependency?.producerParentOperationId || ''),
+      String(dependency?.consumerParentOperationId || ''),
+      String(dependency?.materialId || ''),
+      String(dependency?.sourceLocation || ''),
+      String(dependency?.targetLocation || ''),
+      String(dependency?.transportId || ''),
+      String(dependency?.unit || ''),
+      canonicalSourceParents
+    ]);
+    const existing = deduplicated.get(identity);
+
+    if (!existing) {
+      deduplicated.set(identity, {
+        ...dependency,
+        sourceParentOperationIds: canonicalSourceParents
+      });
+      return;
+    }
+
+    const existingRequiredQuantity = Number(existing.requiredQuantity);
+    const incomingRequiredQuantity = Number(dependency?.requiredQuantity);
+    if (
+      Number.isFinite(incomingRequiredQuantity)
+      && (
+        !Number.isFinite(existingRequiredQuantity)
+        || incomingRequiredQuantity > existingRequiredQuantity
+      )
+    ) {
+      existing.requiredQuantity = incomingRequiredQuantity;
+    }
+
+    existing.sourceParentOperationIds = uniqueStrings([
+      ...(existing.sourceParentOperationIds || []),
+      ...canonicalSourceParents
+    ]);
+  });
+
+  return [...deduplicated.values()];
 }
 
-function normalizeTransports(transports) {
+function normalizeTransports(
+  transports,
+  operations = []
+) {
+  const resolveParent =
+    buildOperationParentResolver(
+      operations
+    );
+
+
   return (Array.isArray(transports) ? transports : []).map((transport, index) => {
     const startDate = String(transport?.startDate ?? transport?.date ?? '');
     const startTime = String(transport?.startTime ?? '');
@@ -510,16 +938,33 @@ function normalizeTransports(transports) {
             ? 'start'
             : 'end',
 
-      producerParentOperationIds:
+            producerParentOperationIds:
         uniqueStrings(
-          transport
-            ?.producerParentOperationIds
-          || transport
-            ?.sourceParentOperationIds
-          || []
+          (
+            transport
+              ?.producerParentOperationIds
+            || transport
+              ?.sourceParentOperationIds
+            || []
+          )
+            .map(
+              resolveParent
+            )
         ),
-      consumerParentOperationIds: uniqueStrings(transport?.consumerParentOperationIds || transport?.targetParentOperationIds || []),
-      unit: String(transport?.unit ?? ''),
+
+      consumerParentOperationIds:
+        uniqueStrings(
+          (
+            transport
+              ?.consumerParentOperationIds
+            || transport
+              ?.targetParentOperationIds
+            || []
+          )
+            .map(
+              resolveParent
+            )
+        ),      unit: String(transport?.unit ?? ''),
       startDate,
       startTime,
       endDate,
@@ -786,8 +1231,19 @@ function evaluateDependencyRules({
   allowStockSupply,
   diagnostics
 }) {
-  const normalizedDependencies = normalizeDependencies(dependencies, operations);
-  const normalizedTransports = normalizeTransports(transports);
+    const normalizedDependencies =
+    normalizeDependencies(
+      dependencies,
+      operations,
+      normalizedAllocations
+    );
+
+
+  const normalizedTransports =
+    normalizeTransports(
+      transports,
+      operations
+    );
   const status = initialDependencyStatus(normalizedDependencies);
   const addIssue = (diagnostic, dependencyIds = []) => {
     diagnostics.push(diagnostic);
@@ -808,7 +1264,16 @@ function evaluateDependencyRules({
   normalizedAllocations.forEach(allocation => {
     status.byAllocationId[allocation.allocationId] = { incoming: [], outgoing: [], state: 'ok' };
   });
-  if (!normalizedDependencies.length) return { dependencyStatus: status, normalizedDependencies };
+    if (!normalizedDependencies.length) {
+    return {
+      dependencyStatus:
+        status,
+
+      normalizedDependencies,
+
+      normalizedTransports
+    };
+  }
 
   const logicalProfiles = [];
   normalizedAllocations.forEach(allocation => {
@@ -1195,7 +1660,14 @@ function evaluateDependencyRules({
     item.incoming = uniqueStrings(item.incoming);
     item.outgoing = uniqueStrings(item.outgoing);
   });
-  return { dependencyStatus: status, normalizedDependencies };
+    return {
+    dependencyStatus:
+      status,
+
+    normalizedDependencies,
+
+    normalizedTransports
+  };
 }
 
 export function validateManualScheduleTemporalRules({
@@ -1219,9 +1691,144 @@ export function validateManualScheduleTemporalRules({
   teamOverrides = [],
   setupOverrides = []
 } = {}) {
-  const sourceAllocations = Array.isArray(draft?.allocations) ? draft.allocations : [];
-  const normalizedAllocations = sourceAllocations.map(normalizeAllocation);
-  const normalizedShifts = (Array.isArray(shifts) ? shifts : []).map(normalizeShift);
+  const sourceAllocations =
+  Array.isArray(
+    draft?.allocations
+  )
+    ? draft.allocations
+    : [];
+
+
+/*
+ * =========================================================
+ * IDENTIDADE DAS ALLOCATIONS MANUAIS
+ * =========================================================
+ *
+ * IMPORTANTE:
+ *
+ * A simulação persistida pode trabalhar com:
+ *
+ *   group:41|Aço-8|CA60 5,0 Bobina|un
+ *
+ * enquanto a allocation criada pelo calendário manual
+ * continua ligada ao ID original:
+ *
+ *   0:41
+ *
+ * Isso NÃO significa que a allocation perdeu sua operação.
+ *
+ * São apenas duas identidades diferentes para a mesma
+ * operação lógica.
+ *
+ * Canonicalizamos somente a CÓPIA INTERNA usada pela
+ * validação.
+ *
+ * O draft original NÃO é alterado.
+ */
+const resolveParentOperationId =
+  buildOperationParentResolver(
+    operations
+  );
+
+
+const normalizedAllocations =
+
+  sourceAllocations
+
+    .map(
+      normalizeAllocation
+    )
+
+    .map(
+      allocation => ({
+
+        ...allocation,
+
+
+        /*
+         * ID principal da operação.
+         */
+        parentOperationId:
+          resolveParentOperationId(
+            allocation.parentOperationId
+          ),
+
+
+        /*
+         * IDs de origem preservados em merges,
+         * splits e movimentações manuais.
+         */
+        sourceParentOperationIds:
+          uniqueStrings(
+
+            (
+              allocation
+                .sourceParentOperationIds
+              || []
+            )
+              .map(
+                resolveParentOperationId
+              )
+
+          ),
+
+
+        /*
+         * Uma allocation pode carregar componentes.
+         *
+         * Eles também precisam falar a mesma identidade
+         * usada pelas dependências agrupadas.
+         */
+        components:
+
+          (
+            allocation.components
+            || []
+          )
+            .map(
+              component => ({
+
+                ...component,
+
+
+                parentOperationId:
+                  resolveParentOperationId(
+                    component.parentOperationId
+                  ),
+
+
+                sourceParentOperationIds:
+                  uniqueStrings(
+
+                    (
+                      component
+                        .sourceParentOperationIds
+                      || []
+                    )
+                      .map(
+                        resolveParentOperationId
+                      )
+
+                  )
+
+              })
+            )
+
+      })
+    );
+
+
+const normalizedShifts =
+  (
+    Array.isArray(
+      shifts
+    )
+      ? shifts
+      : []
+  )
+    .map(
+      normalizeShift
+    );
   const validShifts = normalizedShifts.filter(shift => shift.valid);
   const releasedDates = normalizedDateSet(manualWorkDates);
   const suppliedHolidays = normalizedDateSet(holidays);
@@ -1371,7 +1978,11 @@ export function validateManualScheduleTemporalRules({
     }
   });
 
-  const { dependencyStatus, normalizedDependencies } = evaluateDependencyRules({
+    const {
+    dependencyStatus,
+    normalizedDependencies,
+    normalizedTransports
+  } = evaluateDependencyRules({
     normalizedAllocations,
     validShifts,
     operations,
@@ -1412,10 +2023,7 @@ export function validateManualScheduleTemporalRules({
 
       normalizedDependencies,
 
-      normalizedTransports:
-        normalizeTransports(
-          transports
-        ),
+           normalizedTransports,
 
       normalizedPlannedReceipts:
         normalizePlannedReceipts(

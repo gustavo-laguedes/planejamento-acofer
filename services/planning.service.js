@@ -356,29 +356,29 @@ function stockForMaterial(
     return currentRows.reduce(
       (sum, row) => {
 
+        /*
+         * currentQty já representa o saldo físico
+         * atual calculado pelo módulo Estoque.
+         *
+         * projectedQty é a visão projetada que
+         * considera pendências e reservas.
+         *
+         * A simulação começa do estoque físico real.
+         * Portanto NÃO descontamos
+         * productionReserveQty novamente aqui.
+         */
         const currentQty =
           toNumber(
             row.currentQty ??
             row.current_qty
           );
 
-        /*
-         * Planejamento REAL não deve consumir
-         * novamente aquilo que outro plano
-         * já reservou.
-         */
-        const reservedQty =
-          toNumber(
-            row.movementTotals
-              ?.productionReserveQty
-            ??
-            row.production_reserve_qty
-          );
-
         return (
           sum +
-          currentQty -
-          reservedQty
+          Math.max(
+            currentQty,
+            0
+          )
         );
       },
       0
@@ -531,6 +531,120 @@ function stockChoiceMap(payload = {}) {
   ]));
 }
 
+function stockLimitRecoveryQuantity(
+  operationOverrides = {},
+  material,
+  productionIndex = 0
+) {
+  /*
+   * O PlanningPage salva a recuperação assim:
+   *
+   * operationOverrides[
+   *   `${productionIndex}:${materialId}`
+   * ].stockLimitRecoveryQty
+   *
+   * Portanto a busca precisa priorizar exatamente
+   * materialId + productionIndex.
+   *
+   * Não podemos depender apenas de materialIdentifier(),
+   * porque ele pode devolver operationId antes do id
+   * físico do material.
+   */
+
+  const rawMaterialId =
+    material?.id
+    ??
+    material?.materialId
+    ??
+    null;
+
+
+  const operationId =
+    String(
+      material?.operationId
+      ??
+      ''
+    ).trim();
+
+
+  const keys = [
+    rawMaterialId == null
+      ? null
+      : `${Number(productionIndex)}:${String(rawMaterialId)}`,
+
+    operationId || null,
+
+    rawMaterialId == null
+      ? null
+      : String(rawMaterialId),
+
+    material?.materialId == null
+      ? null
+      : String(material.materialId)
+  ]
+    .filter(Boolean);
+
+
+  const visited =
+    new Set();
+
+
+  for (
+    const key
+    of keys
+  ) {
+
+    if (
+      visited.has(key)
+    ) {
+      continue;
+    }
+
+
+    visited.add(key);
+
+
+    const override =
+      operationOverrides?.[
+        key
+      ];
+
+
+    if (
+      !override
+      ||
+      !Object.prototype.hasOwnProperty.call(
+        override,
+        'stockLimitRecoveryQty'
+      )
+    ) {
+      continue;
+    }
+
+
+    const quantity =
+      Number(
+        override.stockLimitRecoveryQty
+      );
+
+
+    if (
+      Number.isFinite(
+        quantity
+      )
+    ) {
+      return Math.max(
+        quantity,
+        0
+      );
+    }
+
+  }
+
+
+  return 0;
+}
+
 function selectedInputs(material, inputsByMaterialId, operationOverrides = {}, productionIndex = null) {
   const allInputs = inputsByMaterialId.get(String(material.id)) || [];
   const override = overrideForMaterial(operationOverrides, material, productionIndex);
@@ -580,8 +694,9 @@ function operationForMaterial(material, state, productionOrder, context, request
     materialCode: materialCode(material),
     requiredQty: Number(toNumber(requiredQty).toFixed(3)),
     stockQty: Number(stockQty.toFixed(3)),
-    stockUsedQty: Number(toNumber(state.stockUsedQty).toFixed(3)),
+        stockUsedQty: Number(toNumber(state.stockUsedQty).toFixed(3)),
     produceQty: Number(produceQty.toFixed(3)),
+    stockLimitRecoveryQty: Number(toNumber(state.stockLimitRecoveryQty).toFixed(3)),
     unit: material.primary_unit,
     forceStockOnly: state.forceStockOnly === true,
     status: produceQty <= 0 ? 'Estoque suficiente' : 'Produzir diferença',
@@ -596,7 +711,7 @@ function operationForMaterial(material, state, productionOrder, context, request
   };
 }
 
-function buildRequirementTree({ material, quantity, materialsById, inputsByMaterialId, matrixRows, requestedMachine, requestedPeople, operationOverrides = {}, states, productionIndex = 0, productionTitle = '', productionColor = null }, stack = []) {
+function buildRequirementTree({ material, quantity, materialsById, inputsByMaterialId, matrixRows, requestedMachine, requestedPeople, operationOverrides = {}, states, productionIndex = 0, productionNumber = productionIndex + 1, productionTitle = '', productionColor = null }, stack = []) {
   const state = states?.get(String(material.id)) || {};
   const stockQty = toNumber(state.stockAvailable);
   const produceQty = toNumber(state.produceQty);
@@ -605,6 +720,7 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
   const matrix = resolveMatrix(material, matrixRows, override?.machineName || requestedMachine, override?.peopleCount ?? requestedPeople);
   const node = {
     productionIndex,
+    productionNumber,
     productionKey: `production-${productionIndex}`,
     productionTitle,
     productionColor,
@@ -613,8 +729,9 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
     materialCode: materialCode(material),
     requiredQty: toNumber(quantity),
     stockQty: Number(stockQty.toFixed(3)),
-    stockUsedQty: Number(toNumber(state.stockUsedQty).toFixed(3)),
+        stockUsedQty: Number(toNumber(state.stockUsedQty).toFixed(3)),
     produceQty: Number(produceQty.toFixed(3)),
+    stockLimitRecoveryQty: Number(toNumber(state.stockLimitRecoveryQty).toFixed(3)),
     unit: material.primary_unit,
     forceStockOnly: state.forceStockOnly === true,
     status: produceQty <= 0 ? 'Estoque suficiente' : 'Produzir diferença',
@@ -644,6 +761,7 @@ function buildRequirementTree({ material, quantity, materialsById, inputsByMater
       operationOverrides,
       states,
       productionIndex,
+      productionNumber,
       productionTitle,
       productionColor
     }, [...stack, String(material.id)]);
@@ -671,12 +789,29 @@ function operationRank(material, context, operationOverrides = {}, stack = [], p
   ));
 }
 
-function buildAggregatedOperations({ material, quantity, context, requestedMachine, requestedPeople, operationOverrides = {}, stockLedger = makeStockLedger(context), productionIndex = 0, productionTitle = '', productionColor = null, forcedStockOnly = new Set(), skippedProduction = new Set(), stockChoices = new Map() }) {
+function buildAggregatedOperations({
+  material,
+  quantity,
+  context,
+  requestedMachine,
+  requestedPeople,
+  operationOverrides = {},
+  stockLedger = makeStockLedger(context),
+  productionIndex = 0,
+  productionTitle = '',
+  productionColor = null,
+  forcedStockOnly = new Set(),
+  skippedProduction = new Set(),
+  stockChoices = new Map(),
+  stockLimitRecoveryProductionIndex = productionIndex,
+  applyStockLimitRecovery = true
+}) {
   const states = new Map();
   const MAX_REQUIREMENT_EXPANSIONS = 10000;
 
   function stateFor(currentMaterial) {
     const key = String(currentMaterial.id);
+
     if (!states.has(key)) {
       states.set(key, {
         material: currentMaterial,
@@ -685,10 +820,12 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
         stockAvailable: 0,
         stockUsedQty: 0,
         produceQty: 0,
+        stockLimitRecoveryQty: 0,
         forceStockOnly: false,
         skipProduction: false
       });
     }
+
     return states.get(key);
   }
 
@@ -697,135 +834,698 @@ function buildAggregatedOperations({ material, quantity, context, requestedMachi
     quantity: toNumber(quantity),
     path: [String(material.id)]
   }];
+
   let guard = 0;
-  while (queue.length && guard < MAX_REQUIREMENT_EXPANSIONS) {
+
+  while (
+    queue.length
+    &&
+    guard < MAX_REQUIREMENT_EXPANSIONS
+  ) {
     guard += 1;
+
     const item = queue.shift();
     const currentMaterial = item.material;
     const state = stateFor(currentMaterial);
-    state.requiredQty = Number((toNumber(state.requiredQty) + toNumber(item.quantity)).toFixed(6));
-    const isFinalProduct = String(currentMaterial.id) === String(material.id);
-    const productionKey = stockOnlyKey(productionIndex, currentMaterial.id);
-    const skipProduction = skippedProduction.has(productionKey);
-    const stockQty = stockLedger.available(currentMaterial);
-    const explicitStockChoice = stockChoices.has(productionKey) ? stockChoices.get(productionKey) : null;
-    const useStockBalance = !isFinalProduct
-      && explicitStockChoice !== false
-      && (forcedStockOnly.has(productionKey) || stockQty > 0);
-    const stockUsedQty = useStockBalance || skipProduction ? Math.min(Math.max(stockQty, 0), toNumber(state.requiredQty)) : 0;
-    const produceQty = skipProduction ? 0 : Math.max(toNumber(state.requiredQty) - stockUsedQty, 0);
-    state.stockAvailable = stockQty;
-    state.stockUsedQty = stockUsedQty;
-    state.produceQty = produceQty;
-    state.forceStockOnly = useStockBalance || skipProduction;
-    state.skipProduction = skipProduction;
-    const deltaProduceQty = Number((produceQty - state.expandedProduceQty).toFixed(6));
-    if (deltaProduceQty <= 0 || currentMaterial.is_initial_raw_material === true) continue;
-    state.expandedProduceQty = produceQty;
-    const scopedMaterial = { ...currentMaterial, operationId: `${productionIndex}:${currentMaterial.id}`, productionIndex };
-    const inputs = selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex);
-    for (const input of inputs) {
-      const inputMaterial = context.materialsById.get(String(input.input_material_id));
-      if (!inputMaterial) continue;
-      const inputMaterialId = String(inputMaterial.id);
-      if (item.path.includes(inputMaterialId)) continue;
+
+    state.requiredQty = Number(
+      (
+        toNumber(state.requiredQty)
+        +
+        toNumber(item.quantity)
+      ).toFixed(6)
+    );
+
+    const isFinalProduct =
+      String(currentMaterial.id)
+      ===
+      String(material.id);
+
+    const productionKey =
+      stockOnlyKey(
+        productionIndex,
+        currentMaterial.id
+      );
+
+    const skipProduction =
+      skippedProduction.has(
+        productionKey
+      );
+
+    const stockQty =
+      stockLedger.available(
+        currentMaterial
+      );
+
+    const explicitStockChoice =
+      stockChoices.has(productionKey)
+        ? stockChoices.get(productionKey)
+        : null;
+
+    const useStockBalance =
+      !isFinalProduct
+      &&
+      explicitStockChoice !== false
+      &&
+      (
+        forcedStockOnly.has(productionKey)
+        ||
+        stockQty > 0
+      );
+
+    const stockUsedQty =
+      useStockBalance
+      ||
+      skipProduction
+
+        ? Math.min(
+            Math.max(stockQty, 0),
+            toNumber(state.requiredQty)
+          )
+
+        : 0;
+
+    /*
+     * Quantidade que o motor normalmente
+     * precisaria fabricar para atender
+     * a produção solicitada.
+     */
+    const normalProduceQty =
+      Math.max(
+        toNumber(state.requiredQty)
+        -
+        stockUsedQty,
+        0
+      );
+
+    /*
+     * Se o estoque começou abaixo do mínimo,
+     * o modal pode solicitar uma produção
+     * adicional deste material.
+     *
+     * Matéria-prima inicial não pode ser
+     * fabricada automaticamente.
+     */
+    const recoveryQty =
+      applyStockLimitRecovery
+      &&
+      currentMaterial.is_initial_raw_material
+      !==
+      true
+
+        ? stockLimitRecoveryQuantity(
+            operationOverrides,
+            currentMaterial,
+            stockLimitRecoveryProductionIndex
+          )
+
+        : 0;
+
+    /*
+     * Aqui está a regra nova:
+     *
+     * produção normal
+     * +
+     * recomposição do estoque mínimo.
+     */
+    const produceQty =
+      skipProduction
+
+        ? 0
+
+        : normalProduceQty
+          +
+          recoveryQty;
+
+    state.stockAvailable =
+      stockQty;
+
+    state.stockUsedQty =
+      stockUsedQty;
+
+    state.produceQty =
+      produceQty;
+
+    state.stockLimitRecoveryQty =
+      recoveryQty;
+
+    state.forceStockOnly =
+      useStockBalance
+      ||
+      skipProduction;
+
+    state.skipProduction =
+      skipProduction;
+
+    const deltaProduceQty =
+      Number(
+        (
+          produceQty
+          -
+          state.expandedProduceQty
+        ).toFixed(6)
+      );
+
+    if (
+      deltaProduceQty <= 0
+      ||
+      currentMaterial.is_initial_raw_material
+      ===
+      true
+    ) {
+      continue;
+    }
+
+    state.expandedProduceQty =
+      produceQty;
+
+    const scopedMaterial = {
+      ...currentMaterial,
+      operationId:
+        `${productionIndex}:${currentMaterial.id}`,
+      productionIndex
+    };
+
+    const inputs =
+      selectedInputs(
+        scopedMaterial,
+        context.inputsByMaterialId,
+        operationOverrides,
+        productionIndex
+      );
+
+    for (
+      const input
+      of inputs
+    ) {
+      const inputMaterial =
+        context.materialsById.get(
+          String(
+            input.input_material_id
+          )
+        );
+
+      if (!inputMaterial) {
+        continue;
+      }
+
+      const inputMaterialId =
+        String(
+          inputMaterial.id
+        );
+
+      if (
+        item.path.includes(
+          inputMaterialId
+        )
+      ) {
+        continue;
+      }
+
       queue.push({
-        material: inputMaterial,
-        quantity: Number((deltaProduceQty * toNumber(input.qty_per_output || 1)).toFixed(6)),
-        path: [...item.path, inputMaterialId]
+        material:
+          inputMaterial,
+
+        quantity:
+          Number(
+            (
+              deltaProduceQty
+              *
+              toNumber(
+                input.qty_per_output
+                ||
+                1
+              )
+            ).toFixed(6)
+          ),
+
+        path: [
+          ...item.path,
+          inputMaterialId
+        ]
       });
     }
   }
 
   if (queue.length) {
-    const error = new Error('A necessidade de materiais ficou grande demais. Verifique o fluxo produtivo, fatores de conversão ou ciclos entre materiais.');
+    const error =
+      new Error(
+        'A necessidade de materiais ficou grande demais. Verifique o fluxo produtivo, fatores de conversão ou ciclos entre materiais.'
+      );
+
     error.status = 400;
+
     throw error;
   }
 
-  for (const state of states.values()) {
-    if (state.forceStockOnly) stockLedger.consume(state.material, state.stockUsedQty);
+  for (
+    const state
+    of states.values()
+  ) {
+    if (
+      state.forceStockOnly
+    ) {
+      stockLedger.consume(
+        state.material,
+        state.stockUsedQty
+      );
+    }
   }
 
-  const unavailableMaterialIds = new Set([...states.values()]
-    .filter(state => state.skipProduction && toNumber(state.requiredQty) > toNumber(state.stockUsedQty))
-    .map(state => String(state.material.id)));
-  const blockedByUnavailableDependency = (currentMaterial, stack = []) => {
-    const materialId = String(currentMaterial?.id ?? '');
-    if (!materialId || stack.includes(materialId)) return false;
-    if (unavailableMaterialIds.has(materialId)) return true;
-    if (currentMaterial?.is_initial_raw_material === true) return false;
-    const scopedMaterial = { ...currentMaterial, operationId: `${productionIndex}:${currentMaterial.id}`, productionIndex };
-    return selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex)
-      .map(input => context.materialsById.get(String(input.input_material_id)))
-      .filter(Boolean)
-      .some(inputMaterial => blockedByUnavailableDependency(inputMaterial, [...stack, materialId]));
-  };
+  const unavailableMaterialIds =
+    new Set(
+      [...states.values()]
+        .filter(
+          state =>
+            state.skipProduction
+            &&
+            toNumber(
+              state.requiredQty
+            )
+            >
+            toNumber(
+              state.stockUsedQty
+            )
+        )
+        .map(
+          state =>
+            String(
+              state.material.id
+            )
+        )
+    );
 
-  const operations = [...states.values()]
-    .filter(state => state.material.is_initial_raw_material !== true)
-    .filter(state => !blockedByUnavailableDependency(state.material))
-    .map(state => {
-      const rank = operationRank(state.material, context, operationOverrides, [], productionIndex);
-      const isRootMaterial = String(state.material.id) === String(material.id);
-      return operationForMaterial(
-        state.material,
-        state,
-        rank,
-        context,
-        isRootMaterial ? requestedMachine : null,
-        isRootMaterial ? requestedPeople : null,
+  const blockedByUnavailableDependency =
+    (
+      currentMaterial,
+      stack = []
+    ) => {
+      const materialId =
+        String(
+          currentMaterial?.id
+          ??
+          ''
+        );
+
+      if (
+        !materialId
+        ||
+        stack.includes(
+          materialId
+        )
+      ) {
+        return false;
+      }
+
+      if (
+        unavailableMaterialIds.has(
+          materialId
+        )
+      ) {
+        return true;
+      }
+
+      if (
+        currentMaterial
+          ?.is_initial_raw_material
+        ===
+        true
+      ) {
+        return false;
+      }
+
+      const scopedMaterial = {
+        ...currentMaterial,
+        operationId:
+          `${productionIndex}:${currentMaterial.id}`,
+        productionIndex
+      };
+
+      return selectedInputs(
+        scopedMaterial,
+        context.inputsByMaterialId,
         operationOverrides,
         productionIndex
-      );
-    })
-    .filter(operation => operation.produceQty > 0)
-    .sort((left, right) =>
-      toNumber(left.productionOrder) - toNumber(right.productionOrder)
-      || String(left.materialName).localeCompare(String(right.materialName))
-    )
-    .map((operation, index) => ({ ...operation, productionOrder: index }));
-
-  const operationMaterialIds = new Set(operations.map(operation => String(operation.materialId)));
-  const withDependencies = operations.map(operation => {
-    const material = context.materialsById.get(String(operation.materialId));
-    const scopedMaterial = { ...material, operationId: `${productionIndex}:${material.id}`, productionIndex };
-    const dependencyRequirements = selectedInputs(scopedMaterial, context.inputsByMaterialId, operationOverrides, productionIndex)
-      .map(input => ({
-        materialId: String(input.input_material_id),
-        operationId: `${productionIndex}:${input.input_material_id}`,
-        requiredQty: Number((toNumber(operation.produceQty || operation.requiredQty) * toNumber(input.qty_per_output || 1)).toFixed(6))
-      }))
-      .filter(input => operationMaterialIds.has(input.materialId) && input.requiredQty > 0);
-    const dependencyMaterialIds = dependencyRequirements.map(input => String(input.materialId));
-    return {
-      ...operation,
-      operationId: `${productionIndex}:${operation.materialId}`,
-      productionIndex,
-      productionKey: `production-${productionIndex}`,
-      productionTitle,
-      productionColor,
-      dependencyMaterialIds: [...new Set(dependencyMaterialIds)],
-      dependencyOperationIds: [...new Set(dependencyMaterialIds.map(materialId => `${productionIndex}:${materialId}`))],
-      dependencyRequirements,
-      successorMaterialIds: []
+      )
+        .map(
+          input =>
+            context.materialsById.get(
+              String(
+                input.input_material_id
+              )
+            )
+        )
+        .filter(Boolean)
+        .some(
+          inputMaterial =>
+            blockedByUnavailableDependency(
+              inputMaterial,
+              [
+                ...stack,
+                materialId
+              ]
+            )
+        );
     };
-  });
-  const byMaterialId = new Map(withDependencies.map(operation => [String(operation.materialId), operation]));
-  const byOperationId = new Map(withDependencies.map(operation => [operation.operationId, operation]));
-  for (const operation of withDependencies) {
-    for (const dependencyMaterialId of operation.dependencyMaterialIds || []) {
-      const dependency = byMaterialId.get(String(dependencyMaterialId));
-      if (!dependency) continue;
-      dependency.successorMaterialIds = [...new Set([...(dependency.successorMaterialIds || []), String(operation.materialId)])];
+
+  const operations =
+    [...states.values()]
+      .filter(
+        state =>
+          state.material
+            .is_initial_raw_material
+          !==
+          true
+      )
+      .filter(
+        state =>
+          !blockedByUnavailableDependency(
+            state.material
+          )
+      )
+      .map(
+        state => {
+          const rank =
+            operationRank(
+              state.material,
+              context,
+              operationOverrides,
+              [],
+              productionIndex
+            );
+
+          const isRootMaterial =
+            String(
+              state.material.id
+            )
+            ===
+            String(
+              material.id
+            );
+
+          return operationForMaterial(
+            state.material,
+            state,
+            rank,
+            context,
+
+            isRootMaterial
+              ? requestedMachine
+              : null,
+
+            isRootMaterial
+              ? requestedPeople
+              : null,
+
+            operationOverrides,
+            productionIndex
+          );
+        }
+      )
+      .filter(
+        operation =>
+          operation.produceQty > 0
+      )
+      .sort(
+        (
+          left,
+          right
+        ) =>
+          toNumber(
+            left.productionOrder
+          )
+          -
+          toNumber(
+            right.productionOrder
+          )
+          ||
+          String(
+            left.materialName
+          )
+            .localeCompare(
+              String(
+                right.materialName
+              )
+            )
+      )
+      .map(
+        (
+          operation,
+          index
+        ) => ({
+          ...operation,
+          productionOrder:
+            index
+        })
+      );
+
+  const operationMaterialIds =
+    new Set(
+      operations.map(
+        operation =>
+          String(
+            operation.materialId
+          )
+      )
+    );
+
+  const withDependencies =
+    operations.map(
+      operation => {
+        const material =
+          context.materialsById.get(
+            String(
+              operation.materialId
+            )
+          );
+
+        const scopedMaterial = {
+          ...material,
+          operationId:
+            `${productionIndex}:${material.id}`,
+          productionIndex
+        };
+
+        /*
+         * requiredQty continua sendo o consumo
+         * físico real do sucessor.
+         *
+         * readyQty é somente uma restrição temporal:
+         * quando houver recomposição, o sucessor
+         * só pode começar depois que a quantidade
+         * adicional também estiver pronta.
+         */
+        const dependencyRequirements =
+          selectedInputs(
+            scopedMaterial,
+            context.inputsByMaterialId,
+            operationOverrides,
+            productionIndex
+          )
+            .map(
+              input => {
+                const inputMaterialId =
+                  String(
+                    input.input_material_id
+                  );
+
+                const consumptionQty =
+                  Number(
+                    (
+                      toNumber(
+                        operation.produceQty
+                        ||
+                        operation.requiredQty
+                      )
+                      *
+                      toNumber(
+                        input.qty_per_output
+                        ||
+                        1
+                      )
+                    ).toFixed(6)
+                  );
+
+                                /*
+                 * A recomposição do estoque mínimo pertence ao
+                 * próprio material intermediário e NÃO aumenta
+                 * o consumo físico do sucessor.
+                 *
+                 * Exemplo:
+                 * Bobina produzida = 16.825,056 kg
+                 * Bobina consumida pelo Reto = 10.825,056 kg
+                 *
+                 * Os 6.000 kg adicionais ficam em estoque.
+                 */
+                return {
+                  materialId:
+                    inputMaterialId,
+
+                  operationId:
+                    `${productionIndex}:${input.input_material_id}`,
+
+                  requiredQty:
+                    consumptionQty,
+
+                  readyQty:
+                    consumptionQty
+                };
+              }
+            )
+            .filter(
+              input =>
+                operationMaterialIds.has(
+                  input.materialId
+                )
+                &&
+                input.requiredQty > 0
+            );
+
+        const dependencyMaterialIds =
+          dependencyRequirements.map(
+            input =>
+              String(
+                input.materialId
+              )
+          );
+
+        return {
+          ...operation,
+
+          operationId:
+            `${productionIndex}:${operation.materialId}`,
+
+          productionIndex,
+
+          productionKey:
+            `production-${productionIndex}`,
+
+          productionTitle,
+
+          productionColor,
+
+          dependencyMaterialIds:
+            [
+              ...new Set(
+                dependencyMaterialIds
+              )
+            ],
+
+          dependencyOperationIds:
+            [
+              ...new Set(
+                dependencyMaterialIds.map(
+                  materialId =>
+                    `${productionIndex}:${materialId}`
+                )
+              )
+            ],
+
+          dependencyRequirements,
+
+          successorMaterialIds:
+            []
+        };
+      }
+    );
+
+  const byMaterialId =
+    new Map(
+      withDependencies.map(
+        operation => [
+          String(
+            operation.materialId
+          ),
+          operation
+        ]
+      )
+    );
+
+  const byOperationId =
+    new Map(
+      withDependencies.map(
+        operation => [
+          operation.operationId,
+          operation
+        ]
+      )
+    );
+
+  for (
+    const operation
+    of withDependencies
+  ) {
+    for (
+      const dependencyMaterialId
+      of operation.dependencyMaterialIds
+      ||
+      []
+    ) {
+      const dependency =
+        byMaterialId.get(
+          String(
+            dependencyMaterialId
+          )
+        );
+
+      if (!dependency) {
+        continue;
+      }
+
+      dependency.successorMaterialIds =
+        [
+          ...new Set([
+            ...(
+              dependency
+                .successorMaterialIds
+              ||
+              []
+            ),
+            String(
+              operation.materialId
+            )
+          ])
+        ];
     }
-    for (const dependencyOperationId of operation.dependencyOperationIds || []) {
-      const dependency = byOperationId.get(String(dependencyOperationId));
-      if (!dependency) continue;
-      dependency.successorOperationIds = [...new Set([...(dependency.successorOperationIds || []), operation.operationId])];
+
+    for (
+      const dependencyOperationId
+      of operation.dependencyOperationIds
+      ||
+      []
+    ) {
+      const dependency =
+        byOperationId.get(
+          String(
+            dependencyOperationId
+          )
+        );
+
+      if (!dependency) {
+        continue;
+      }
+
+      dependency.successorOperationIds =
+        [
+          ...new Set([
+            ...(
+              dependency
+                .successorOperationIds
+              ||
+              []
+            ),
+            operation.operationId
+          ])
+        ];
     }
   }
-  return { operations: withDependencies, states };
+
+  return {
+    operations:
+      withDependencies,
+
+    states
+  };
 }
 
 function groupOperations(operations) {
@@ -896,20 +1596,121 @@ function groupOperations(operations) {
   const remapIds = ids => [...new Set((ids || [])
     .map(id => operationIdToGroupId.get(String(id)) || String(id))
     .filter(Boolean))];
-  const remapRequirements = requirements => {
-    const groupedRequirements = new Map();
-    for (const requirement of requirements || []) {
-      const operationId = operationIdToGroupId.get(String(requirement.operationId || requirement.materialId)) || String(requirement.operationId || requirement.materialId || '');
-      if (!operationId) continue;
-      const current = groupedRequirements.get(operationId) || {
-        ...requirement,
+    const remapRequirements = requirements => {
+    const groupedRequirements =
+      new Map();
+
+    for (
+      const requirement
+      of requirements || []
+    ) {
+      const operationId =
+        operationIdToGroupId.get(
+          String(
+            requirement.operationId
+            ||
+            requirement.materialId
+          )
+        )
+        ||
+        String(
+          requirement.operationId
+          ||
+          requirement.materialId
+          ||
+          ''
+        );
+
+      if (!operationId) {
+        continue;
+      }
+
+      const current =
+        groupedRequirements.get(
+          operationId
+        )
+        || {
+          ...requirement,
+          operationId,
+          requiredQty:
+            0,
+          readyQty:
+            0
+        };
+
+      const previousRequiredQty =
+        toNumber(
+          current.requiredQty
+        );
+
+      const previousReadyQty =
+        Math.max(
+          toNumber(
+            current.readyQty
+          ),
+          previousRequiredQty
+        );
+
+      const previousExtraReadyQty =
+        Math.max(
+          previousReadyQty
+          -
+          previousRequiredQty,
+          0
+        );
+
+      const requirementRequiredQty =
+        toNumber(
+          requirement.requiredQty
+        );
+
+      const requirementReadyQty =
+        Math.max(
+          toNumber(
+            requirement.readyQty
+          ),
+          requirementRequiredQty
+        );
+
+      const requirementExtraReadyQty =
+        Math.max(
+          requirementReadyQty
+          -
+          requirementRequiredQty,
+          0
+        );
+
+      current.requiredQty =
+        Number(
+          (
+            toNumber(
+              current.requiredQty
+            )
+            +
+            requirementRequiredQty
+          ).toFixed(6)
+        );
+
+      current.readyQty =
+        Number(
+          (
+            current.requiredQty
+            +
+            previousExtraReadyQty
+            +
+            requirementExtraReadyQty
+          ).toFixed(6)
+        );
+
+      groupedRequirements.set(
         operationId,
-        requiredQty: 0
-      };
-      current.requiredQty = Number((toNumber(current.requiredQty) + toNumber(requirement.requiredQty)).toFixed(6));
-      groupedRequirements.set(operationId, current);
+        current
+      );
     }
-    return [...groupedRequirements.values()];
+
+    return [
+      ...groupedRequirements.values()
+    ];
   };
   return result.map(operation => ({
     ...operation,
@@ -964,13 +1765,38 @@ function applyProductionTransports(operations, production, context) {
       .sort((left, right) => left.index - right.index)
       .map((transport, transportIndex) => {
         const operationId = `${production.productionIndex}:transport:${transport.index}:${transport.material.id}`;
-        const transportedQty = toNumber(sourceOperation.produceQty || sourceOperation.requiredQty);
+                /*
+         * O transporte leva somente aquilo que a etapa
+         * sucessora realmente necessita.
+         *
+         * A recomposição de estoque aumenta produceQty,
+         * mas não aumenta requiredQty.
+         *
+         * Exemplo:
+         *
+         * produzir Bobina:      16.825,056 kg
+         * transportar ao Reto:  10.825,056 kg
+         * permanecer estoque:    6.000,000 kg
+         */
+        const transportedQty =
+          Math.max(
+            toNumber(
+              sourceOperation.requiredQty
+              ??
+              sourceOperation.produceQty
+            ),
+            0
+          );
         return {
           operationType: 'transport',
           operationId,
           productionIndex: production.productionIndex,
           productionKey: `production-${production.productionIndex}`,
-      productionTitle: `Produção ${production.productionIndex + 1}`,
+      productionNumber:
+        production.productionNumber,
+
+      productionTitle:
+        `Produção ${production.productionNumber}`,
           productionColor: production.color || null,
           productionOrder: toNumber(sourceOperation.productionOrder) + 0.5 + (transportIndex / 100),
           materialId: transport.material.id,
@@ -2024,10 +2850,54 @@ function scheduleOperations(operations, matrixRows, { dateMode, selectedDate, ho
       }));
   }
 
-  function dependencyStartQuantity(operation, requirement, dependency) {
-    const totalRequiredQty = toNumber(requirement.requiredQty || dependency?.produceQty || dependency?.requiredQty);
-    if (!(totalRequiredQty > 0)) return 0;
-    if (operation.operationType === 'transport' || dependency?.operationType === 'transport') return totalRequiredQty;
+    function dependencyStartQuantity(operation, requirement, dependency) {
+    const totalRequiredQty =
+      toNumber(
+        requirement.requiredQty
+        ||
+        dependency?.produceQty
+        ||
+        dependency?.requiredQty
+      );
+
+    if (!(totalRequiredQty > 0)) {
+      return 0;
+    }
+
+    if (
+      operation.operationType === 'transport'
+      ||
+      dependency?.operationType === 'transport'
+    ) {
+      return totalRequiredQty;
+    }
+
+    /*
+     * requiredQty = consumo real.
+     *
+     * readyQty = quanto precisa estar fisicamente
+     * disponível antes de começar o sucessor.
+     *
+     * Em recomposição de mínimo, readyQty inclui
+     * também o estoque que queremos preservar.
+     */
+    const readyQty =
+      Math.max(
+        toNumber(
+          requirement.readyQty
+        ),
+        totalRequiredQty
+      );
+
+    if (
+      readyQty
+      >
+      totalRequiredQty
+      +
+      0.000001
+    ) {
+      return readyQty;
+    }
 
     const consumerTotalQty = Math.max(toNumber(operation.produceQty || operation.requiredQty), 0);
     const consumerDailyQty = Math.max(toNumber(operation.dailyCapacity?.capacityPerDay), 0);
@@ -2692,9 +3562,11 @@ function buildSinglePlan(payload, context) {
       dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides),
       manualWorkDates,
       manualConstraints: Array.isArray(payload.manualConstraints) ? payload.manualConstraints : [],
-      setupHours: toOperationalHours(payload.setupHours || 0),
-      startDate,
-      endDate,
+setupHours: toOperationalHours(payload.setupHours || 0),
+existingOperations: operations.existingScheduleBlockers || [],
+existingSchedules: Array.isArray(context.existingSchedules) ? context.existingSchedules : [],
+startDate,
+endDate,
       daysNeeded: uniqueDaysNeeded,
       hasPastStart: (payload.dateMode || 'start') === 'end' && new Date(`${startDate}T00:00:00`) < new Date(`${dateKey(new Date())}T00:00:00`)
     },
@@ -2718,11 +3590,25 @@ function productionEntries(payload, context) {
       error.status = 404;
       throw error;
     }
+    const requestedProductionNumber =
+      Number(
+        production.productionNumber
+      );
+
     return {
       ...production,
       material,
       plannedQty: toNumber(production.plannedQty),
       productionIndex: index,
+      productionNumber:
+        Number.isInteger(
+          requestedProductionNumber
+        )
+        &&
+        requestedProductionNumber > 0
+
+          ? requestedProductionNumber
+          : index + 1,
       color: normalizeColor(production.color)
     };
   }).filter(production => production.plannedQty > 0);
@@ -2819,7 +3705,10 @@ export function buildPlan(payload, context) {
   const skippedProduction = skipProductionSet(payload);
   const stockChoices = stockChoiceMap(payload);
   const builtProductions = productions.map(production => {
-    const productionTitle = production.productionTitle || `Produção ${production.productionIndex + 1}`;
+    const productionTitle =
+      production.productionTitle
+      ||
+      `Produção ${production.productionNumber}`;
     const priorityCoverage = productionPriorityCoverage(production, context);
     const built = buildAggregatedOperations({
       material: production.material,
@@ -2831,10 +3720,28 @@ export function buildPlan(payload, context) {
       stockLedger,
       productionIndex: production.productionIndex,
       productionTitle,
-      productionColor: production.color || null,
+            productionColor:
+        production.color || null,
+
       forcedStockOnly,
+
       skippedProduction,
-      stockChoices
+
+      stockChoices,
+
+      stockLimitRecoveryProductionIndex:
+        production.originalProductionIndex
+        ??
+        production.productionIndex,
+
+      applyStockLimitRecovery:
+        !production.splitPartNumber
+        ||
+        Number(
+          production.splitPartNumber
+        )
+        ===
+        1
     });
     const tree = buildRequirementTree({
       material: production.material,
@@ -2847,6 +3754,7 @@ export function buildPlan(payload, context) {
       operationOverrides,
       states: built.states,
       productionIndex: production.productionIndex,
+      productionNumber: production.productionNumber,
       productionTitle,
       productionColor: production.color || null
     });
@@ -2855,6 +3763,17 @@ export function buildPlan(payload, context) {
       tree,
       operations: applyProductionTransports(built.operations, production, context).map(operation => ({
         ...operation,
+        productionNumber: production.productionNumber,
+        productionTitle,
+        productionColor: production.color || null,
+        productionBreakdown: Array.isArray(operation.productionBreakdown)
+          ? operation.productionBreakdown.map(part => ({
+              ...part,
+              productionNumber: production.productionNumber,
+              productionTitle,
+              productionColor: production.color || null
+            }))
+          : operation.productionBreakdown,
         splitParentOperationId: production.splitParentOperationId && String(operation.materialId) === String(production.material.id)
           ? production.splitParentOperationId
           : operation.splitParentOperationId,
@@ -2942,12 +3861,14 @@ export function buildPlan(payload, context) {
       dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides),
       manualWorkDates,
       manualConstraints: Array.isArray(payload.manualConstraints) ? payload.manualConstraints : [],
-      setupHours: toOperationalHours(payload.setupHours || 0),
-      existingOperations: existingScheduleBlockers,
-      productions: productions.map(production => ({
+setupHours: toOperationalHours(payload.setupHours || 0),
+existingOperations: existingScheduleBlockers,
+existingSchedules: Array.isArray(context.existingSchedules) ? context.existingSchedules : [],
+productions: productions.map(production => ({
         productionIndex: production.productionIndex,
+        productionNumber: production.productionNumber,
         productionKey: `production-${production.productionIndex}`,
-        title: production.productionTitle || `Produção ${production.productionIndex + 1}`,
+        title: production.productionTitle || `Produção ${production.productionNumber}`,
         color: production.color || null,
         materialId: production.material.id,
         materialName: production.material.name,
@@ -2966,7 +3887,7 @@ export function buildPlan(payload, context) {
     },
     tree,
     operations: operations.map((operation, index) => index === 0
-      ? { ...operation, _planningMeta: { shifts, setupHours: toOperationalHours(payload.setupHours || 0), dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides), manualWorkDates, productions: productions.map(production => ({ productionIndex: production.productionIndex, productionKey: `production-${production.productionIndex}`, title: production.productionTitle || `Produção ${production.productionIndex + 1}`, color: production.color || null, materialId: production.material.id, materialName: production.material.name, materialCode: materialCode(production.material), plannedQty: production.plannedQty, plannedUnit: production.material.primary_unit, machineName: production.machineName || null, peopleCount: production.peopleCount == null || production.peopleCount === '' ? null : Number(production.peopleCount), desiredDate: production.desiredDate || null, productionModelName: production.productionModelName || null })) } }
+      ? { ...operation, _planningMeta: { shifts, setupHours: toOperationalHours(payload.setupHours || 0), dailyTeamOverrides: normalizeDailyTeamOverrides(payload.dailyTeamOverrides), manualWorkDates, productions: productions.map(production => ({ productionIndex: production.productionIndex, productionNumber: production.productionNumber, productionKey: `production-${production.productionIndex}`, title: production.productionTitle || `Produção ${production.productionNumber}`, color: production.color || null, materialId: production.material.id, materialName: production.material.name, materialCode: materialCode(production.material), plannedQty: production.plannedQty, plannedUnit: production.material.primary_unit, machineName: production.machineName || null, peopleCount: production.peopleCount == null || production.peopleCount === '' ? null : Number(production.peopleCount), desiredDate: production.desiredDate || null, productionModelName: production.productionModelName || null })) } }
       : operation),
     calendarOperations,
     diagnostics,

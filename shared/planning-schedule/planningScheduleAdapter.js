@@ -112,6 +112,14 @@ export function buildProductionMembershipIndex(tree, stageIndex = buildProductio
       const membership = {
         productionId: String(productionId),
         productionIndex: toOptionalNumber(firstValue(node?.productionIndex, node?.production_index, production.productionIndex)),
+        productionNumber:
+          toOptionalNumber(
+            firstValue(
+              node?.productionNumber,
+              node?.production_number,
+              production.productionNumber
+            )
+          ),
         productionOrder: toOptionalNumber(production.productionOrder),
         productionColor: String(firstValue(node?.productionColor, node?.production_color, production.productionColor, '')),
         productionStage: productionStageForOperation({
@@ -170,6 +178,14 @@ function productionMembershipFor(source, operation, context, sourceKind = 'legac
   const membership = {
     productionId: String(firstValue(productionIdentity(source), indexed.productionId)),
     productionIndex,
+    productionNumber:
+      toOptionalNumber(
+        firstValue(
+          source?.productionNumber,
+          source?.production_number,
+          indexed.productionNumber
+        )
+      ),
     productionOrder: toOptionalNumber(firstValue(source?.productionOrder, source?.production_order, indexed.productionOrder, productionIndex)),
     productionColor: String(firstValue(source?.productionColor, source?.production_color, indexed.productionColor, '')),
     productionStage: positiveInteger(firstValue(source?.productionStage, source?.production_stage, indexed.productionStage)),
@@ -532,6 +548,13 @@ function adaptOperation(operation, context) {
       operationId: String(operationId),
       productionId: productionId == null ? '' : String(productionId),
       productionIndex: toOptionalNumber(productionIndex),
+      productionNumber:
+        toOptionalNumber(
+          firstValue(
+            operation?.productionNumber,
+            operation?.production_number
+          )
+        ),
       productionOrder: toOptionalNumber(productionOrder),
       productionColor: productionColor == null ? '' : String(productionColor),
       productionStage,

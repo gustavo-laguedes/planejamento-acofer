@@ -302,6 +302,45 @@ function isDateOnly(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(toDateOnly(value));
 }
 
+function trackingTodayDate() {
+  const parts =
+    new Intl.DateTimeFormat(
+      'en-US',
+      {
+        timeZone:
+          'America/Sao_Paulo',
+
+        year:
+          'numeric',
+
+        month:
+          '2-digit',
+
+        day:
+          '2-digit'
+      }
+    ).formatToParts(
+      new Date()
+    );
+
+  const values =
+    Object.fromEntries(
+      parts
+        .filter(
+          part =>
+            part.type !== 'literal'
+        )
+        .map(
+          part => [
+            part.type,
+            part.value
+          ]
+        )
+    );
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 function queryList(value) {
   const source = Array.isArray(value) ? value : [value];
   return source
@@ -363,7 +402,7 @@ router.get('/lookups', requirePermission('launches:read'), async (req, res, next
       `,
       db`
         SELECT *
-        FROM productivity_matrix
+        FROM productivity_matrix_current
         ORDER BY active DESC, material_name, machine_name, people_count
       `,
       db`
@@ -1501,15 +1540,57 @@ function allocateTrackingRows(planRows, actualRows) {
     group.sourceRows.push(normalized);
   }
 
+  const today =
+    trackingTodayDate();
+
   const allocated = [...activeGroups.values()].map(group => {
     const actual = actualsByDateMaterial.get(group.key);
     const plannedQty = toNumber(group.planned_qty);
     const actualQty = Number(toNumber(actual?.actualQty).toFixed(3));
     const percentDone = plannedQty === 0 ? 0 : Number(((actualQty / plannedQty) * 100).toFixed(2));
+
+    const plannedDate =
+      toDateOnly(
+        group.planned_date
+      );
+
+    const plannedDateAlreadyPassed =
+      Boolean(
+        plannedDate
+        &&
+        today
+        &&
+        plannedDate < today
+      );
+
     let status = 'Programado';
-    if (actualQty > plannedQty && plannedQty > 0) status = 'Excedido';
-    else if (actualQty >= plannedQty && plannedQty > 0) status = 'Cumprido';
-    else if (actualQty > 0) status = 'Em andamento';
+
+    if (
+      actualQty > plannedQty
+      &&
+      plannedQty > 0
+    ) {
+      status = 'Excedido';
+
+    } else if (
+      actualQty >= plannedQty
+      &&
+      plannedQty > 0
+    ) {
+      status = 'Cumprido';
+
+    } else if (
+      plannedDateAlreadyPassed
+      &&
+      actualQty < plannedQty
+    ) {
+      status = 'Meta não atingida';
+
+    } else if (
+      actualQty > 0
+    ) {
+      status = 'Em andamento';
+    }
 
     return {
       ...group,
@@ -1522,10 +1603,33 @@ function allocateTrackingRows(planRows, actualRows) {
     };
   });
 
-  const planSummaries = buildPlanTracking(planRows, activeGroups, actualsByDateMaterial);
-  const canceledKeys = new Set(canceledRows.map(row => trackingDateMaterialKey(row)));
+  const planTracking =
+    buildPlanTracking(
+      planRows,
+      actualsByDateMaterial
+    );
+
+  const planSummaries =
+    planTracking.plans;
+
+  const matchedPlanActualKeys =
+    planTracking.matchedActualKeys;
+
+  const canceledKeys =
+    new Set(
+      canceledRows.map(
+        row =>
+          trackingDateMaterialKey(row)
+      )
+    );
+
   const unplannedRows = [...actualsByDateMaterial.entries()]
-    .filter(([key]) => !activeGroups.has(key))
+    .filter(
+      ([key]) =>
+        !activeGroups.has(key)
+        &&
+        !matchedPlanActualKeys.has(key)
+    )
     .map(([key, actual]) => ({
       material_name: actual.materialName,
       material_code: actual.materialCode,
@@ -1542,72 +1646,153 @@ function allocateTrackingRows(planRows, actualRows) {
   };
 }
 
-function buildPlanTracking(planRows, activeGroups, actualsByDateMaterial) {
-  const planMap = new Map();
+function buildPlanTracking(
+  planRows,
+  actualsByDateMaterial
+) {
+  const planMap =
+    new Map();
+
   for (const row of planRows) {
-    const planKey = String(row.plan_id || '');
+    const planKey =
+      String(
+        row.plan_id
+        || ''
+      );
+
     if (!planKey) continue;
-    if (!planMap.has(planKey)) planMap.set(planKey, {
-      plan_id: row.plan_id,
-      planning_code: row.planning_code,
-      status: isCanceledPlan(row) ? 'Cancelado' : 'Programado',
-      canceled: isCanceledPlan(row),
-      planned_qty: 0,
-      actual_qty: 0,
-      dates: [],
-      materials: new Map()
-    });
+
+    if (!planMap.has(planKey)) {
+      planMap.set(
+        planKey,
+        {
+          plan_id: row.plan_id,
+          planning_code: row.planning_code,
+          status: isCanceledPlan(row) ? 'Cancelado' : 'Programado',
+          canceled: isCanceledPlan(row),
+          plan_start_date: toDateOnly(row.plan_start_date || row.planned_date),
+          plan_end_date: toDateOnly(row.plan_end_date || row.planned_date),
+          planned_qty: 0,
+          actual_qty: 0,
+          dates: [],
+          materials: new Map()
+        }
+      );
+    }
+
     const plan = planMap.get(planKey);
     const plannedQty = toNumber(row.planned_qty);
     const plannedDate = toDateOnly(row.planned_date);
+
+    if (!plan.plan_start_date) {
+      plan.plan_start_date = toDateOnly(row.plan_start_date || plannedDate);
+    }
+
+    if (!plan.plan_end_date) {
+      plan.plan_end_date = toDateOnly(row.plan_end_date || plannedDate);
+    }
+
     plan.dates.push(plannedDate);
     plan.planned_qty += plannedQty;
 
     const materialKey = materialTrackingKey(row);
     const detailKey = `${materialKey}|${row.planned_unit || ''}`;
-    if (!plan.materials.has(detailKey)) plan.materials.set(detailKey, {
-      material_name: row.material_name,
-      material_code: row.material_code,
-      planned_unit: row.planned_unit,
-      planned_qty: 0,
-      actual_qty: 0,
-      dates: [],
-      last_planned_date: plannedDate,
-      completed_date: null,
-      canceled: plan.canceled
-    });
+
+    if (!plan.materials.has(detailKey)) {
+      plan.materials.set(
+        detailKey,
+        {
+          material_key: materialKey,
+          material_name: row.material_name,
+          material_code: row.material_code,
+          planned_unit: row.planned_unit,
+          planned_qty: 0,
+          actual_qty: 0,
+          dates: [],
+          actual_dates: [],
+          first_planned_date: plannedDate,
+          last_planned_date: plannedDate,
+          canceled: plan.canceled
+        }
+      );
+    }
+
     const detail = plan.materials.get(detailKey);
     detail.dates.push(plannedDate);
-    detail.last_planned_date = detail.dates.filter(Boolean).sort().at(-1) || plannedDate;
-    detail.planned_qty += plannedQty;
 
-    if (!plan.canceled) {
-      const group = activeGroups.get(trackingDateMaterialKey(row));
-      const actual = actualsByDateMaterial.get(trackingDateMaterialKey(row));
-      const groupPlanned = toNumber(group?.planned_qty);
-      const actualShare = groupPlanned > 0 ? toNumber(actual?.actualQty) * (plannedQty / groupPlanned) : 0;
-      plan.actual_qty += actualShare;
-      detail.actual_qty += actualShare;
-      if (!detail.completed_date && detail.planned_qty > 0 && detail.actual_qty >= detail.planned_qty) detail.completed_date = plannedDate;
-    }
+    const sortedDetailDates = detail.dates.filter(Boolean).sort();
+    detail.first_planned_date = sortedDetailDates[0] || plannedDate;
+    detail.last_planned_date = sortedDetailDates.at(-1) || plannedDate;
+    detail.planned_qty += plannedQty;
   }
 
-  return [...planMap.values()].map(plan => {
+  const activeMaterialTargets =
+    [...planMap.values()]
+      .filter(plan => !plan.canceled)
+      .flatMap(plan =>
+        [...plan.materials.values()]
+          .map(detail => ({ plan, detail }))
+      );
+
+  const matchedActualKeys = new Set();
+
+  for (const [actualKey, actual] of actualsByDateMaterial.entries()) {
+    const productionDate = toDateOnly(actual?.productionDate);
+    const actualMaterialKey = materialTrackingKey({
+      material_name: actual?.materialName,
+      material_code: actual?.materialCode
+    });
+
+    if (!productionDate || !actualMaterialKey) continue;
+
+    const candidates = activeMaterialTargets.filter(({ plan, detail }) => (
+      detail.material_key === actualMaterialKey
+      && plan.plan_start_date
+      && plan.plan_end_date
+      && productionDate >= plan.plan_start_date
+      && productionDate <= plan.plan_end_date
+    ));
+
+    if (!candidates.length) continue;
+
+    matchedActualKeys.add(actualKey);
+
+    const totalCandidatePlanned = candidates.reduce(
+      (sum, candidate) =>
+        sum + Math.max(0, toNumber(candidate.detail.planned_qty)),
+      0
+    );
+
+    candidates.forEach(({ plan, detail }) => {
+      const weight = totalCandidatePlanned > 0
+        ? Math.max(0, toNumber(detail.planned_qty)) / totalCandidatePlanned
+        : 1 / candidates.length;
+      const actualShare = toNumber(actual?.actualQty) * weight;
+
+      plan.actual_qty += actualShare;
+      detail.actual_qty += actualShare;
+      detail.actual_dates.push(productionDate);
+    });
+  }
+
+  const plans = [...planMap.values()].map(plan => {
     const plannedQty = Number(toNumber(plan.planned_qty).toFixed(3));
     const actualQty = Number(toNumber(plan.actual_qty).toFixed(3));
     const percentDone = plannedQty === 0 ? 0 : Number(((actualQty / plannedQty) * 100).toFixed(2));
     const dates = plan.dates.filter(Boolean).sort();
     let status = plan.status;
+
     if (!plan.canceled) {
       if (actualQty > plannedQty && plannedQty > 0) status = 'Excedido';
       else if (actualQty >= plannedQty && plannedQty > 0) status = 'Cumprido';
       else if (actualQty > 0) status = 'Em andamento';
     }
+
     return {
       plan_id: plan.plan_id,
       planning_code: plan.planning_code,
-      period_start_date: dates[0] || null,
-      period_end_date: dates.at(-1) || null,
+      period_start_date: plan.plan_start_date || dates[0] || null,
+      period_end_date: plan.plan_end_date || dates.at(-1) || null,
       planned_qty: plannedQty,
       actual_qty: actualQty,
       percent_done: percentDone,
@@ -1617,12 +1802,15 @@ function buildPlanTracking(planRows, activeGroups, actualsByDateMaterial) {
         const detailActual = Number(toNumber(detail.actual_qty).toFixed(3));
         const detailPercent = detailPlanned === 0 ? 0 : Number(((detailActual / detailPlanned) * 100).toFixed(2));
         const detailDates = detail.dates.filter(Boolean).sort();
+        const actualDates = detail.actual_dates.filter(Boolean).sort();
         let detailStatus = detail.canceled ? 'Cancelado' : 'Programado';
+
         if (!detail.canceled) {
           if (detailActual > detailPlanned && detailPlanned > 0) detailStatus = 'Excedido';
           else if (detailActual >= detailPlanned && detailPlanned > 0) detailStatus = 'Cumprido';
           else if (detailActual > 0) detailStatus = 'Em andamento';
         }
+
         return {
           material_name: detail.material_name,
           material_code: detail.material_code,
@@ -1632,11 +1820,21 @@ function buildPlanTracking(planRows, activeGroups, actualsByDateMaterial) {
           actual_qty: detailActual,
           percent_done: detailPercent,
           status: detailStatus,
-          anticipated: Boolean(detail.completed_date && detail.last_planned_date && detail.completed_date < detail.last_planned_date)
+          anticipated: Boolean(
+            actualDates.some(date =>
+              detail.first_planned_date
+              && date < detail.first_planned_date
+            )
+          )
         };
       })
     };
   });
+
+  return {
+    plans,
+    matchedActualKeys
+  };
 }
 
 router.get('/tracking', requirePermission('productivity:read'), async (req, res, next) => {
@@ -1647,6 +1845,8 @@ router.get('/tracking', requirePermission('productivity:read'), async (req, res,
         SELECT p.id AS plan_id,
                p.code AS planning_code,
                p.status,
+               p.start_date AS plan_start_date,
+               p.end_date AS plan_end_date,
                d.planned_date,
                d.material_name,
                d.material_code,
@@ -1656,12 +1856,14 @@ router.get('/tracking', requirePermission('productivity:read'), async (req, res,
         JOIN production_plans p ON p.id = d.plan_id
         WHERE d.planned_qty > 0
           AND NULLIF(TRIM(d.machine_name), '') IS NOT NULL
-        GROUP BY p.id, p.code, p.status, d.planned_date, d.material_name, d.material_code, d.machine_name
+        GROUP BY p.id, p.code, p.status, p.start_date, p.end_date, d.planned_date, d.material_name, d.material_code, d.machine_name
       ),
       legacy_fallback AS (
         SELECT p.id AS plan_id,
                p.code AS planning_code,
                p.status,
+               p.start_date AS plan_start_date,
+               p.end_date AS plan_end_date,
                p.start_date AS planned_date,
                p.material_name,
                p.material_code,

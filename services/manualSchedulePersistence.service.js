@@ -83,6 +83,138 @@ function normalizeComponent(component = {}, allocation = {}) {
   };
 }
 
+function normalizePersistedTransport(
+  transport = {},
+  index = 0
+) {
+  return {
+    ...clone(transport),
+
+    transportId:
+      text(
+        transport.transportId
+        ||
+        transport.id
+        ||
+        `transport-${index + 1}`
+      ),
+
+    productionId:
+      text(
+        transport.productionId
+      ),
+
+    productionIndex:
+      number(
+        transport.productionIndex
+      ),
+
+    productionTitle:
+      text(
+        transport.productionTitle
+      ),
+
+    productionColor:
+      text(
+        transport.productionColor
+      ),
+
+    materialId:
+      text(
+        transport.materialId
+      ),
+
+    materialName:
+      text(
+        transport.materialName
+      ),
+
+    materialCode:
+      text(
+        transport.materialCode
+      ),
+
+    quantity:
+      number(
+        transport.quantity
+      ),
+
+    totalQuantity:
+      number(
+        transport.totalQuantity
+        ??
+        transport.requiredQuantity
+        ??
+        transport.quantity
+      ),
+
+    unit:
+      text(
+        transport.unit
+      ),
+
+    sourceLocation:
+      text(
+        transport.sourceLocation
+        ??
+        transport.sourceLocationId
+      ),
+
+    sourceLocationName:
+      text(
+        transport.sourceLocationName
+      ),
+
+    targetLocation:
+      text(
+        transport.targetLocation
+        ??
+        transport.targetLocationId
+      ),
+
+    targetLocationName:
+      text(
+        transport.targetLocationName
+      ),
+
+    startDate:
+      text(
+        transport.startDate
+        ??
+        transport.date
+      ).slice(0, 10),
+
+    startTime:
+      text(
+        transport.startTime
+      ).slice(0, 5),
+
+    endDate:
+      text(
+        transport.endDate
+        ??
+        transport.startDate
+        ??
+        transport.date
+      ).slice(0, 10),
+
+    endTime:
+      text(
+        transport.endTime
+      ).slice(0, 5),
+
+    durationMinutes:
+      number(
+        transport.durationMinutes
+      ),
+
+    producerParentOperationIds:
+      uniqueStrings(
+        transport.producerParentOperationIds
+      )
+  };
+}
+
 export function normalizePersistedAllocation(allocation = {}, index = 0) {
   const normalized = {
     ...clone(allocation),
@@ -322,13 +454,21 @@ export function serializeManualScheduleDraft({
         normalizePersistedPlannedReceipt
       );
 
+        const transports =
+    (draft?.transports || [])
+      .map(
+        normalizePersistedTransport
+      );
+
   const persisted = {
     version: MANUAL_SCHEDULE_CONTRACT_VERSION,
     draftId: text(draft?.draftId) || `manual-draft:${fnv1a(`${timestamp}:${allocations.length}`)}`,
     planningId: planningId === null || planningId === undefined ? null : text(planningId),
     baseSimulationId: draft?.baseSimulationId === null || draft?.baseSimulationId === undefined ? null : text(draft.baseSimulationId),
     baseSimulationHash: manualScheduleBaseHash(baseSimulation),
-        allocations,
+            allocations,
+
+    transports,
 
     plannedReceipts,
 
@@ -366,10 +506,16 @@ export function normalizePersistedManualScheduleDraft(value) {
   const draft = {
     ...clone(parsed),
     version: MANUAL_SCHEDULE_CONTRACT_VERSION,
-        allocations:
+            allocations:
       (parsed.allocations || [])
         .map(
           normalizePersistedAllocation
+        ),
+
+    transports:
+      (parsed.transports || [])
+        .map(
+          normalizePersistedTransport
         ),
 
     plannedReceipts:

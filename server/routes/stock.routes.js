@@ -4,7 +4,7 @@ import { businessDaysInclusive } from '../../services/workingDays.service.js';
 import { requirePermission, requireSuperAdmin } from './middleware.js';
 import { auditUser, recordAuditLog } from '../audit.js';
 import { resolveMaterialStockMetrics } from '../../services/materialStockMetrics.service.js';
-import { buildStockBalances } from '../../services/stockBalance.service.js';
+import { buildCurrentStockBalances } from '../../services/currentStock.service.js';
 
 const router = Router();
 
@@ -131,29 +131,120 @@ function summarizeMaterial(material, locations, stockRows, correctionRows, busin
 }
 
 async function buildInventoryTemplate(db) {
-  const [materials, locations, stockRows, adjustmentRows] = await Promise.all([
-    db`SELECT id, name, codes, permits_sales, active FROM materials WHERE active = true ORDER BY name`,
-    db`SELECT id, code, name, active FROM locations WHERE active = true ORDER BY code NULLS LAST, name`,
-    db`SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit, sales_unit FROM stock_snapshot`,
-    db`
-      SELECT DISTINCT ON (material_id, location_id)
-             material_id, location_id, adjustment_qty, notes, updated_at
-      FROM stock_location_adjustments
-      ORDER BY material_id, location_id, updated_at DESC, id DESC
-    `
-  ]);
+  const context =
+    await loadCurrentStockContext(
+      db
+    );
 
-  const adjustmentsByMaterial = new Map();
-  for (const adjustment of adjustmentRows) {
-    const key = String(adjustment.material_id);
-    if (!adjustmentsByMaterial.has(key)) adjustmentsByMaterial.set(key, []);
-    adjustmentsByMaterial.get(key).push(adjustment);
+
+  const orderedLocations =
+    sortLocations(
+      context.locations
+      ||
+      []
+    );
+
+
+  const materials =
+    new Map();
+
+
+  for (
+    const row
+    of context.rows || []
+  ) {
+    const key =
+      String(
+        row.materialId
+      );
+
+
+    if (!materials.has(key)) {
+      materials.set(
+        key,
+        {
+          material: {
+            id:
+              row.materialId,
+
+            name:
+              row.materialName,
+
+            permitsSales:
+              row.permitsSales
+              !== false,
+
+            active:
+              true
+          },
+
+          codes:
+            row.materialCodes
+            ||
+            [],
+
+          stockByLocation:
+            {},
+
+          inventoryByLocation:
+            {}
+        }
+      );
+    }
+
+
+    const current =
+      materials.get(key);
+
+
+    current.stockByLocation[
+      String(row.locationId)
+    ] = {
+      locationId:
+        row.locationId,
+
+      code:
+        row.locationCode,
+
+      name:
+        row.locationName,
+
+      nasajonQty:
+        toNumber(
+          row.nasajonQty
+        ),
+
+      errorQty:
+        toNumber(
+          row.errorQty
+        )
+    };
+
+
+    /*
+     * O valor sugerido para o inventario
+     * passa a ser o FISICO CORRIGIDO.
+     *
+     * Isso NAO significa que o inventario
+     * sera salvo como correcao.
+     */
+    current.inventoryByLocation[
+      String(row.locationId)
+    ] =
+      toNumber(
+        row.currentQty
+      );
   }
 
-  const orderedLocations = sortLocations(locations);
+
   return {
-    locations: orderedLocations,
-    rows: materials.map(material => summarizeMaterial(material, orderedLocations, stockRows, adjustmentsByMaterial.get(String(material.id)) || []))
+    locations:
+      orderedLocations,
+
+    rows:
+      [
+        ...materials.values()
+      ]
   };
 }
 
@@ -161,264 +252,564 @@ export async function loadCurrentStockContext(
   db,
   { excludePlanId = null } = {}
 ) {
-    const [materials, locations, inventories, productionLaunches, transports, materialPurchases, sales, plannedRows, materialInputs, lastImportRows] = await Promise.all([
-   db`
-  SELECT id, name, codes, primary_unit, permits_sales, active
-  FROM materials
-  WHERE active = true
-  ORDER BY name
-`,
-    db`
-      SELECT id, code, name, active
-      FROM locations
-      WHERE active = true
-      ORDER BY code NULLS LAST, name
-    `,
-    db`
-      SELECT i.inventory_count_id, i.material_id, i.location_id, i.counted_qty, c.created_at
-      FROM inventory_count_items i
-      JOIN inventory_counts c ON c.id = i.inventory_count_id
-      JOIN materials m ON m.id = i.material_id
-      JOIN locations l ON l.id = i.location_id
-      WHERE m.active = true
-        AND l.active = true
-      ORDER BY c.created_at DESC, c.id DESC, i.id DESC
-    `,
-    db`
-      SELECT
-  p.id,
-  p.production_date,
-  p.material_id,
-  p.quantity,
-  p.primary_unit,
-  p.production_model_name,
-  p.consumed_inputs,
-  p.machine_name,
-  p.created_at,
-  p.location_name,
-  COALESCE(
-    p.location_id,
-    machine_location.location_id
-  ) AS location_id
-FROM production_launches p
-      LEFT JOIN LATERAL (
-        SELECT m.location_id
-        FROM machines m
-        WHERE LOWER(TRIM(m.name)) = LOWER(TRIM(p.machine_name))
-        ORDER BY m.active DESC, m.id
-        LIMIT 1
-      ) machine_location ON true
-      WHERE LOWER(TRIM(COALESCE(p.status, ''))) NOT IN ('canceled', 'cancelled', 'cancelado', 'cancelada')
-        AND p.quantity > 0
-    `,
-        db`
-      SELECT id, transport_date, material_id, origin_location_id, destination_location_id,
-             quantity, invoice_number, notes, created_at
-      FROM stock_transport_records
-      WHERE LOWER(TRIM(COALESCE(status, 'active'))) NOT IN ('canceled', 'cancelled', 'cancelado', 'cancelada')
-        AND quantity > 0
-    `,
-    db`
-      SELECT i.id,
-             p.purchase_date,
-             i.material_id,
-             i.location_id,
-             i.stock_quantity AS quantity,
-             p.invoice_number,
-             p.certificate_number,
-             p.supplier,
-             p.created_at
-      FROM purchase_items i
-      JOIN purchase_records p ON p.id = i.purchase_id
-      WHERE i.stock_quantity > 0
-    `,
-    db`
-      SELECT s.import_id, s.material_id, s.location_id, s.period_start, s.period_end,
-             s.sales_qty, s.product_codes, s.created_at
-      FROM stock_import_sales_history s
-      JOIN import_history h ON h.id = s.import_id
-      WHERE h.status = 'success'
-    `,
-   
-    db`
-      WITH active_plans AS (
-        SELECT *
-        FROM production_plans
-        WHERE LOWER(
-          TRIM(
-            COALESCE(status, '')
-          )
-        ) NOT IN (
-          'canceled',
-          'cancelled',
-          'cancelado',
-          'cancelada',
-          'deleted',
-          'excluido',
-          'inactive',
-          'inativo'
-        )
-          AND (
-            ${excludePlanId}::bigint IS NULL
-            OR id <> ${excludePlanId}
-          )
-      ),
-
-      daily_plans AS (
+  const [
+    materials,
+    locations,
+    inventories,
+    productionLaunches,
+    sales,
+    plannedRows,
+    materialInputs,
+    stockRows,
+    correctionRows,
+    lastImportRows
+  ] =
+    await Promise.all([
+      db`
         SELECT
-          d.planned_date,
-          d.material_name,
-          d.material_code,
-          d.machine_name,
-          d.planned_unit,
-          SUM(d.planned_qty) AS planned_qty
-        FROM production_plan_days d
-        JOIN active_plans p
-          ON p.id = d.plan_id
-        WHERE d.planned_qty > 0
-        GROUP BY
-          d.planned_date,
-          d.material_name,
-          d.material_code,
-          d.machine_name,
-          d.planned_unit
-      ),
+          id,
+          name,
+          codes,
+          primary_unit,
+          permits_sales,
+          active
 
-      legacy_fallback AS (
+        FROM materials
+
+        WHERE
+          active = true
+
+        ORDER BY
+          name
+      `,
+
+
+      db`
         SELECT
-          p.start_date AS planned_date,
-          p.material_name,
-          p.material_code,
+          id,
+          code,
+          name,
+          active
+
+        FROM locations
+
+        WHERE
+          active = true
+
+        ORDER BY
+          code NULLS LAST,
+          name
+      `,
+
+
+      /*
+       * Inventarios permanecem aqui
+       * apenas para referencia/icone.
+       */
+      db`
+        SELECT
+          i.inventory_count_id,
+          i.material_id,
+          i.location_id,
+          i.counted_qty,
+          c.created_at
+
+        FROM inventory_count_items i
+
+        JOIN inventory_counts c
+          ON c.id =
+             i.inventory_count_id
+
+        JOIN materials m
+          ON m.id =
+             i.material_id
+
+        JOIN locations l
+          ON l.id =
+             i.location_id
+
+        WHERE
+          m.active = true
+
+          AND
+          l.active = true
+
+        ORDER BY
+          c.created_at DESC,
+          c.id DESC,
+          i.id DESC
+      `,
+
+
+      /*
+       * Producoes realizadas ainda sao
+       * necessarias para descobrir quanto
+       * de uma programacao ja foi produzido.
+       *
+       * Mas NAO serao usadas para alterar
+       * o saldo fisico.
+       */
+      db`
+        SELECT
+          p.id,
+          p.production_date,
+          p.material_id,
+          p.quantity,
+          p.primary_unit,
+          p.production_model_name,
+          p.consumed_inputs,
           p.machine_name,
-          p.planned_unit,
-          SUM(p.planned_qty) AS planned_qty
-        FROM active_plans p
-        WHERE p.planned_qty > 0
-          AND NOT EXISTS (
-            SELECT 1
-            FROM production_plan_days d
-            WHERE d.plan_id = p.id
-              AND d.planned_qty > 0
-          )
-        GROUP BY
-          p.start_date,
-          p.material_name,
-          p.material_code,
-          p.machine_name,
-          p.planned_unit
-      ),
+          p.created_at,
+          p.location_name,
 
-      planned AS (
-        SELECT *
-        FROM daily_plans
+          COALESCE(
+            p.location_id,
+            machine_location.location_id
+          ) AS location_id
 
-        UNION ALL
+        FROM production_launches p
 
-        SELECT *
-        FROM legacy_fallback
-      )
+        LEFT JOIN LATERAL (
+          SELECT
+            m.location_id
 
-      SELECT
-        p.planned_date,
-        material_match.id AS material_id,
-        machine_location.location_id,
-        SUM(p.planned_qty) AS planned_qty
+          FROM machines m
 
-      FROM planned p
-
-      JOIN LATERAL (
-        SELECT m.id
-
-        FROM materials m
-
-        WHERE m.active = true
-          AND (
+          WHERE
             LOWER(
               TRIM(m.name)
             )
             =
             LOWER(
-              TRIM(p.material_name)
+              TRIM(p.machine_name)
             )
 
-            OR (
-              NULLIF(
-                TRIM(p.material_code),
-                ''
-              ) IS NOT NULL
+          ORDER BY
+            m.active DESC,
+            m.id
 
-              AND p.material_code
-                = ANY(m.codes)
+          LIMIT 1
+        )
+        machine_location
+          ON true
+
+        WHERE
+          LOWER(
+            TRIM(
+              COALESCE(
+                p.status,
+                ''
+              )
             )
           )
+          NOT IN (
+            'canceled',
+            'cancelled',
+            'cancelado',
+            'cancelada'
+          )
 
-        ORDER BY m.id
+          AND
+          p.quantity > 0
+      `,
 
-        LIMIT 1
-      ) material_match
-        ON true
 
-      LEFT JOIN LATERAL (
-        SELECT m.location_id
+      /*
+       * Historico de vendas usado por
+       * Vendas/dia e duracao.
+       */
+      db`
+        SELECT
+          s.import_id,
+          s.material_id,
+          s.location_id,
+          s.period_start,
+          s.period_end,
+          s.sales_qty,
+          s.product_codes,
+          s.created_at
 
-        FROM machines m
+        FROM stock_import_sales_history s
 
-        WHERE LOWER(
-          TRIM(m.name)
+        JOIN import_history h
+          ON h.id = s.import_id
+
+        WHERE
+          h.status = 'success'
+      `,
+
+
+      /*
+       * Planejamentos existentes:
+       * fonte de Pendente e Reserva.
+       */
+      db`
+        WITH active_plans AS (
+          SELECT
+            *
+
+          FROM production_plans
+
+          WHERE
+            LOWER(
+              TRIM(
+                COALESCE(
+                  status,
+                  ''
+                )
+              )
+            )
+
+            NOT IN (
+              'canceled',
+              'cancelled',
+              'cancelado',
+              'cancelada',
+              'deleted',
+              'excluido',
+              'inactive',
+              'inativo'
+            )
+
+            AND (
+              ${excludePlanId}::bigint
+              IS NULL
+
+              OR
+
+              id <>
+                ${excludePlanId}
+            )
+        ),
+
+
+        daily_plans AS (
+          SELECT
+            d.planned_date,
+            d.material_name,
+            d.material_code,
+            d.machine_name,
+            d.planned_unit,
+
+            SUM(
+              d.planned_qty
+            ) AS planned_qty
+
+          FROM production_plan_days d
+
+          JOIN active_plans p
+            ON p.id =
+               d.plan_id
+
+          WHERE
+            d.planned_qty > 0
+
+          GROUP BY
+            d.planned_date,
+            d.material_name,
+            d.material_code,
+            d.machine_name,
+            d.planned_unit
+        ),
+
+
+        legacy_fallback AS (
+          SELECT
+            p.start_date
+              AS planned_date,
+
+            p.material_name,
+            p.material_code,
+            p.machine_name,
+            p.planned_unit,
+
+            SUM(
+              p.planned_qty
+            ) AS planned_qty
+
+          FROM active_plans p
+
+          WHERE
+            p.planned_qty > 0
+
+            AND NOT EXISTS (
+              SELECT
+                1
+
+              FROM production_plan_days d
+
+              WHERE
+                d.plan_id = p.id
+
+                AND
+
+                d.planned_qty > 0
+            )
+
+          GROUP BY
+            p.start_date,
+            p.material_name,
+            p.material_code,
+            p.machine_name,
+            p.planned_unit
+        ),
+
+
+        planned AS (
+          SELECT
+            *
+
+          FROM daily_plans
+
+          UNION ALL
+
+          SELECT
+            *
+
+          FROM legacy_fallback
         )
-        =
-        LOWER(
-          TRIM(p.machine_name)
+
+
+        SELECT
+          p.planned_date,
+
+          material_match.id
+            AS material_id,
+
+          machine_location.location_id,
+
+          SUM(
+            p.planned_qty
+          ) AS planned_qty
+
+        FROM planned p
+
+
+        JOIN LATERAL (
+          SELECT
+            m.id
+
+          FROM materials m
+
+          WHERE
+            m.active = true
+
+            AND (
+              LOWER(
+                TRIM(m.name)
+              )
+              =
+              LOWER(
+                TRIM(
+                  p.material_name
+                )
+              )
+
+              OR
+
+              (
+                NULLIF(
+                  TRIM(
+                    p.material_code
+                  ),
+                  ''
+                )
+                IS NOT NULL
+
+                AND
+
+                p.material_code
+                  =
+                  ANY(m.codes)
+              )
+            )
+
+          ORDER BY
+            m.id
+
+          LIMIT 1
         )
+        material_match
+          ON true
+
+
+        LEFT JOIN LATERAL (
+          SELECT
+            m.location_id
+
+          FROM machines m
+
+          WHERE
+            LOWER(
+              TRIM(m.name)
+            )
+            =
+            LOWER(
+              TRIM(
+                p.machine_name
+              )
+            )
+
+          ORDER BY
+            m.active DESC,
+            m.id
+
+          LIMIT 1
+        )
+        machine_location
+          ON true
+
+
+        WHERE
+          machine_location.location_id
+          IS NOT NULL
+
+
+        GROUP BY
+          p.planned_date,
+          material_match.id,
+          machine_location.location_id
+      `,
+
+
+      db`
+        SELECT
+          material_id,
+          input_material_id,
+          qty_per_output,
+          production_model_name
+
+        FROM material_inputs
+      `,
+
+
+      /*
+       * SOMENTE A FOTOGRAFIA NASAJON
+       * MAIS RECENTE.
+       */
+      db`
+        SELECT
+          s.import_id,
+          s.establishment,
+          s.product_code,
+          s.old_product_code,
+          s.fiscal_balance_unit,
+          s.error_balance_unit,
+          s.orders_unit,
+          s.future_sales_pending_unit,
+          s.sales_unit
+
+        FROM stock_snapshot s
+
+        JOIN import_history h
+          ON h.id =
+             s.import_id
+
+        WHERE
+          h.status = 'success'
+
+          AND
+
+          s.import_id = (
+            SELECT
+              id
+
+            FROM import_history
+
+            WHERE
+              status = 'success'
+
+            ORDER BY
+              created_at DESC,
+              id DESC
+
+            LIMIT 1
+          )
+      `,
+
+
+      /*
+       * Correcao manual por
+       * MATERIAL + LOCAL.
+       */
+      db`
+        SELECT
+          material_id,
+          location_id,
+          correction_qty,
+          updated_at,
+          updated_by_user_id,
+          updated_by_user_name
+
+        FROM stock_location_corrections
+      `,
+
+
+      db`
+        SELECT
+          id,
+          filename,
+          status,
+          total_rows,
+          finished_at,
+          created_at,
+          period_start,
+          period_end,
+          business_days
+
+        FROM import_history
+
+        WHERE
+          status = 'success'
 
         ORDER BY
-          m.active DESC,
-          m.id
+          created_at DESC,
+          id DESC
 
         LIMIT 1
-      ) machine_location
-        ON true
+      `
+    ]);
 
-      WHERE
-        machine_location.location_id
-        IS NOT NULL
 
-      GROUP BY
-        p.planned_date,
-        material_match.id,
-        machine_location.location_id
-    `,
-   
-    db`
-      SELECT material_id, input_material_id, qty_per_output, production_model_name
-      FROM material_inputs
-    `,
-    db`
-      SELECT id, filename, status, total_rows, finished_at, created_at,
-             period_start, period_end, business_days
-      FROM import_history
-      WHERE status = 'success'
-      ORDER BY created_at DESC
-      LIMIT 1
-    `
-  ]);
+  const orderedLocations =
+    sortLocations(
+      locations
+    );
 
-  const rows = buildStockBalances({
-    materials,
-    locations: sortLocations(locations),
-    inventories,
-        productionLaunches,
-    transports,
-    materialPurchases,
-    sales,
-    plannedRows,
-    materialInputs
-  });
+
+  const rows =
+    buildCurrentStockBalances({
+      materials,
+
+      locations:
+        orderedLocations,
+
+      stockRows,
+
+      correctionRows,
+
+      inventories,
+
+      productionLaunches,
+
+      sales,
+
+      plannedRows,
+
+      materialInputs
+    });
+
 
   return {
-    locations: sortLocations(locations),
+    locations:
+      orderedLocations,
+
     rows,
-    lastImport: lastImportRows[0] || null
+
+    lastImport:
+      lastImportRows[0]
+      ||
+      null
   };
 }
 
@@ -570,9 +961,40 @@ router.get('/materials-overview', async (req, res, next) => {
         WHERE active = true
         ORDER BY code NULLS LAST, name
       `,
-      db`
-        SELECT establishment, product_code, old_product_code, fiscal_balance_unit, error_balance_unit, sales_unit
-        FROM stock_snapshot
+            db`
+        SELECT
+          s.establishment,
+          s.product_code,
+          s.old_product_code,
+          s.fiscal_balance_unit,
+          s.error_balance_unit,
+          s.sales_unit
+
+        FROM stock_snapshot s
+
+        JOIN import_history h
+          ON h.id = s.import_id
+
+        WHERE
+          h.status = 'success'
+
+          AND
+
+          s.import_id = (
+            SELECT
+              id
+
+            FROM import_history
+
+            WHERE
+              status = 'success'
+
+            ORDER BY
+              created_at DESC,
+              id DESC
+
+            LIMIT 1
+          )
       `,
       db`
         SELECT DISTINCT ON (material_id)
@@ -724,14 +1146,7 @@ router.post('/inventory/counts', requirePermission('inventory:write'), async (re
           INSERT INTO inventory_count_items (inventory_count_id, material_id, location_id, previous_qty, counted_qty)
           VALUES (${count.id}, ${item.materialId}, ${item.locationId}, ${item.previousQty}, ${item.countedQty})
         `;
-        await tx`
-          INSERT INTO stock_location_adjustments (material_id, location_id, adjustment_qty, notes, updated_at)
-          VALUES (${item.materialId}, ${item.locationId}, ${item.countedQty}, ${notes}, now())
-          ON CONFLICT (material_id, location_id)
-          DO UPDATE SET adjustment_qty = EXCLUDED.adjustment_qty,
-                        notes = EXCLUDED.notes,
-                        updated_at = now()
-        `;
+    
       }
       return count;
     });
@@ -862,32 +1277,12 @@ router.put('/inventory/counts/:id', requirePermission('inventory:write'), async 
         return { count: unchanged, changes: [] };
       }
 
-      for (const change of changes) {
+            for (const change of changes) {
         await tx`
           UPDATE inventory_count_items
           SET counted_qty = ${change.countedQty}
           WHERE id = ${change.itemId}
         `;
-
-        const [latestForLocation] = await tx`
-          SELECT i.id
-          FROM inventory_count_items i
-          JOIN inventory_counts c ON c.id = i.inventory_count_id
-          WHERE i.material_id = ${change.materialId}
-            AND i.location_id = ${change.locationId}
-          ORDER BY c.created_at DESC, c.id DESC, i.id DESC
-          LIMIT 1
-        `;
-        if (String(latestForLocation?.id || '') === String(change.itemId)) {
-          await tx`
-            INSERT INTO stock_location_adjustments (material_id, location_id, adjustment_qty, notes, updated_at)
-            VALUES (${change.materialId}, ${change.locationId}, ${change.countedQty}, 'Editado pelo inventario', now())
-            ON CONFLICT (material_id, location_id)
-            DO UPDATE SET adjustment_qty = EXCLUDED.adjustment_qty,
-                          notes = EXCLUDED.notes,
-                          updated_at = now()
-          `;
-        }
       }
 
       const [updatedCount] = await tx`
@@ -2135,6 +2530,139 @@ router.delete(
             row.id
         }
       );
+
+      res.json(
+        row
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+router.put(
+  '/current/corrections',
+  requirePermission('stock:write'),
+  async (req, res, next) => {
+    try {
+      const materialId =
+        Number(
+          req.body.materialId
+        );
+
+
+      const locationId =
+        Number(
+          req.body.locationId
+        );
+
+
+      const correctionQty =
+        toNumber(
+          req.body.correctionQty
+        );
+
+
+      const notes =
+        String(
+          req.body.notes
+          ||
+          ''
+        ).trim()
+        ||
+        null;
+
+
+      if (
+        !materialId
+        ||
+        !locationId
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              'Material e local sao obrigatorios.'
+          });
+      }
+
+
+      const db =
+        requireDb();
+
+
+      const user =
+        auditUser(
+          req.user
+        );
+
+
+      const [row] =
+        await db`
+          INSERT INTO stock_location_corrections (
+            material_id,
+            location_id,
+            correction_qty,
+            notes,
+            updated_by_user_id,
+            updated_by_user_name,
+            updated_at
+          )
+
+          VALUES (
+            ${materialId},
+            ${locationId},
+            ${correctionQty},
+            ${notes},
+            ${user.id || null},
+            ${displayUserName(req.user)},
+            now()
+          )
+
+          ON CONFLICT (
+            material_id,
+            location_id
+          )
+
+          DO UPDATE SET
+            correction_qty =
+              EXCLUDED.correction_qty,
+
+            notes =
+              EXCLUDED.notes,
+
+            updated_by_user_id =
+              EXCLUDED.updated_by_user_id,
+
+            updated_by_user_name =
+              EXCLUDED.updated_by_user_name,
+
+            updated_at =
+              now()
+
+          RETURNING *
+        `;
+
+
+      await recordAuditLog(
+        db,
+        {
+          user:
+            req.user,
+
+          action:
+            'Correcao de estoque',
+
+          module:
+            'Estoque',
+
+          description:
+            `Atualizou correcao do material ${materialId} no local ${locationId} para ${correctionQty}.`,
+
+          recordRef:
+            row.id
+        }
+      );
+
 
       res.json(
         row

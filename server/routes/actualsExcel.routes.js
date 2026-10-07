@@ -361,7 +361,7 @@ async function loadCatalog(db) {
 
       db`
         SELECT *
-        FROM productivity_matrix
+        FROM productivity_matrix_current
         WHERE active = true
 
         ORDER BY

@@ -65,9 +65,10 @@ async function materialHasLinks(db, row) {
     countIfTableExists(db, 'stock_import_material_balances', 'material_id = $1', [id]),
     countIfTableExists(db, 'stock_location_adjustments', 'material_id = $1', [id]),
     countIfTableExists(db, 'inventory_count_items', 'material_id = $1', [id]),
-        countIfTableExists(db, 'stock_transport_records', 'material_id = $1', [id]),
+    countIfTableExists(db, 'stock_transport_records', 'material_id = $1', [id]),
     countIfTableExists(db, 'material_purchase_records', 'material_id = $1', [id]),
-    countIfTableExists(db, 'purchase_items', 'material_id = $1', [id])
+    countIfTableExists(db, 'purchase_items', 'material_id = $1', [id]),
+    countIfTableExists(db, 'quality_norm_materials', 'material_id = $1', [id])
   ];
 
   const counts = await Promise.all(checks);
@@ -93,6 +94,7 @@ function normalizeProductionModels(value, legacyInputs, materialId = null) {
   const sourceModels = Array.isArray(value) && value.length
     ? value
     : [{ name: 'Modelo padrão', inputMaterials: legacyInputs || [] }];
+
   return sourceModels.map((model, index) => ({
     name: String(model.name || `Modelo ${index + 1}`).trim() || `Modelo ${index + 1}`,
     inputMaterials: normalizeInputs(model.inputMaterials || model.inputs || [], materialId)
@@ -108,14 +110,12 @@ function optionalStockLimit(value) {
     return null;
   }
 
-  const parsed =
-    Number(value);
+  const parsed = Number(value);
 
   return Number.isFinite(parsed)
     ? parsed
     : NaN;
 }
-
 
 function validateMaterial(body) {
   const name =
@@ -140,6 +140,19 @@ function validateMaterial(body) {
       body.maximumQuantity
     );
 
+  const materialTypeId =
+    body.materialTypeId === null
+    || body.materialTypeId === undefined
+    || body.materialTypeId === ''
+      ? null
+      : Number(body.materialTypeId);
+
+  const lengthM =
+    body.lengthM === null
+    || body.lengthM === undefined
+    || body.lengthM === ''
+      ? null
+      : Number(body.lengthM);
 
   if (!name) {
     return {
@@ -148,6 +161,31 @@ function validateMaterial(body) {
     };
   }
 
+  if (
+    materialTypeId !== null
+    && (
+      !Number.isInteger(materialTypeId)
+      || materialTypeId <= 0
+    )
+  ) {
+    return {
+      error:
+        'Tipo de material invalido.'
+    };
+  }
+
+  if (
+    lengthM !== null
+    && (
+      !Number.isFinite(lengthM)
+      || lengthM <= 0
+    )
+  ) {
+    return {
+      error:
+        'Comprimento deve ser vazio ou maior que zero.'
+    };
+  }
 
   if (!units.has(primaryUnit)) {
     return {
@@ -156,7 +194,6 @@ function validateMaterial(body) {
     };
   }
 
-
   if (!units.has(secondaryUnit)) {
     return {
       error:
@@ -164,14 +201,12 @@ function validateMaterial(body) {
     };
   }
 
-
   if (!factor || factor <= 0) {
     return {
       error:
         'Fator entre unidades e obrigatorio.'
     };
   }
-
 
   if (
     Number.isNaN(
@@ -186,7 +221,6 @@ function validateMaterial(body) {
     };
   }
 
-
   if (
     Number.isNaN(
       maximumQuantity
@@ -199,7 +233,6 @@ function validateMaterial(body) {
         'Estoque maximo deve ser vazio ou maior/igual a zero.'
     };
   }
-
 
   if (
     minimumQuantity !== null
@@ -214,22 +247,57 @@ function validateMaterial(body) {
     };
   }
 
-
   return {
     name,
     primaryUnit,
     secondaryUnit,
     factor,
     minimumQuantity,
-    maximumQuantity
+    maximumQuantity,
+    materialTypeId,
+    lengthM
   };
+}
+
+async function materialTypeForSave(
+  db,
+  materialTypeId
+) {
+  const [row] =
+    await db`
+      SELECT
+        id,
+        name,
+        requires_length
+      FROM material_types
+      WHERE id = ${materialTypeId}
+        AND active = true
+    `;
+
+  if (!row) {
+    const error =
+      new Error(
+        'Tipo de material informado não existe ou está inativo.'
+      );
+
+    error.status = 400;
+    throw error;
+  }
+
+  return row;
 }
 
 function materialResponse(row) {
   const grouped = new Map();
+
   for (const item of row.production_model_items || []) {
-    const modelName = item.modelName || 'Modelo padrão';
-    if (!grouped.has(modelName)) grouped.set(modelName, []);
+    const modelName =
+      item.modelName || 'Modelo padrão';
+
+    if (!grouped.has(modelName)) {
+      grouped.set(modelName, []);
+    }
+
     grouped.get(modelName).push({
       id: item.inputMaterialId,
       inputMaterialId: item.inputMaterialId,
@@ -237,196 +305,621 @@ function materialResponse(row) {
       qtyPerOutput: item.qtyPerOutput || 1
     });
   }
+
   return {
     ...row,
-    production_models: [...grouped.entries()].map(([name, inputMaterials]) => ({ name, inputMaterials }))
+    production_models:
+      [...grouped.entries()]
+        .map(
+          ([name, inputMaterials]) => ({
+            name,
+            inputMaterials
+          })
+        )
   };
 }
 
 router.get('/', async (req, res, next) => {
   try {
-    const db = requireDb();
-    const search = `%${req.query.search || ''}%`;
-    const rows = await db`
-      SELECT m.*,
-             COALESCE(
-               json_agg(json_build_object('id', i.id, 'name', i.name, 'qtyPerOutput', mi.qty_per_output, 'modelName', COALESCE(mi.production_model_name, 'Modelo padrão')) ORDER BY COALESCE(mi.production_model_name, 'Modelo padrão'), i.name)
-               FILTER (WHERE i.id IS NOT NULL),
-               '[]'::json
-             ) AS input_materials,
-             COALESCE(
-               json_agg(json_build_object('modelName', COALESCE(mi.production_model_name, 'Modelo padrão'), 'inputMaterialId', i.id, 'materialName', i.name, 'qtyPerOutput', mi.qty_per_output) ORDER BY COALESCE(mi.production_model_name, 'Modelo padrão'), i.name)
-               FILTER (WHERE i.id IS NOT NULL),
-               '[]'::json
-             ) AS production_model_items
-      FROM materials m
-      LEFT JOIN material_inputs mi ON mi.material_id = m.id
-      LEFT JOIN materials i ON i.id = mi.input_material_id
-      WHERE (${req.query.search || ''} = ''
-        OR m.name ILIKE ${search}
-        OR array_to_string(COALESCE(m.codes, ARRAY[]::text[]), ', ') ILIKE ${search})
-      GROUP BY m.id
-      ORDER BY m.active DESC, m.name
-    `;
-    res.json(rows.map(materialResponse));
+    const db =
+      requireDb();
+
+    const search =
+      `%${req.query.search || ''}%`;
+
+    const rows =
+      await db`
+        SELECT
+          m.*,
+          mt.name AS material_type_name,
+          mt.requires_length AS material_type_requires_length,
+
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id',
+                  i.id,
+                'name',
+                  i.name,
+                'qtyPerOutput',
+                  mi.qty_per_output,
+                'modelName',
+                  COALESCE(
+                    mi.production_model_name,
+                    'Modelo padrão'
+                  )
+              )
+              ORDER BY
+                COALESCE(
+                  mi.production_model_name,
+                  'Modelo padrão'
+                ),
+                i.name
+            )
+            FILTER (
+              WHERE i.id IS NOT NULL
+            ),
+            '[]'::json
+          ) AS input_materials,
+
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'modelName',
+                  COALESCE(
+                    mi.production_model_name,
+                    'Modelo padrão'
+                  ),
+                'inputMaterialId',
+                  i.id,
+                'materialName',
+                  i.name,
+                'qtyPerOutput',
+                  mi.qty_per_output
+              )
+              ORDER BY
+                COALESCE(
+                  mi.production_model_name,
+                  'Modelo padrão'
+                ),
+                i.name
+            )
+            FILTER (
+              WHERE i.id IS NOT NULL
+            ),
+            '[]'::json
+          ) AS production_model_items
+
+        FROM materials m
+
+        LEFT JOIN material_types mt
+          ON mt.id = m.material_type_id
+
+        LEFT JOIN material_inputs mi
+          ON mi.material_id = m.id
+
+        LEFT JOIN materials i
+          ON i.id = mi.input_material_id
+
+        WHERE (
+          ${req.query.search || ''} = ''
+
+          OR m.name ILIKE ${search}
+
+          OR array_to_string(
+            COALESCE(
+              m.codes,
+              ARRAY[]::text[]
+            ),
+            ', '
+          ) ILIKE ${search}
+        )
+
+        GROUP BY
+          m.id,
+          mt.id
+
+        ORDER BY
+          m.active DESC,
+          m.name
+      `;
+
+    res.json(
+      rows.map(materialResponse)
+    );
+
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/', requirePermission('registrations:write'), async (req, res, next) => {
-  try {
-    const valid = validateMaterial(req.body);
-    if (valid.error) return res.status(400).json({ error: valid.error });
+router.post(
+  '/',
+  requirePermission('registrations:write'),
+  async (req, res, next) => {
+    try {
+      const valid =
+        validateMaterial(req.body);
 
-    const db = requireDb();
-    const codes = normalizeCodes(req.body.codes);
-    const models = normalizeProductionModels(req.body.productionModels, req.body.inputMaterials || req.body.inputMaterialIds);
-    const row = await db.begin(async tx => {
-      const [created] = await tx`
-        INSERT INTO materials (
-  name,
-  codes,
-  primary_unit,
-  secondary_unit,
-  primary_to_secondary_factor,
-  minimum_quantity,
-  maximum_quantity,
-  is_initial_raw_material,
-  permits_sales,
-  active
-)
-VALUES (
-  ${valid.name},
-  ${codes},
-  ${valid.primaryUnit},
-  ${valid.secondaryUnit},
-  ${valid.factor},
-  ${valid.minimumQuantity},
-  ${valid.maximumQuantity},
-  ${req.body.isInitialRawMaterial === true},
-  ${req.body.permitsSales !== false},
-  ${req.body.active !== false}
-)
-        RETURNING *
-      `;
-      for (const model of models) {
-        for (const input of model.inputMaterials) {
-          await tx`
-            INSERT INTO material_inputs (material_id, input_material_id, qty_per_output, production_model_name)
-            VALUES (${created.id}, ${input.inputMaterialId}, ${input.qtyPerOutput}, ${model.name})
-            ON CONFLICT (material_id, production_model_name, input_material_id)
-            DO UPDATE SET qty_per_output = EXCLUDED.qty_per_output
-          `;
-        }
+      if (valid.error) {
+        return res
+          .status(400)
+          .json({
+            error: valid.error
+          });
       }
-      return created;
-    });
-    await recordAuditLog(db, {
-      user: req.user,
-      action: 'Cadastro de material',
-      module: 'Cadastros',
-      description: `Cadastrou material ${row.name}${codes.length ? ` (${codes.join(', ')})` : ''}`,
-      recordRef: row.id
-    });
-    res.status(201).json(row);
-  } catch (error) {
-    next(error);
-  }
-});
 
-router.put('/:id', requirePermission('registrations:write'), async (req, res, next) => {
-  try {
-    const valid = validateMaterial(req.body);
-    if (valid.error) return res.status(400).json({ error: valid.error });
+      const db =
+        requireDb();
 
-    const db = requireDb();
-    const codes = normalizeCodes(req.body.codes);
-    const models = normalizeProductionModels(req.body.productionModels, req.body.inputMaterials || req.body.inputMaterialIds, req.params.id);
-    const row = await db.begin(async tx => {
-      const [updated] = await tx`
-        UPDATE materials
-        SET name = ${valid.name},
-            codes = ${codes},
-            primary_unit = ${valid.primaryUnit},
-            secondary_unit = ${valid.secondaryUnit},
-            primary_to_secondary_factor = ${valid.factor},
-minimum_quantity = ${valid.minimumQuantity},
-maximum_quantity = ${valid.maximumQuantity},
-is_initial_raw_material = ${req.body.isInitialRawMaterial === true},
-            permits_sales = ${req.body.permitsSales !== false},
-            active = ${req.body.active !== false},
-            updated_at = now()
-        WHERE id = ${req.params.id}
-        RETURNING *
-      `;
-      if (!updated) return null;
+      let lengthM =
+        null;
 
-      await tx`DELETE FROM material_inputs WHERE material_id = ${req.params.id}`;
-      for (const model of models) {
-        for (const input of model.inputMaterials) {
-          await tx`
-            INSERT INTO material_inputs (material_id, input_material_id, qty_per_output, production_model_name)
-            VALUES (${req.params.id}, ${input.inputMaterialId}, ${input.qtyPerOutput}, ${model.name})
-            ON CONFLICT (material_id, production_model_name, input_material_id)
-            DO UPDATE SET qty_per_output = EXCLUDED.qty_per_output
-          `;
+      if (
+        valid.materialTypeId !== null
+      ) {
+        const materialType =
+          await materialTypeForSave(
+            db,
+            valid.materialTypeId
+          );
+
+        if (
+          materialType.requires_length
+          &&
+          !(valid.lengthM > 0)
+        ) {
+          return res
+            .status(400)
+            .json({
+              error:
+                'Comprimento em metros é obrigatório para este tipo de material.'
+            });
         }
+
+        lengthM =
+          materialType.requires_length
+            ? valid.lengthM
+            : null;
       }
-      return updated;
-    });
-    if (!row) return res.status(404).json({ error: 'Material não encontrado.' });
-    await recordAuditLog(db, {
-      user: req.user,
-      action: 'Edição de material',
-      module: 'Cadastros',
-      description: `Editou material ${row.name}${codes.length ? ` (${codes.join(', ')})` : ''}`,
-      recordRef: row.id
-    });
-    res.json(row);
-  } catch (error) {
-    next(error);
-  }
-});
 
-router.delete('/:id', requirePermission('registrations:write'), async (req, res, next) => {
-  try {
-    const db = requireDb();
-    const result = await db.begin(async tx => {
-      const [row] = await tx`
-        SELECT *
-        FROM materials
-        WHERE id = ${req.params.id}
-        FOR UPDATE
-      `;
-      if (!row) return { notFound: true };
-      if (await materialHasLinks(tx, row)) return { blocked: true };
+      const codes =
+        normalizeCodes(
+          req.body.codes
+        );
 
-      const [deleted] = await tx`
-        DELETE FROM materials
-        WHERE id = ${req.params.id}
-        RETURNING *
-      `;
-      return { deleted };
-    });
+      const models =
+        normalizeProductionModels(
+          req.body.productionModels,
+          req.body.inputMaterials
+            || req.body.inputMaterialIds
+        );
 
-    if (result.notFound) return res.status(404).json({ error: 'Material nao encontrado.' });
-    if (result.blocked) return res.status(409).json({ error: MATERIAL_LINKED_MESSAGE });
+      const row =
+        await db.begin(
+          async tx => {
+            const [created] =
+              await tx`
+                INSERT INTO materials (
+                  name,
+                  codes,
+                  material_type_id,
+                  length_m,
+                  primary_unit,
+                  secondary_unit,
+                  primary_to_secondary_factor,
+                  minimum_quantity,
+                  maximum_quantity,
+                  is_initial_raw_material,
+                  permits_sales,
+                  active
+                )
 
-    await recordAuditLog(db, {
-      user: req.user,
-      action: 'Material excluído',
-      module: 'Cadastros',
-      description: auditDeleteDescription(result.deleted, req.user),
-      recordRef: result.deleted.id
-    });
-    res.json({ deleted: true, id: result.deleted.id });
-  } catch (error) {
-    if (error.code === '23503') {
-      return res.status(409).json({ error: MATERIAL_LINKED_MESSAGE });
+                VALUES (
+                  ${valid.name},
+                  ${codes},
+                  ${valid.materialTypeId},
+                  ${lengthM},
+                  ${valid.primaryUnit},
+                  ${valid.secondaryUnit},
+                  ${valid.factor},
+                  ${valid.minimumQuantity},
+                  ${valid.maximumQuantity},
+                  ${req.body.isInitialRawMaterial === true},
+                  ${req.body.permitsSales !== false},
+                  ${req.body.active !== false}
+                )
+
+                RETURNING *
+              `;
+
+            for (const model of models) {
+              for (
+                const input
+                of model.inputMaterials
+              ) {
+                await tx`
+                  INSERT INTO material_inputs (
+                    material_id,
+                    input_material_id,
+                    qty_per_output,
+                    production_model_name
+                  )
+
+                  VALUES (
+                    ${created.id},
+                    ${input.inputMaterialId},
+                    ${input.qtyPerOutput},
+                    ${model.name}
+                  )
+
+                  ON CONFLICT (
+                    material_id,
+                    production_model_name,
+                    input_material_id
+                  )
+
+                  DO UPDATE SET
+                    qty_per_output =
+                      EXCLUDED.qty_per_output
+                `;
+              }
+            }
+
+            return created;
+          }
+        );
+
+      await recordAuditLog(
+        db,
+        {
+          user:
+            req.user,
+
+          action:
+            'Cadastro de material',
+
+          module:
+            'Cadastros',
+
+          description:
+            `Cadastrou material ${row.name}${codes.length ? ` (${codes.join(', ')})` : ''}`,
+
+          recordRef:
+            row.id
+        }
+      );
+
+      res
+        .status(201)
+        .json(row);
+
+    } catch (error) {
+      next(error);
     }
-    next(error);
   }
-});
+);
+
+router.put(
+  '/:id',
+  requirePermission('registrations:write'),
+  async (req, res, next) => {
+    try {
+      const valid =
+        validateMaterial(req.body);
+
+      if (valid.error) {
+        return res
+          .status(400)
+          .json({
+            error:
+              valid.error
+          });
+      }
+
+      const db =
+        requireDb();
+
+      let lengthM =
+        null;
+
+      if (
+        valid.materialTypeId !== null
+      ) {
+        const materialType =
+          await materialTypeForSave(
+            db,
+            valid.materialTypeId
+          );
+
+        if (
+          materialType.requires_length
+          &&
+          !(valid.lengthM > 0)
+        ) {
+          return res
+            .status(400)
+            .json({
+              error:
+                'Comprimento em metros é obrigatório para este tipo de material.'
+            });
+        }
+
+        lengthM =
+          materialType.requires_length
+            ? valid.lengthM
+            : null;
+      }
+
+      const codes =
+        normalizeCodes(
+          req.body.codes
+        );
+
+      const models =
+        normalizeProductionModels(
+          req.body.productionModels,
+          req.body.inputMaterials
+            || req.body.inputMaterialIds,
+          req.params.id
+        );
+
+      const row =
+        await db.begin(
+          async tx => {
+            const [updated] =
+              await tx`
+                UPDATE materials
+
+                SET
+                  name =
+                    ${valid.name},
+
+                  codes =
+                    ${codes},
+
+                  material_type_id =
+                    ${valid.materialTypeId},
+
+                  length_m =
+                    ${lengthM},
+
+                  primary_unit =
+                    ${valid.primaryUnit},
+
+                  secondary_unit =
+                    ${valid.secondaryUnit},
+
+                  primary_to_secondary_factor =
+                    ${valid.factor},
+
+                  minimum_quantity =
+                    ${valid.minimumQuantity},
+
+                  maximum_quantity =
+                    ${valid.maximumQuantity},
+
+                  is_initial_raw_material =
+                    ${req.body.isInitialRawMaterial === true},
+
+                  permits_sales =
+                    ${req.body.permitsSales !== false},
+
+                  active =
+                    ${req.body.active !== false},
+
+                  updated_at =
+                    now()
+
+                WHERE id =
+                  ${req.params.id}
+
+                RETURNING *
+              `;
+
+            if (!updated) {
+              return null;
+            }
+
+            await tx`
+              DELETE FROM material_inputs
+              WHERE material_id =
+                ${req.params.id}
+            `;
+
+            for (const model of models) {
+              for (
+                const input
+                of model.inputMaterials
+              ) {
+                await tx`
+                  INSERT INTO material_inputs (
+                    material_id,
+                    input_material_id,
+                    qty_per_output,
+                    production_model_name
+                  )
+
+                  VALUES (
+                    ${req.params.id},
+                    ${input.inputMaterialId},
+                    ${input.qtyPerOutput},
+                    ${model.name}
+                  )
+
+                  ON CONFLICT (
+                    material_id,
+                    production_model_name,
+                    input_material_id
+                  )
+
+                  DO UPDATE SET
+                    qty_per_output =
+                      EXCLUDED.qty_per_output
+                `;
+              }
+            }
+
+            return updated;
+          }
+        );
+
+      if (!row) {
+        return res
+          .status(404)
+          .json({
+            error:
+              'Material não encontrado.'
+          });
+      }
+
+      await recordAuditLog(
+        db,
+        {
+          user:
+            req.user,
+
+          action:
+            'Edição de material',
+
+          module:
+            'Cadastros',
+
+          description:
+            `Editou material ${row.name}${codes.length ? ` (${codes.join(', ')})` : ''}`,
+
+          recordRef:
+            row.id
+        }
+      );
+
+      res.json(row);
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete(
+  '/:id',
+  requirePermission('registrations:write'),
+  async (req, res, next) => {
+    try {
+      const db =
+        requireDb();
+
+      const result =
+        await db.begin(
+          async tx => {
+            const [row] =
+              await tx`
+                SELECT *
+                FROM materials
+                WHERE id =
+                  ${req.params.id}
+                FOR UPDATE
+              `;
+
+            if (!row) {
+              return {
+                notFound:
+                  true
+              };
+            }
+
+            if (
+              await materialHasLinks(
+                tx,
+                row
+              )
+            ) {
+              return {
+                blocked:
+                  true
+              };
+            }
+
+            const [deleted] =
+              await tx`
+                DELETE FROM materials
+                WHERE id =
+                  ${req.params.id}
+                RETURNING *
+              `;
+
+            return {
+              deleted
+            };
+          }
+        );
+
+      if (result.notFound) {
+        return res
+          .status(404)
+          .json({
+            error:
+              'Material nao encontrado.'
+          });
+      }
+
+      if (result.blocked) {
+        return res
+          .status(409)
+          .json({
+            error:
+              MATERIAL_LINKED_MESSAGE
+          });
+      }
+
+      await recordAuditLog(
+        db,
+        {
+          user:
+            req.user,
+
+          action:
+            'Material excluído',
+
+          module:
+            'Cadastros',
+
+          description:
+            auditDeleteDescription(
+              result.deleted,
+              req.user
+            ),
+
+          recordRef:
+            result.deleted.id
+        }
+      );
+
+      res.json({
+        deleted:
+          true,
+
+        id:
+          result.deleted.id
+      });
+
+    } catch (error) {
+      if (
+        error.code
+        ===
+        '23503'
+      ) {
+        return res
+          .status(409)
+          .json({
+            error:
+              MATERIAL_LINKED_MESSAGE
+          });
+      }
+
+      next(error);
+    }
+  }
+);
 
 export default router;

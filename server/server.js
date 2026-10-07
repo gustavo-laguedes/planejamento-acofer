@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import authRoutes from './routes/auth.routes.js';
@@ -14,6 +15,9 @@ import actualsExcelRoutes from './routes/actualsExcel.routes.js';
 import locationsRoutes from './routes/locations.routes.js';
 import machinesRoutes from './routes/machines.routes.js';
 import materialsRoutes from './routes/materials.routes.js';
+import materialTypesRoutes from './routes/materialTypes.routes.js';
+import normsRoutes from './routes/norms.routes.js';
+import dashboardRoutes from './routes/dashboard.routes.js';
 import auditRoutes from './routes/audit.routes.js';
 import { requireAnyPermission, requireAuth, requirePermission } from './routes/middleware.js';
 
@@ -29,6 +33,99 @@ const allowedOrigins = new Set([
     .map(origin => origin.trim())
     .filter(Boolean)
 ]);
+
+const LINE_VERSION_EXTENSIONS = new Set([
+  '.js',
+  '.css',
+  '.html',
+  '.json',
+  '.sql',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+  '.svg'
+]);
+
+const LINE_VERSION_SOURCES = [
+  path.join(frontendDir, 'app.js'),
+  path.join(frontendDir, 'style.css'),
+  path.join(frontendDir, 'index.html'),
+  path.join(frontendDir, 'package.json'),
+  path.join(frontendDir, 'pages'),
+  path.join(frontendDir, 'shared'),
+  path.join(frontendDir, 'services'),
+  path.join(frontendDir, 'server'),
+  path.join(frontendDir, 'assets')
+];
+
+function latestLineSourceMtime(target) {
+  try {
+    if (!fs.existsSync(target)) return 0;
+
+    const stats = fs.statSync(target);
+
+    if (stats.isFile()) {
+      const extension = path.extname(target).toLowerCase();
+
+      return LINE_VERSION_EXTENSIONS.has(extension)
+        ? stats.mtimeMs
+        : 0;
+    }
+
+    return fs.readdirSync(target, { withFileTypes: true })
+      .reduce((latest, entry) => {
+        if (
+          entry.name === 'node_modules'
+          || entry.name === '.git'
+        ) {
+          return latest;
+        }
+
+        return Math.max(
+          latest,
+          latestLineSourceMtime(
+            path.join(target, entry.name)
+          )
+        );
+      }, 0);
+  } catch {
+    return 0;
+  }
+}
+
+function formatLineVersion(timestamp) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(new Date(timestamp));
+
+  const values = Object.fromEntries(
+    parts.map(part => [part.type, part.value])
+  );
+
+  return `V${values.day}${values.month}${values.year}.${values.hour}${values.minute}`;
+}
+
+function currentLineVersion() {
+  const modifiedAt = LINE_VERSION_SOURCES.reduce(
+    (latest, target) =>
+      Math.max(
+        latest,
+        latestLineSourceMtime(target)
+      ),
+    0
+  );
+
+  return formatLineVersion(
+    modifiedAt || Date.now()
+  );
+}
 
 function applyCors(req, res, next) {
   const origin = req.headers.origin;
@@ -66,6 +163,14 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, name: 'Planejamento Aço-Fer' });
 });
 
+app.get('/api/version', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+
+  res.json({
+    version: currentLineVersion()
+  });
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/imports', requireAuth, importRoutes);
 app.use('/api/stock', requireAuth, requireStockRead, stockRoutes);
@@ -85,6 +190,9 @@ app.use(
 app.use('/api/locations', requireAuth, requirePermission('registrations:read'), locationsRoutes);
 app.use('/api/machines', requireAuth, requirePermission('registrations:read'), machinesRoutes);
 app.use('/api/materials', requireAuth, requirePermission('registrations:read'), materialsRoutes);
+app.use('/api/material-types', requireAuth, requirePermission('registrations:read'), materialTypesRoutes);
+app.use('/api/norms', requireAuth, requirePermission('registrations:read'), normsRoutes);
+app.use('/api/dashboard', requireAuth, requirePermission('productivity:read'), dashboardRoutes);
 app.use('/api/audit', requireAuth, requirePermission('log:read'), auditRoutes);
 
 app.use(express.static(frontendDir, {

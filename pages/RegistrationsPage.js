@@ -7,7 +7,9 @@ import { canAccess } from '../shared/rbac.js';
 const registrationTabs = [
   { id: 'locations', label: 'Locais' },
   { id: 'machines', label: 'Máquinas' },
-  { id: 'materials', label: 'Materiais' }
+  { id: 'materialTypes', label: 'Tipos de Material' },
+  { id: 'materials', label: 'Materiais' },
+  { id: 'norms', label: 'Normas' }
 ];
 
 export function RegistrationsPage() {
@@ -52,7 +54,9 @@ export function RegistrationsPage() {
     try {
       if (activeTab === 'locations') return await renderLocations();
       if (activeTab === 'machines') return await renderMachines();
-      return await renderMaterials();
+      if (activeTab === 'materialTypes') return await renderMaterialTypes();
+      if (activeTab === 'materials') return await renderMaterials();
+      return await renderNorms();
     } catch (error) {
       setInternalError(target, error.message || 'Nao foi possivel carregar os cadastros.');
       throw error;
@@ -185,8 +189,245 @@ export function RegistrationsPage() {
     await load();
   }
 
+  async function renderMaterialTypes() {
+    target.innerHTML = sectionShell(
+      'Tipos de Material',
+      'Cadastrar tipo',
+      'Buscar por tipo de material'
+    );
+
+    const search = target.querySelector('.search');
+    const tableTarget = target.querySelector('.table-target');
+
+    let rows = [];
+
+    async function load() {
+      rows = await api(
+        `/material-types?search=${encodeURIComponent(search.value)}`
+      );
+
+      tableTarget.innerHTML = '';
+
+      tableTarget.appendChild(
+        DataTable({
+          columns: [
+            {
+              label: 'Tipo de material',
+              key: 'name'
+            },
+            {
+              label: 'Exige comprimento',
+              render: row =>
+                row.requires_length
+                  ? 'Sim'
+                  : 'Não'
+            },
+            {
+              label: 'Status',
+              render: row =>
+                row.active
+                  ? 'Ativo'
+                  : 'Inativo'
+            },
+            {
+              label: 'Ações',
+              render: row =>
+                canWriteRegistrations
+                  ? `<button class="link-button" data-edit="${row.id}">Editar</button>`
+                  : ''
+            }
+          ],
+          rows
+        })
+      );
+    }
+
+    function openModal(row = null) {
+      const modal = createModal(
+        row
+          ? 'Editar tipo de material'
+          : 'Cadastrar tipo de material',
+
+        `
+          <form class="grid-form registration-form">
+
+            <label>
+              Nome do tipo
+
+              <input
+                name="name"
+                required
+                placeholder="Ex.: Vareta"
+              />
+            </label>
+
+            <label class="checkbox-line">
+              <input
+                name="requiresLength"
+                type="checkbox"
+              />
+
+              Exige comprimento em metros
+            </label>
+
+            <label class="checkbox-line">
+              <input
+                name="active"
+                type="checkbox"
+              />
+
+              Tipo ativo
+            </label>
+
+            <div class="form-actions">
+
+              ${
+                row
+                  ? `
+                    <button
+                      class="danger-button delete-registration"
+                      type="button"
+                    >
+                      Excluir
+                    </button>
+                  `
+                  : '<span></span>'
+              }
+
+              <button
+                class="primary-button"
+                type="submit"
+              >
+                Salvar
+              </button>
+
+              <button
+                class="secondary-button close-modal"
+                type="button"
+              >
+                Cancelar
+              </button>
+
+            </div>
+
+          </form>
+        `
+      );
+
+      const form = modal.querySelector('form');
+
+      form.elements.name.value =
+        row?.name || '';
+
+      form.elements.requiresLength.checked =
+        row?.requires_length === true;
+
+      form.elements.active.checked =
+        row?.active !== false;
+
+      form.addEventListener(
+        'submit',
+        async event => {
+          event.preventDefault();
+
+          const body = {
+            name:
+              form.elements.name.value,
+
+            requiresLength:
+              form.elements.requiresLength.checked,
+
+            active:
+              form.elements.active.checked
+          };
+
+          await api(
+            row
+              ? `/material-types/${row.id}`
+              : '/material-types',
+
+            {
+              method:
+                row
+                  ? 'PUT'
+                  : 'POST',
+
+              body
+            }
+          );
+
+          closeModal(modal);
+
+          await load();
+        }
+      );
+
+      modal
+        .querySelector(
+          '.delete-registration'
+        )
+        ?.addEventListener(
+          'click',
+          async event => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            if (
+              !confirm(
+                'Tem certeza que deseja excluir este tipo de material?'
+              )
+            ) {
+              return;
+            }
+
+            try {
+              await api(
+                `/material-types/${row.id}`,
+                {
+                  method: 'DELETE'
+                }
+              );
+
+              closeModal(modal);
+
+              await load();
+
+            } catch (error) {
+              toast(
+                error?.message
+                || String(error)
+              );
+            }
+          }
+        );
+
+      form.elements.name.focus();
+    }
+
+    bindListEvents(
+      target,
+      () => rows,
+      openModal
+    );
+
+    search.addEventListener(
+      'input',
+      () =>
+        load()
+          .catch(error =>
+            toast(
+              error?.message
+              || String(error)
+            )
+          )
+    );
+
+    await load();
+  }
+
   async function renderMaterials() {
     await refreshLookups();
+    const materialTypes = await api('/material-types');
     target.innerHTML = sectionShell('Materiais', 'Cadastrar material', 'Buscar por material ou código');
     const search = target.querySelector('.search');
     const tableTarget = target.querySelector('.table-target');
@@ -208,6 +449,14 @@ export function RegistrationsPage() {
         columns: [
           { label: 'Nome', key: 'name' },
           { label: 'Códigos', render: row => formatCodes(row.codes) },
+          { label: 'Tipo', render: row => row.material_type_name || '-' },
+          {
+            label: 'Comprimento',
+            render: row =>
+              row.length_m !== null && row.length_m !== undefined
+                ? `${Number(row.length_m).toLocaleString('pt-BR')} m`
+                : '-'
+          },
           { label: 'Unidade principal', key: 'primary_unit' },
           { label: 'Unidade secundária', key: 'secondary_unit' },
           { label: 'Fator', key: 'primary_to_secondary_factor' },
@@ -248,12 +497,50 @@ export function RegistrationsPage() {
       }));
     }
 
+    function materialTypeOptions(selectedId = '') {
+      return materialTypes
+        .filter(type =>
+          type.active
+          || String(type.id) === String(selectedId)
+        )
+        .map(type => `
+          <option
+            value="${type.id}"
+            data-requires-length="${type.requires_length ? 'true' : 'false'}"
+            ${String(type.id) === String(selectedId) ? 'selected' : ''}
+          >
+            ${type.name}${type.active ? '' : ' (Inativo)'}
+          </option>
+        `)
+        .join('');
+    }
+
     function openModal(row = null) {
       const selectedModels = normalizeProductionModels(row);
       const codeInput = CodeChipsInput({ initialCodes: row?.codes || [] });
       const modal = createModal(row ? 'Editar material' : 'Cadastrar material', `
         <form class="grid-form registration-form material-form">
           <label>Nome do material<input name="name" required /></label>
+
+          <label>
+            Tipo de material
+            <select name="materialTypeId" required>
+              <option value="">Selecione</option>
+              ${materialTypeOptions(row?.material_type_id)}
+            </select>
+          </label>
+
+          <label class="material-length-field" hidden>
+            Comprimento (m)
+            <input
+              name="lengthM"
+              type="number"
+              min="0.001"
+              step="0.001"
+              inputmode="decimal"
+            />
+          </label>
+
           <label>Unidade principal<select name="primaryUnit" required><option value="un">un</option><option value="kg">kg</option></select></label>
           <label>Unidade secundária<select name="secondaryUnit" required><option value="un">un</option><option value="kg">kg</option></select></label>
           <label>
@@ -298,14 +585,12 @@ export function RegistrationsPage() {
         </div>
       </label>
 
-
       <span
         class="material-stock-limit-conversion"
         aria-hidden="true"
       >
         ↔
       </span>
-
 
       <label class="material-stock-limit-control">
         <span>Peso equivalente</span>
@@ -327,7 +612,6 @@ export function RegistrationsPage() {
 
     </div>
   </div>
-
 
   <div class="material-stock-limit-card">
     <div class="material-stock-limit-heading">
@@ -358,14 +642,12 @@ export function RegistrationsPage() {
         </div>
       </label>
 
-
       <span
         class="material-stock-limit-conversion"
         aria-hidden="true"
       >
         ↔
       </span>
-
 
       <label class="material-stock-limit-control">
         <span>Peso equivalente</span>
@@ -421,7 +703,35 @@ export function RegistrationsPage() {
       const form = modal.querySelector('form');
       modal.querySelector('.codes-target').appendChild(codeInput.element);
       renderProductionModels(modal, selectedModels, row?.id || null);
+
       form.elements.name.value = row?.name || '';
+      form.elements.materialTypeId.value = row?.material_type_id || '';
+      form.elements.lengthM.value = row?.length_m ?? '';
+
+      const materialLengthField = modal.querySelector('.material-length-field');
+
+      const syncMaterialLengthField = () => {
+        const selectedOption =
+          form.elements.materialTypeId.selectedOptions[0];
+
+        const requiresLength =
+          selectedOption?.dataset.requiresLength === 'true';
+
+        materialLengthField.hidden = !requiresLength;
+        form.elements.lengthM.required = requiresLength;
+
+        if (!requiresLength) {
+          form.elements.lengthM.value = '';
+        }
+      };
+
+      form.elements.materialTypeId.addEventListener(
+        'change',
+        syncMaterialLengthField
+      );
+
+      syncMaterialLengthField();
+
       form.elements.primaryUnit.value = row?.primary_unit || 'un';
       form.elements.secondaryUnit.value = row?.secondary_unit || 'kg';
       form.elements.primaryToSecondaryFactor.value =
@@ -439,7 +749,6 @@ form.elements.maximumQuantity.value =
 form.elements.isInitialRawMaterial.checked =
   row?.is_initial_raw_material
   === true;
-
 
 const stockLimitFieldValue =
   value => {
@@ -459,7 +768,6 @@ const stockLimitFieldValue =
       )
     );
   };
-
 
 const stockLimitCanConvertToKg =
   () => {
@@ -481,25 +789,12 @@ const stockLimitCanConvertToKg =
           .value
       );
 
-
-    /*
-     * Se a própria unidade principal
-     * já for kg, a conversão é direta.
-     */
     if (
       primaryUnit === 'kg'
     ) {
       return true;
     }
 
-
-    /*
-     * Exemplo:
-     *
-     * unidade principal = un
-     * unidade secundária = kg
-     * fator = 0,212
-     */
     return (
       secondaryUnit === 'kg'
       &&
@@ -508,7 +803,6 @@ const stockLimitCanConvertToKg =
       factor > 0
     );
   };
-
 
 const stockLimitPrimaryToKg =
   value => {
@@ -523,10 +817,8 @@ const stockLimitPrimaryToKg =
       return '';
     }
 
-
     const quantity =
       Number(value);
-
 
     if (
       !Number.isFinite(quantity)
@@ -534,19 +826,16 @@ const stockLimitPrimaryToKg =
       return '';
     }
 
-
     const primaryUnit =
       form.elements
         .primaryUnit
         .value;
-
 
     if (
       primaryUnit === 'kg'
     ) {
       return quantity;
     }
-
 
     const secondaryUnit =
       form.elements
@@ -560,7 +849,6 @@ const stockLimitPrimaryToKg =
           .value
       );
 
-
     if (
       secondaryUnit !== 'kg'
       ||
@@ -571,10 +859,8 @@ const stockLimitPrimaryToKg =
       return '';
     }
 
-
     return quantity * factor;
   };
-
 
 const stockLimitKgToPrimary =
   value => {
@@ -589,10 +875,8 @@ const stockLimitKgToPrimary =
       return '';
     }
 
-
     const weight =
       Number(value);
-
 
     if (
       !Number.isFinite(weight)
@@ -600,19 +884,16 @@ const stockLimitKgToPrimary =
       return '';
     }
 
-
     const primaryUnit =
       form.elements
         .primaryUnit
         .value;
-
 
     if (
       primaryUnit === 'kg'
     ) {
       return weight;
     }
-
 
     const secondaryUnit =
       form.elements
@@ -626,7 +907,6 @@ const stockLimitKgToPrimary =
           .value
       );
 
-
     if (
       secondaryUnit !== 'kg'
       ||
@@ -637,10 +917,8 @@ const stockLimitKgToPrimary =
       return '';
     }
 
-
     return weight / factor;
   };
-
 
 const syncStockLimitUnits =
   () => {
@@ -650,7 +928,6 @@ const syncStockLimitUnits =
         .primaryUnit
         .value
       || '';
-
 
     modal
       .querySelectorAll(
@@ -667,13 +944,11 @@ const syncStockLimitUnits =
 
   };
 
-
 const syncStockLimitWeightAvailability =
   () => {
 
     const available =
       stockLimitCanConvertToKg();
-
 
     [
       form.elements.minimumWeightKg,
@@ -685,7 +960,6 @@ const syncStockLimitWeightAvailability =
           input.disabled =
             !available;
 
-
           input.placeholder =
             available
               ? 'Peso'
@@ -696,7 +970,6 @@ const syncStockLimitWeightAvailability =
 
   };
 
-
 const syncMinimumWeightFromQuantity =
   () => {
 
@@ -706,7 +979,6 @@ const syncMinimumWeightFromQuantity =
           .minimumQuantity
           .value
       );
-
 
     form.elements
       .minimumWeightKg
@@ -719,7 +991,6 @@ const syncMinimumWeightFromQuantity =
 
   };
 
-
 const syncMaximumWeightFromQuantity =
   () => {
 
@@ -729,7 +1000,6 @@ const syncMaximumWeightFromQuantity =
           .maximumQuantity
           .value
       );
-
 
     form.elements
       .maximumWeightKg
@@ -742,7 +1012,6 @@ const syncMaximumWeightFromQuantity =
 
   };
 
-
 const syncMinimumQuantityFromWeight =
   () => {
 
@@ -752,7 +1021,6 @@ const syncMinimumQuantityFromWeight =
           .minimumWeightKg
           .value
       );
-
 
     form.elements
       .minimumQuantity
@@ -765,7 +1033,6 @@ const syncMinimumQuantityFromWeight =
 
   };
 
-
 const syncMaximumQuantityFromWeight =
   () => {
 
@@ -775,7 +1042,6 @@ const syncMaximumQuantityFromWeight =
           .maximumWeightKg
           .value
       );
-
 
     form.elements
       .maximumQuantity
@@ -787,7 +1053,6 @@ const syncMaximumQuantityFromWeight =
             );
 
   };
-
 
 const syncAllStockLimitWeights =
   () => {
@@ -802,18 +1067,8 @@ const syncAllStockLimitWeights =
 
   };
 
-
-/*
- * Abriu o modal:
- * já mostra imediatamente os pesos.
- */
 syncAllStockLimitWeights();
 
-
-/*
- * Mudou quantidade mínima →
- * recalcula peso mínimo.
- */
 form.elements
   .minimumQuantity
   .addEventListener(
@@ -821,11 +1076,6 @@ form.elements
     syncMinimumWeightFromQuantity
   );
 
-
-/*
- * Mudou peso mínimo →
- * recalcula quantidade mínima.
- */
 form.elements
   .minimumWeightKg
   .addEventListener(
@@ -833,11 +1083,6 @@ form.elements
     syncMinimumQuantityFromWeight
   );
 
-
-/*
- * Mudou quantidade máxima →
- * recalcula peso máximo.
- */
 form.elements
   .maximumQuantity
   .addEventListener(
@@ -845,11 +1090,6 @@ form.elements
     syncMaximumWeightFromQuantity
   );
 
-
-/*
- * Mudou peso máximo →
- * recalcula quantidade máxima.
- */
 form.elements
   .maximumWeightKg
   .addEventListener(
@@ -857,18 +1097,12 @@ form.elements
     syncMaximumQuantityFromWeight
   );
 
-
-/*
- * Se mudar unidade ou fator,
- * recalcula os pesos automaticamente.
- */
 form.elements
   .primaryUnit
   .addEventListener(
     'change',
     syncAllStockLimitWeights
   );
-
 
 form.elements
   .secondaryUnit
@@ -877,19 +1111,26 @@ form.elements
     syncAllStockLimitWeights
   );
 
-
 form.elements
   .primaryToSecondaryFactor
   .addEventListener(
     'input',
     syncAllStockLimitWeights
   );
+
       form.elements.permitsSales.checked = row?.permits_sales !== false;
+
       form.addEventListener('submit', async event => {
         event.preventDefault();
+
         const body = {
           name: form.elements.name.value,
           codes: codeInput.getCodes(),
+          materialTypeId: Number(form.elements.materialTypeId.value),
+          lengthM:
+            form.elements.lengthM.value === ''
+              ? null
+              : Number(form.elements.lengthM.value),
           primaryUnit: form.elements.primaryUnit.value,
           secondaryUnit: form.elements.secondaryUnit.value,
           primaryToSecondaryFactor:
@@ -933,14 +1174,17 @@ isInitialRawMaterial:
           productionModels: getProductionModels(modal),
           active: true
         };
+
         await api(row ? `/materials/${row.id}` : '/materials', { method: row ? 'PUT' : 'POST', body });
         closeModal(modal);
         await load();
       });
+
       modal.querySelector('.delete-registration')?.addEventListener('click', async event => {
         event.preventDefault();
         event.stopPropagation();
         if (!confirm('Tem certeza que deseja excluir este cadastro?')) return;
+
         try {
           await api(`/materials/${row.id}`, { method: 'DELETE' });
           closeModal(modal);
@@ -949,11 +1193,821 @@ isInitialRawMaterial:
           toast(error);
         }
       });
+
       form.elements.name.focus();
     }
 
     bindListEvents(target, () => rows, openModal);
     search.addEventListener('input', () => load().catch(toast));
+    await load();
+  }
+
+  async function renderNorms() {
+    await refreshLookups();
+
+    target.innerHTML =
+      sectionShell(
+        'Normas',
+        'Cadastrar norma',
+        'Buscar por norma ou material'
+      );
+
+    const search =
+      target.querySelector(
+        '.search'
+      );
+
+    const tableTarget =
+      target.querySelector(
+        '.table-target'
+      );
+
+    let rows = [];
+
+    function escapeNormHtml(value) {
+      return String(
+        value ?? ''
+      )
+        .replaceAll(
+          '&',
+          '&amp;'
+        )
+        .replaceAll(
+          '<',
+          '&lt;'
+        )
+        .replaceAll(
+          '>',
+          '&gt;'
+        )
+        .replaceAll(
+          '"',
+          '&quot;'
+        )
+        .replaceAll(
+          "'",
+          '&#039;'
+        );
+    }
+
+    async function load() {
+      rows =
+        await api(
+          `/norms?search=${encodeURIComponent(search.value)}`
+        );
+
+      tableTarget.innerHTML =
+        '';
+
+      tableTarget.appendChild(
+        DataTable({
+          columns: [
+            {
+              label:
+                'Norma',
+
+              key:
+                'name'
+            },
+
+            {
+              label:
+                'Descrição',
+
+              render:
+                row =>
+                  escapeNormHtml(
+                    row.description
+                    || '-'
+                  )
+            },
+
+            {
+              label:
+                'Materiais configurados',
+
+              render:
+                row =>
+                  String(
+                    (
+                      row.materials
+                      || []
+                    ).length
+                  )
+            },
+
+            {
+              label:
+                'Status',
+
+              render:
+                row =>
+                  row.active
+                    ? 'Ativa'
+                    : 'Inativa'
+            },
+
+            {
+              label:
+                'Ações',
+
+              render:
+                row =>
+                  canWriteRegistrations
+                    ? `<button class="link-button" data-edit="${row.id}">Editar</button>`
+                    : ''
+            }
+          ],
+
+          rows
+        })
+      );
+    }
+
+    function openModal(
+      row = null
+    ) {
+      const modal =
+        createModal(
+          row
+            ? 'Editar norma'
+            : 'Cadastrar norma',
+
+          `
+            <form class="grid-form registration-form norm-registration-form">
+
+              <label>
+                Nome da norma
+
+                <input
+                  name="name"
+                  required
+                  placeholder="Ex.: NBR 7480:2024"
+                />
+              </label>
+
+              <label class="checkbox-line">
+                <input
+                  name="active"
+                  type="checkbox"
+                />
+
+                Norma ativa
+              </label>
+
+              <label class="wide-field">
+                Descrição
+
+                <textarea
+                  name="description"
+                  rows="3"
+                  placeholder="Descrição opcional da norma"
+                ></textarea>
+              </label>
+
+              <div class="wide-field norm-materials-editor">
+
+                <div class="section-heading compact-heading">
+
+                  <div>
+                    <h3>
+                      Parâmetros por material
+                    </h3>
+
+                    <p class="muted-text">
+                      Informe os pesos de 1 metro em kg/m.
+                    </p>
+                  </div>
+
+                  ${
+                    canWriteRegistrations
+                      ? `
+                        <button
+                          class="secondary-button add-norm-material"
+                          type="button"
+                        >
+                          Adicionar material
+                        </button>
+                      `
+                      : ''
+                  }
+
+                </div>
+
+                <div class="norm-materials-target"></div>
+
+              </div>
+
+              <div class="form-actions wide-field">
+
+                ${
+                  row
+                    ? `
+                      <button
+                        class="danger-button delete-registration"
+                        type="button"
+                      >
+                        Excluir
+                      </button>
+                    `
+                    : '<span></span>'
+                }
+
+                <button
+                  class="primary-button"
+                  type="submit"
+                >
+                  Salvar
+                </button>
+
+                <button
+                  class="secondary-button close-modal"
+                  type="button"
+                >
+                  Cancelar
+                </button>
+
+              </div>
+
+            </form>
+          `
+        );
+
+      modal
+        .querySelector(
+          '.modal'
+        )
+        ?.classList.add(
+          'wide-modal',
+          'norm-registration-modal'
+        );
+
+      const form =
+        modal.querySelector(
+          'form'
+        );
+
+      const materialsTarget =
+        modal.querySelector(
+          '.norm-materials-target'
+        );
+
+      const activeMaterials =
+        materials.filter(
+          material =>
+            material.active
+            !== false
+        );
+
+      let normMaterials =
+        (
+          row?.materials
+          || []
+        ).map(
+          item => ({
+            materialId:
+              Number(
+                item.materialId
+              ),
+
+            nominalWeightPerMeter:
+              item.nominalWeightPerMeter,
+
+            minimumWeightPerMeter:
+              item.minimumWeightPerMeter,
+
+            maximumWeightPerMeter:
+              item.maximumWeightPerMeter
+          })
+        );
+
+      function materialOptions(
+        selectedId
+      ) {
+        return activeMaterials
+          .map(
+            material => `
+              <option
+                value="${material.id}"
+                ${
+                  String(material.id)
+                  ===
+                  String(selectedId)
+
+                    ? 'selected'
+                    : ''
+                }
+              >
+                ${
+                  escapeNormHtml(
+                    material.name
+                  )
+                }${
+                  material.codes?.length
+                    ? ` — ${
+                        escapeNormHtml(
+                          material.codes.join(', ')
+                        )
+                      }`
+                    : ''
+                }
+              </option>
+            `
+          )
+          .join('');
+      }
+
+      function renderMaterialRows() {
+        materialsTarget.innerHTML =
+          normMaterials.length
+
+            ? normMaterials
+                .map(
+                  (item, index) => `
+                    <article
+                      class="norm-material-row"
+                      data-norm-material-index="${index}"
+                    >
+
+                      <label>
+                        Material
+
+                        <select
+                          name="materialId"
+                          required
+                        >
+                          <option value="">
+                            Selecione
+                          </option>
+
+                          ${
+                            materialOptions(
+                              item.materialId
+                            )
+                          }
+                        </select>
+                      </label>
+
+                      <label>
+                        Peso nominal (kg/m)
+
+                        <input
+                          name="nominalWeightPerMeter"
+                          type="number"
+                          min="0.000001"
+                          step="0.000001"
+                          value="${
+                            escapeNormHtml(
+                              item.nominalWeightPerMeter
+                              ?? ''
+                            )
+                          }"
+                          required
+                        />
+                      </label>
+
+                      <label>
+                        Peso mínimo (kg/m)
+
+                        <input
+                          name="minimumWeightPerMeter"
+                          type="number"
+                          min="0.000001"
+                          step="0.000001"
+                          value="${
+                            escapeNormHtml(
+                              item.minimumWeightPerMeter
+                              ?? ''
+                            )
+                          }"
+                          required
+                        />
+                      </label>
+
+                      <label>
+                        Peso máximo (kg/m)
+
+                        <input
+                          name="maximumWeightPerMeter"
+                          type="number"
+                          min="0.000001"
+                          step="0.000001"
+                          value="${
+                            escapeNormHtml(
+                              item.maximumWeightPerMeter
+                              ?? ''
+                            )
+                          }"
+                          required
+                        />
+                      </label>
+
+                      ${
+                        canWriteRegistrations
+                          ? `
+                            <button
+                              class="link-button danger remove-norm-material"
+                              type="button"
+                            >
+                              Remover
+                            </button>
+                          `
+                          : ''
+                      }
+
+                    </article>
+                  `
+                )
+                .join('')
+
+            : `
+                <div class="empty-state compact">
+                  Nenhum material configurado nesta norma.
+                </div>
+              `;
+      }
+
+      form.elements
+        .name
+        .value =
+          row?.name
+          || '';
+
+      form.elements
+        .description
+        .value =
+          row?.description
+          || '';
+
+      form.elements
+        .active
+        .checked =
+          row?.active
+          !== false;
+
+      renderMaterialRows();
+
+      modal
+        .querySelector(
+          '.add-norm-material'
+        )
+        ?.addEventListener(
+          'click',
+          () => {
+            const used =
+              new Set(
+                normMaterials.map(
+                  item =>
+                    String(
+                      item.materialId
+                      || ''
+                    )
+                )
+              );
+
+            const available =
+              activeMaterials.find(
+                material =>
+                  !used.has(
+                    String(
+                      material.id
+                    )
+                  )
+              );
+
+            normMaterials.push({
+              materialId:
+                available?.id
+                || '',
+
+              nominalWeightPerMeter:
+                '',
+
+              minimumWeightPerMeter:
+                '',
+
+              maximumWeightPerMeter:
+                ''
+            });
+
+            renderMaterialRows();
+          }
+        );
+
+      function syncNormMaterialField(
+        event
+      ) {
+        const card =
+          event.target.closest(
+            '[data-norm-material-index]'
+          );
+
+        if (
+          !card
+          ||
+          !event.target.name
+        ) {
+          return;
+        }
+
+        const item =
+          normMaterials[
+            Number(
+              card.dataset
+                .normMaterialIndex
+            )
+          ];
+
+        if (!item) {
+          return;
+        }
+
+        if (
+          event.target.name
+          === 'materialId'
+        ) {
+          item.materialId =
+            Number(
+              event.target.value
+            )
+            || '';
+
+          return;
+        }
+
+        if (
+          [
+            'nominalWeightPerMeter',
+            'minimumWeightPerMeter',
+            'maximumWeightPerMeter'
+          ].includes(
+            event.target.name
+          )
+        ) {
+          item[
+            event.target.name
+          ] =
+            event.target.value;
+        }
+      }
+
+      materialsTarget
+        .addEventListener(
+          'input',
+          syncNormMaterialField
+        );
+
+      materialsTarget
+        .addEventListener(
+          'change',
+          syncNormMaterialField
+        );
+
+      materialsTarget
+        .addEventListener(
+          'click',
+          event => {
+            const button =
+              event.target.closest(
+                '.remove-norm-material'
+              );
+
+            if (!button) {
+              return;
+            }
+
+            const card =
+              button.closest(
+                '[data-norm-material-index]'
+              );
+
+            normMaterials.splice(
+              Number(
+                card.dataset
+                  .normMaterialIndex
+              ),
+              1
+            );
+
+            renderMaterialRows();
+          }
+        );
+
+      form.addEventListener(
+        'submit',
+        async event => {
+          event.preventDefault();
+
+          const materialRows =
+            [
+              ...materialsTarget
+                .querySelectorAll(
+                  '.norm-material-row'
+                )
+            ].map(
+              card => ({
+                materialId:
+                  Number(
+                    card
+                      .querySelector(
+                        '[name="materialId"]'
+                      )
+                      .value
+                  ),
+
+                nominalWeightPerMeter:
+                  Number(
+                    card
+                      .querySelector(
+                        '[name="nominalWeightPerMeter"]'
+                      )
+                      .value
+                  ),
+
+                minimumWeightPerMeter:
+                  Number(
+                    card
+                      .querySelector(
+                        '[name="minimumWeightPerMeter"]'
+                      )
+                      .value
+                  ),
+
+                maximumWeightPerMeter:
+                  Number(
+                    card
+                      .querySelector(
+                        '[name="maximumWeightPerMeter"]'
+                      )
+                      .value
+                  )
+              })
+            );
+
+          if (!materialRows.length) {
+            toast(
+              'Adicione pelo menos um material à norma.'
+            );
+
+            return;
+          }
+
+          const ids =
+            materialRows.map(
+              item =>
+                item.materialId
+            );
+
+          if (
+            new Set(ids).size
+            !==
+            ids.length
+          ) {
+            toast(
+              'O mesmo material não pode aparecer duas vezes na mesma norma.'
+            );
+
+            return;
+          }
+
+          const invalid =
+            materialRows.some(
+              item =>
+                !item.materialId
+
+                ||
+
+                !(
+                  item.minimumWeightPerMeter
+                  > 0
+                )
+
+                ||
+
+                !(
+                  item.nominalWeightPerMeter
+                  > 0
+                )
+
+                ||
+
+                !(
+                  item.maximumWeightPerMeter
+                  > 0
+                )
+
+                ||
+
+                item.minimumWeightPerMeter
+                  >
+                item.nominalWeightPerMeter
+
+                ||
+
+                item.nominalWeightPerMeter
+                  >
+                item.maximumWeightPerMeter
+            );
+
+          if (invalid) {
+            toast(
+              'Confira os parâmetros. Deve ser: mínimo ≤ nominal ≤ máximo, todos maiores que zero.'
+            );
+
+            return;
+          }
+
+          const body = {
+            name:
+              form.elements
+                .name
+                .value,
+
+            description:
+              form.elements
+                .description
+                .value,
+
+            active:
+              form.elements
+                .active
+                .checked,
+
+            materials:
+              materialRows
+          };
+
+          await api(
+            row
+              ? `/norms/${row.id}`
+              : '/norms',
+
+            {
+              method:
+                row
+                  ? 'PUT'
+                  : 'POST',
+
+              body
+            }
+          );
+
+          closeModal(modal);
+
+          await load();
+        }
+      );
+
+      modal
+        .querySelector(
+          '.delete-registration'
+        )
+        ?.addEventListener(
+          'click',
+          async event => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            if (
+              !confirm(
+                'Tem certeza que deseja excluir esta norma?'
+              )
+            ) {
+              return;
+            }
+
+            await api(
+              `/norms/${row.id}`,
+              {
+                method:
+                  'DELETE'
+              }
+            );
+
+            closeModal(modal);
+
+            await load();
+          }
+        );
+
+      form.elements
+        .name
+        .focus();
+    }
+
+    bindListEvents(
+      target,
+      () => rows,
+      openModal
+    );
+
+    search.addEventListener(
+      'input',
+      () =>
+        load()
+          .catch(toast)
+    );
+
     await load();
   }
 
@@ -1068,6 +2122,7 @@ isInitialRawMaterial:
       if (event.target.classList.contains('production-model-name')) model.name = event.target.value;
       if (event.target.classList.contains('usage-qty')) model.inputs.set(String(event.target.dataset.materialId), Number(event.target.value || 1));
     });
+
     target.addEventListener('change', event => {
       if (!event.target.classList.contains('model-material-check')) return;
       const card = event.target.closest('[data-model-index]');
@@ -1076,16 +2131,19 @@ isInitialRawMaterial:
       else model.inputs.delete(String(event.target.value));
       render();
     });
+
     target.addEventListener('click', event => {
       if (!event.target.classList.contains('remove-production-model')) return;
       const card = event.target.closest('[data-model-index]');
       selectedModels.splice(Number(card.dataset.modelIndex), 1);
       render();
     });
+
     modal.querySelector('.new-production-model').addEventListener('click', () => {
       selectedModels.push({ name: `Modelo ${selectedModels.length + 1}`, inputs: new Map() });
       render();
     });
+
     render();
   }
 
@@ -1093,6 +2151,7 @@ isInitialRawMaterial:
     const selectedRows = [...model.inputs.entries()]
       .map(([id, qty]) => ({ material: materials.find(item => String(item.id) === id), qty }))
       .filter(row => row.material);
+
     return selectedRows.length
       ? `
         <div class="consumed-material-header">

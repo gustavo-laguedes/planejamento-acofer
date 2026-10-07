@@ -111,6 +111,7 @@ export function summarizeProductivityCatalog({ materials = [], productivityMatri
       machines: [...new Set(ordered.map(row => String(row.machine_name ?? row.machineName ?? '').trim()).filter(Boolean))],
       line_count: ordered.length,
       active_count: ordered.length,
+      revision: Math.max(...ordered.map(row => Number(row.revision ?? 0) || 0)),
       max_output_qty: Math.max(...ordered.map(row => Number(row.output_qty ?? row.outputQty) || 0))
     };
   }).sort((left, right) => left.material_name.localeCompare(right.material_name));

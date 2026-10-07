@@ -15,6 +15,7 @@ const expectedTables = [
   'production_launches',
   'production_plan_days',
   'production_plans',
+  'planning_production_sequence',
   'productivity_matrix',
   'stock_adjustments',
   'stock_import_sales_history',

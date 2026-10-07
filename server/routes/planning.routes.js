@@ -110,6 +110,517 @@ function normalizeJsonArray(value) {
   }
 }
 
+function persistedPlanningManualDraft(plan = {}) {
+  const normalized = normalizePersistedManualScheduleDraft(
+    plan?.manual_schedule_draft
+  );
+
+  return normalized?.status === 'ok'
+    && normalized?.draft
+    && typeof normalized.draft === 'object'
+      ? normalized.draft
+      : null;
+}
+
+function planningManualSchedulePeriod(draft = null) {
+  if (!draft || typeof draft !== 'object') {
+    return {
+      startDate: null,
+      endDate: null
+    };
+  }
+
+  const dates = [];
+
+  const noteDate = value => {
+    const date = normalizeDateOnly(value);
+
+    if (date) {
+      dates.push(date);
+    }
+  };
+
+  (
+    Array.isArray(draft.allocations)
+      ? draft.allocations
+      : []
+  ).forEach(allocation => {
+    noteDate(
+      allocation?.date
+      ?? allocation?.startDate
+    );
+
+    noteDate(
+      allocation?.endDate
+      ?? allocation?.date
+      ?? allocation?.startDate
+    );
+  });
+
+  (
+    Array.isArray(draft.transports)
+      ? draft.transports
+      : []
+  ).forEach(transport => {
+    noteDate(
+      transport?.startDate
+      ?? transport?.date
+    );
+
+    noteDate(
+      transport?.endDate
+      ?? transport?.startDate
+      ?? transport?.date
+    );
+  });
+
+  if (!dates.length) {
+    return {
+      startDate: null,
+      endDate: null
+    };
+  }
+
+  dates.sort();
+
+  return {
+    startDate: dates[0],
+    endDate: dates.at(-1)
+  };
+}
+
+function planningHistoryScheduleSummary(plan = {}) {
+  const draft =
+    persistedPlanningManualDraft(plan);
+
+  const manualAllocations =
+    Array.isArray(draft?.allocations)
+      ? draft.allocations
+      : [];
+
+  const manualTransports =
+    Array.isArray(draft?.transports)
+      ? draft.transports
+      : [];
+
+  const fallbackOperations =
+    normalizeJsonArray(
+      plan?.operations
+    );
+
+  const usesManualSchedule =
+    manualAllocations.length > 0
+    ||
+    manualTransports.length > 0;
+
+  const productionRows =
+    usesManualSchedule
+      ? manualAllocations
+      : fallbackOperations.filter(
+          operation =>
+            operation?.operationType
+            !==
+            'transport'
+        );
+
+  const transportRows =
+    usesManualSchedule
+      ? manualTransports
+      : fallbackOperations.filter(
+          operation =>
+            operation?.operationType
+            ===
+            'transport'
+        );
+
+  const machineNames =
+    [
+      ...new Set(
+        productionRows
+          .map(item =>
+            String(
+              item?.machineName
+              ??
+              item?.machine_name
+              ??
+              item?.machineId
+              ??
+              ''
+            ).trim()
+          )
+          .filter(Boolean)
+      )
+    ]
+      .sort(
+        (left, right) =>
+          left.localeCompare(
+            right,
+            'pt-BR',
+            {
+              numeric: true
+            }
+          )
+      );
+
+  const period =
+    planningManualSchedulePeriod(
+      draft
+    );
+
+  return {
+    source:
+      usesManualSchedule
+        ? 'manual'
+        : 'automatic',
+
+    allocationCount:
+      productionRows.length,
+
+    transportCount:
+      transportRows.length,
+
+    operationCount:
+      productionRows.length
+      +
+      transportRows.length,
+
+    machineNames,
+
+    startDate:
+      period.startDate,
+
+    endDate:
+      period.endDate
+  };
+}
+
+function existingPlanningSchedule(plan = {}) {
+  const draft =
+    persistedPlanningManualDraft(
+      plan
+    );
+
+  const allocations =
+    Array.isArray(draft?.allocations)
+      ? draft.allocations
+      : [];
+
+  const transports =
+    Array.isArray(draft?.transports)
+      ? draft.transports
+      : [];
+
+  return {
+    planningId:
+      String(
+        plan?.id
+        ??
+        ''
+      ),
+
+    planningCode:
+      String(
+        plan?.code
+        ??
+        plan?.id
+        ??
+        ''
+      ),
+
+    status:
+      String(
+        plan?.status
+        ??
+        ''
+      ),
+
+    startDate:
+      normalizeDateOnly(
+        plan?.start_date
+      ),
+
+    endDate:
+      normalizeDateOnly(
+        plan?.end_date
+      ),
+
+    allocations,
+
+    transports
+  };
+}
+
+async function loadPlanningProductivityMatrix(db, planId = null) {
+  if (planId) {
+    const [savedPlan] = await db`
+      SELECT productivity_matrix_snapshot
+      FROM production_plans
+      WHERE id = ${planId}
+    `;
+
+    const snapshot =
+      normalizeJsonArray(
+        savedPlan?.productivity_matrix_snapshot
+      );
+
+    if (snapshot.length) {
+      return snapshot;
+    }
+  }
+
+  return db`
+    SELECT *
+    FROM productivity_matrix_current
+    ORDER BY
+      material_name,
+      machine_priority,
+      machine_name,
+      people_count
+  `;
+}
+
+function existingPlanningScheduleForRange(plan = {}, startDate = null, endDate = null) {
+  const schedule = existingPlanningSchedule(plan);
+  if (!startDate || !endDate) return schedule;
+  const touchesRange = item => {
+    const itemStart = normalizeDateOnly(item?.date, item?.startDate, item?.endDate);
+    const itemEnd = normalizeDateOnly(item?.endDate, item?.date, item?.startDate, itemStart);
+    if (!itemStart && !itemEnd) return false;
+    const effectiveStart = itemStart || itemEnd;
+    const effectiveEnd = itemEnd || itemStart;
+    return effectiveStart <= endDate && effectiveEnd >= startDate;
+  };
+  return {
+    ...schedule,
+    allocations: schedule.allocations.filter(touchesRange),
+    transports: schedule.transports.filter(touchesRange)
+  };
+}
+
+function existingPlanningBlockerOperations(plan = {}) {
+  const schedule =
+    existingPlanningSchedule(
+      plan
+    );
+
+  if (
+    schedule.allocations.length
+  ) {
+    return schedule.allocations.map(
+      (
+        allocation,
+        index
+      ) => {
+        const allocationId =
+          String(
+            allocation?.allocationId
+            ??
+            allocation?.id
+            ??
+            index + 1
+          );
+
+        const startDate =
+          normalizeDateOnly(
+            allocation?.date,
+            allocation?.startDate
+          );
+
+        const endDate =
+          normalizeDateOnly(
+            allocation?.endDate,
+            startDate
+          );
+
+        const quantity =
+          Number(
+            allocation?.quantity
+            ??
+            allocation?.produceQty
+            ??
+            0
+          );
+
+        const startTime =
+          String(
+            allocation?.startTime
+            ??
+            '07:00'
+          ).slice(
+            0,
+            5
+          );
+
+        const endTime =
+          String(
+            allocation?.endTime
+            ??
+            allocation?.startTime
+            ??
+            '07:00'
+          ).slice(
+            0,
+            5
+          );
+
+        const durationMinutes =
+          Number(
+            allocation?.durationMinutes
+            ??
+            allocation?.duration
+            ??
+            0
+          );
+
+        const segments =
+          startDate
+          &&
+          endDate === startDate
+          &&
+          durationMinutes > 0
+
+            ? [
+                {
+                  date:
+                    startDate,
+
+                  startTime,
+
+                  endTime,
+
+                  minutes:
+                    durationMinutes
+                }
+              ]
+
+            : [];
+
+        return {
+          ...allocation,
+
+          operationType:
+            'production',
+
+          operationId:
+            `plan:${schedule.planningId}:manual:${allocationId}`,
+
+          calendarParentOperationId:
+            `plan:${schedule.planningId}:manual:${allocationId}`,
+
+          materialId:
+            allocation?.materialId
+            ??
+            allocation?.material_id
+            ??
+            null,
+
+          materialName:
+            allocation?.materialName
+            ??
+            allocation?.material_name
+            ??
+            '',
+
+          materialCode:
+            allocation?.materialCode
+            ??
+            allocation?.material_code
+            ??
+            '',
+
+          requiredQty:
+            quantity,
+
+          produceQty:
+            quantity,
+
+          unit:
+            allocation?.unit
+            ??
+            '',
+
+          machineName:
+            String(
+              allocation?.machineName
+              ??
+              allocation?.machine_name
+              ??
+              allocation?.machineId
+              ??
+              ''
+            ).trim(),
+
+          peopleCount:
+            Number(
+              allocation?.peopleCount
+              ??
+              allocation?.people_count
+              ??
+              0
+            ),
+
+          startDate,
+
+          startTime,
+
+          endDate,
+
+          endTime,
+
+          totalMinutes:
+            durationMinutes,
+
+          segments,
+
+          planningId:
+            schedule.planningId,
+
+          planningCode:
+            schedule.planningCode,
+
+          _existingScheduleBlocker:
+            true
+        };
+      }
+    );
+  }
+
+  return normalizeJsonArray(
+    plan?.operations
+  ).map(
+    (
+      operation,
+      index
+    ) => ({
+      ...operation,
+
+      operationId:
+        `plan:${plan.id}:${
+          operation.operationId
+          ||
+          operation.materialId
+          ||
+          index
+        }`,
+
+      planningId:
+        String(
+          plan?.id
+          ??
+          ''
+        ),
+
+      planningCode:
+        plan?.code
+        ||
+        plan?.id,
+
+      _existingScheduleBlocker:
+        true
+    })
+  );
+}
+
 function manualScheduleValidationMetadata(payload = {}) {
   const validation = payload.manualScheduleValidation || payload.manualScheduleDraft?.validation || {};
   const incrementalAcceptance = validation.incrementallyAccepted === true
@@ -185,8 +696,31 @@ function validateManualScheduleForSave(draft, plan, context, payload = {}) {
         quantity: Number(row.adjustment_qty || 0)
       }))
     ],
-    dependencies: plan.dependencies || [],
-    transports: plan.transports || [],
+        /*
+     * =====================================================
+     * CALENDÁRIO MANUAL
+     * =====================================================
+     *
+     * No modo manual:
+     *
+     * 1. As dependências são reconstruídas a partir
+     *    das operações atuais.
+     *
+     * 2. Os transportes válidos são exatamente os que
+     *    o usuário programou no Gantt e que estão dentro
+     *    do manualScheduleDraft.
+     *
+     * Não podemos usar plan.transports porque buildPlan()
+     * não devolve os transportes manuais programados.
+     */
+    dependencies: [],
+
+    transports:
+      Array.isArray(
+        draft?.transports
+      )
+        ? draft.transports
+        : [],
     shifts,
     dailyTeamOverrides: payload.dailyTeamOverrides || payload.settings?.dailyTeamOverrides || {},
     manualWorkDates: payload.manualWorkDates || payload.settings?.manualWorkDates || [],
@@ -296,9 +830,9 @@ function currentValidationStock(
           0
         );
 
-      const quantity =
+            const quantity =
         Number.isFinite(rawQuantity)
-          ? Math.max(rawQuantity, 0)
+          ? rawQuantity
           : 0;
 
       const key =
@@ -1046,12 +1580,10 @@ async function planningContext(
         }
       ),
 
-      db`
-        SELECT *
-        FROM productivity_matrix
-        WHERE active = true
-        ORDER BY updated_at DESC
-      `,
+      loadPlanningProductivityMatrix(
+        db,
+        payload.planId || null
+      ),
 
       db`
         SELECT *
@@ -1076,9 +1608,13 @@ async function planningContext(
 
         ? db`
             SELECT
-              id,
-              code,
-              operations
+  id,
+  code,
+  status,
+  start_date,
+  end_date,
+  operations,
+  manual_schedule_draft
 
             FROM production_plans
 
@@ -1224,34 +1760,22 @@ async function planningContext(
         );
 
 
-  const existingOperations =
-    existingPlans.flatMap(
-      plan =>
-        normalizeJsonArray(
-          plan.operations
-        ).map(
-          (
-            operation,
-            index
-          ) => ({
-            ...operation,
+  const existingSchedules =
+  existingPlans.map(
+    existingPlanningSchedule
+  );
 
-            operationId:
-              `plan:${plan.id}:${
-                operation.operationId
-                ||
-                operation.materialId
-                ||
-                index
-              }`,
-
-            planningCode:
-              plan.code
-              ||
-              plan.id
-          })
-        )
-    );
+/*
+ * A capacidade do novo planejamento precisa respeitar
+ * aquilo que foi REALMENTE lançado no calendário manual.
+ *
+ * Para planos antigos sem manual_schedule_draft mantemos
+ * o fallback para operations.
+ */
+const existingOperations =
+  existingPlans.flatMap(
+    existingPlanningBlockerOperations
+  );
 
 
   /*
@@ -1300,9 +1824,10 @@ async function planningContext(
 
     matrixRows,
 
-    existingOperations,
+existingOperations,
+existingSchedules,
 
-    businessDays:
+businessDays:
       planningBusinessDaysFromCurrentStock(
         currentStock
       )
@@ -1422,6 +1947,94 @@ const stockAuthorization =
       : null;
     const acceptedDays = persistedManualDraft ? manualScheduleDays(persistedManualDraft) : plan.days;
     const saved = await db.begin(async tx => {
+      /*
+       * Sequencial GLOBAL das produções.
+       *
+       * productionIndex continua sendo interno e 0-based.
+       * productionNumber é somente a identidade global.
+       *
+       * O FOR UPDATE impede dois salvamentos concorrentes
+       * de utilizarem o mesmo número.
+       */
+      const productionInputs =
+        Array.isArray(req.body.productions)
+        && req.body.productions.length
+
+          ? req.body.productions
+          : [req.body];
+
+
+      const [sequence] = await tx`
+        SELECT last_number
+        FROM planning_production_sequence
+        WHERE id = 1
+        FOR UPDATE
+      `;
+
+
+      const lastProductionNumber =
+        Math.max(
+          Number(
+            sequence?.last_number
+            || 0
+          ),
+          0
+        );
+
+
+      const expectedStart =
+        lastProductionNumber + 1;
+
+
+      const requestedNumbers =
+        productionInputs.map(
+          production =>
+            Number(
+              production?.productionNumber
+            )
+        );
+
+
+      const validSequence =
+        requestedNumbers.length
+        === productionInputs.length
+
+        &&
+
+        requestedNumbers.every(
+          (number, index) => (
+            Number.isInteger(number)
+            &&
+            number === expectedStart + index
+          )
+        );
+
+
+      if (!validSequence) {
+        const error =
+          new Error(
+            `O sequencial das produções mudou. O próximo número disponível é #${expectedStart}. Atualize o planejamento e simule novamente.`
+          );
+
+        error.status = 409;
+
+        throw error;
+      }
+
+
+      const finalProductionNumber =
+        expectedStart
+        + productionInputs.length
+        - 1;
+
+
+      await tx`
+        UPDATE planning_production_sequence
+        SET last_number = ${finalProductionNumber}
+        WHERE id = 1
+      `;
+
+
       const [created] = await tx`
         INSERT INTO production_plans (
           code, material_name, material_code, machine_name, people_count, planned_qty,
@@ -1429,7 +2042,8 @@ const stockAuthorization =
           manual_schedule_draft, manual_schedule_version, manual_schedule_base_hash,
           manual_schedule_updated_at, manual_schedule_validation_version,
           manual_schedule_validation_fingerprint, manual_schedule_validated_at,
-          manual_schedule_is_dirty, manual_schedule_revision, updated_at
+          manual_schedule_is_dirty, manual_schedule_revision,
+          productivity_matrix_snapshot, updated_at
         )
         VALUES (
           ${plan.code}, ${plan.summary.materialName}, ${plan.summary.materialCode}, ${plan.summary.machineName || ''},
@@ -1440,7 +2054,9 @@ const stockAuthorization =
           ${persistedManualDraft?.version || null}, ${persistedManualDraft?.baseSimulationHash || null},
           ${persistedManualDraft?.updatedAt || null}, ${validationMeta?.version || null},
           ${validationMeta?.fingerprint || null}, ${validationMeta?.validatedAt || null},
-          false, ${persistedManualDraft ? 1 : 0}, now()
+          false, ${persistedManualDraft ? 1 : 0},
+          ${JSON.stringify(context.matrixRows || [])}::jsonb,
+          now()
         )
         RETURNING *
       `;
@@ -1494,28 +2110,110 @@ const stockAuthorization =
 router.get('/plans', async (req, res, next) => {
   try {
     const db = requireDb();
+
     const rows = await db`
-      SELECT id, code, material_name, material_code, planned_qty, planned_unit, hours_per_day,
-             start_date, end_date, status, created_at, updated_at, manual_schedule_revision,
-             manual_schedule_updated_at, schedule_tree, operations
+      SELECT
+        id,
+        code,
+        material_name,
+        material_code,
+        planned_qty,
+        planned_unit,
+        hours_per_day,
+        start_date,
+        end_date,
+        status,
+        created_at,
+        updated_at,
+        manual_schedule_revision,
+        manual_schedule_updated_at,
+        schedule_tree,
+        operations,
+        manual_schedule_draft
       FROM production_plans
       ORDER BY created_at DESC
       LIMIT 100
     `;
-    res.json(rows.map(row => {
-      const operations = normalizeJsonArray(row.operations);
-      const period = operationPeriod(operations, row.start_date, row.end_date);
-      return {
-        ...row,
-        start_date: normalizeDateOnly(row.start_date),
-        end_date: normalizeDateOnly(row.end_date),
-        period_start_date: period.startDate,
-        period_end_date: period.endDate,
-        period_label: period.label,
-        schedule_tree: normalizeJsonObject(row.schedule_tree),
-        operations
-      };
-    }));
+
+    res.json(
+      rows.map(row => {
+        const operations =
+          normalizeJsonArray(
+            row.operations
+          );
+
+        const scheduleSummary =
+          planningHistoryScheduleSummary(
+            row
+          );
+
+        const automaticPeriod =
+          operationPeriod(
+            operations,
+            row.start_date,
+            row.end_date
+          );
+
+        const periodStartDate =
+          scheduleSummary.startDate
+          ||
+          automaticPeriod.startDate;
+
+        const periodEndDate =
+          scheduleSummary.endDate
+          ||
+          automaticPeriod.endDate;
+
+        const {
+          manual_schedule_draft:
+            _manualScheduleDraft,
+
+          ...publicRow
+        } = row;
+
+        return {
+          ...publicRow,
+
+          start_date:
+            normalizeDateOnly(
+              row.start_date
+            ),
+
+          end_date:
+            normalizeDateOnly(
+              row.end_date
+            ),
+
+          period_start_date:
+            periodStartDate,
+
+          period_end_date:
+            periodEndDate,
+
+          period_label:
+            periodStartDate
+            &&
+            periodEndDate
+
+              ? formatPeriodLabel(
+                  periodStartDate,
+                  periodEndDate
+                )
+
+              : automaticPeriod.label,
+
+          schedule_tree:
+            normalizeJsonObject(
+              row.schedule_tree
+            ),
+
+          operations,
+
+          schedule_summary:
+            scheduleSummary
+        };
+      })
+    );
   } catch (error) {
     next(error);
   }
@@ -1531,17 +2229,23 @@ router.get('/analysis/planned-balance', async (req, res, next) => {
         WHERE LOWER(COALESCE(status, '')) NOT IN ('canceled', 'cancelado', 'excluido', 'deleted', 'inactive', 'inativo')
       ),
       daily_plans AS (
-        SELECT d.material_name,
+        SELECT p.id AS plan_id,
+               p.start_date AS plan_start_date,
+               p.end_date AS plan_end_date,
+               d.material_name,
                d.material_code,
                d.planned_unit,
                SUM(d.planned_qty) AS planned_qty
         FROM production_plan_days d
         JOIN active_plans p ON p.id = d.plan_id
         WHERE d.planned_qty > 0
-        GROUP BY d.material_name, d.material_code, d.planned_unit
+        GROUP BY p.id, p.start_date, p.end_date, d.material_name, d.material_code, d.planned_unit
       ),
       legacy_fallback AS (
-        SELECT p.material_name,
+        SELECT p.id AS plan_id,
+               p.start_date AS plan_start_date,
+               p.end_date AS plan_end_date,
+               p.material_name,
                p.material_code,
                p.planned_unit,
                SUM(p.planned_qty) AS planned_qty
@@ -1553,12 +2257,12 @@ router.get('/analysis/planned-balance', async (req, res, next) => {
             WHERE d.plan_id = p.id
               AND d.planned_qty > 0
           )
-        GROUP BY p.material_name, p.material_code, p.planned_unit
+        GROUP BY p.id, p.start_date, p.end_date, p.material_name, p.material_code, p.planned_unit
       ),
       planned AS (
-        SELECT material_name, material_code, planned_unit, planned_qty FROM daily_plans
+        SELECT plan_id, plan_start_date, plan_end_date, material_name, material_code, planned_unit, planned_qty FROM daily_plans
         UNION ALL
-        SELECT material_name, material_code, planned_unit, planned_qty FROM legacy_fallback
+        SELECT plan_id, plan_start_date, plan_end_date, material_name, material_code, planned_unit, planned_qty FROM legacy_fallback
       ),
       planned_grouped AS (
         SELECT material_name,
@@ -1595,16 +2299,36 @@ router.get('/analysis/planned-balance', async (req, res, next) => {
           )
       ),
       actuals AS (
-        SELECT material_name, material_code, actual_unit, actual_qty FROM launch_actuals
+        SELECT production_date, material_name, material_code, actual_unit, actual_qty FROM launch_actuals
         UNION ALL
-        SELECT material_name, material_code, actual_unit, actual_qty FROM standalone_actuals
+        SELECT production_date, material_name, material_code, actual_unit, actual_qty FROM standalone_actuals
+      ),
+      covered_actuals AS (
+        SELECT a.*
+        FROM actuals a
+        WHERE EXISTS (
+          SELECT 1
+          FROM planned p
+          WHERE a.production_date BETWEEN p.plan_start_date AND p.plan_end_date
+            AND (
+              (
+                NULLIF(TRIM(p.material_code), '') IS NOT NULL
+                AND NULLIF(TRIM(a.material_code), '') IS NOT NULL
+                AND LOWER(TRIM(a.material_code)) = LOWER(TRIM(p.material_code))
+              )
+              OR (
+                LOWER(TRIM(a.material_name)) = LOWER(TRIM(p.material_name))
+                AND COALESCE(NULLIF(TRIM(a.actual_unit), ''), p.planned_unit) = p.planned_unit
+              )
+            )
+        )
       ),
       actuals_grouped AS (
         SELECT material_name,
                material_code,
                actual_unit,
                SUM(actual_qty) AS produced_qty
-        FROM actuals
+        FROM covered_actuals
         GROUP BY material_name, material_code, actual_unit
       )
       SELECT m.id AS material_id,
@@ -1633,6 +2357,34 @@ router.get('/analysis/planned-balance', async (req, res, next) => {
       ORDER BY material_name, material_code
     `;
     res.json({ rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/plans/next-production-number', async (req, res, next) => {
+  try {
+    const db = requireDb();
+
+    const [sequence] = await db`
+      SELECT last_number
+      FROM planning_production_sequence
+      WHERE id = 1
+    `;
+
+    const lastNumber =
+      Math.max(
+        Number(sequence?.last_number || 0),
+        0
+      );
+
+    res.json({
+      lastProductionNumber:
+        lastNumber,
+
+      nextProductionNumber:
+        lastNumber + 1
+    });
   } catch (error) {
     next(error);
   }
@@ -1679,8 +2431,8 @@ router.get('/plans/:id', async (req, res, next) => {
         dailyTeamOverrides: meta.dailyTeamOverrides || {},
         manualWorkDates: Array.isArray(meta.manualWorkDates) ? meta.manualWorkDates : [],
         setupHours: Number(meta.setupHours || 0),
-        productions: meta.productions || []
-      }
+productions: meta.productions || [],
+actualSchedule: planningHistoryScheduleSummary(plan)      }
     });
   } catch (error) {
     next(error);
@@ -1883,8 +2635,23 @@ router.post('/plans/:id/reschedule', requirePermission('planning:write'), async 
     const [plan] = await db`SELECT * FROM production_plans WHERE id = ${req.params.id}`;
     if (!plan) return res.status(404).json({ error: 'Plano não encontrado.' });
     if (plan.status === 'canceled') return res.status(400).json({ error: 'Planejamento cancelado não pode ser editado.' });
-    const matrixRows = await db`SELECT * FROM productivity_matrix WHERE active = true`;
-    const result = rescheduleSavedPlan(plan, normalizeJsonArray(plan.operations), req.body || {}, matrixRows);
+    const savedMatrix =
+      normalizeJsonArray(
+        plan.productivity_matrix_snapshot
+      );
+
+    const matrixRows =
+      savedMatrix.length
+        ? savedMatrix
+        : await loadPlanningProductivityMatrix(db);
+
+    const result =
+      rescheduleSavedPlan(
+        plan,
+        normalizeJsonArray(plan.operations),
+        req.body || {},
+        matrixRows
+      );
     const updated = await db.begin(async tx => {
       const [row] = await tx`
         UPDATE production_plans
@@ -1925,6 +2692,103 @@ router.post('/plans/:id/reschedule', requirePermission('planning:write'), async 
     next(error);
   }
 });
+
+router.delete(
+  '/plans/:id',
+  requirePermission('planning:write'),
+  async (req, res, next) => {
+    try {
+      const db = requireDb();
+
+      const deleted = await db.begin(
+        async tx => {
+          const [plan] = await tx`
+            SELECT
+              id,
+              code,
+              material_name,
+              status
+
+            FROM production_plans
+
+            WHERE
+              id = ${req.params.id}
+
+            FOR UPDATE
+          `;
+
+
+          if (!plan) {
+            const error =
+              new Error(
+                'Planejamento não encontrado.'
+              );
+
+            error.status = 404;
+
+            throw error;
+          }
+
+
+          /*
+           * production_plan_days possui
+           * ON DELETE CASCADE.
+           *
+           * Portanto, ao apagar o plano,
+           * seus dias/alocações salvos
+           * também são apagados.
+           */
+          await tx`
+            DELETE FROM production_plans
+
+            WHERE
+              id = ${plan.id}
+          `;
+
+
+          return plan;
+        }
+      );
+
+
+      await recordAuditLog(
+        db,
+        {
+          user:
+            req.user,
+
+          action:
+            'Exclusão definitiva de planejamento',
+
+          module:
+            'Planejamento',
+
+          description:
+            `Excluiu definitivamente o planejamento ${deleted.code || deleted.id} - ${deleted.material_name || ''}`,
+
+          recordRef:
+            deleted.id
+        }
+      );
+
+
+      res.json({
+        success:
+          true,
+
+        deleted: {
+          id:
+            deleted.id,
+
+          code:
+            deleted.code
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 router.post('/plans/:id/cancel', requirePermission('planning:write'), async (req, res, next) => {
   try {
@@ -2027,7 +2891,7 @@ router.get('/calendar', async (req, res, next) => {
         ORDER BY planned_date, planning_code, material_name, day_id
       `,
       db`
-        SELECT id, operations, start_date, end_date, hours_per_day, people_count, status, canceled_at
+        SELECT id, code, operations, manual_schedule_draft, start_date, end_date, hours_per_day, people_count, status, canceled_at
         FROM production_plans
         WHERE (
             COALESCE(status, '') <> 'canceled'
@@ -2046,6 +2910,9 @@ router.get('/calendar', async (req, res, next) => {
     res.json({
       events: enrichCalendarDays(eventRows),
       capacityDays: calendarCapacityDays(capacityPlans, startDate, endDate),
+      existingSchedules: capacityPlans
+        .map(plan => existingPlanningScheduleForRange(plan, startDate, endDate))
+        .filter(schedule => schedule.allocations.length || schedule.transports.length),
       holidays: holidays.filter(holiday => holiday.date >= startDate && holiday.date <= endDate)
     });
   } catch (error) {
@@ -2730,10 +3597,23 @@ router.get('/plans/:id/pdf', async (req, res, next) => {
     const [plan] = await db`SELECT * FROM production_plans WHERE id = ${req.params.id}`;
     if (!plan) return res.status(404).json({ error: 'Plano não encontrado.' });
     const days = await db`SELECT * FROM production_plan_days WHERE plan_id = ${req.params.id} ORDER BY planned_date`;
-    const normalizedPlan = {
+        const normalizedPlan = {
       ...plan,
-      schedule_tree: normalizeJsonObject(plan.schedule_tree),
-      operations: normalizeJsonArray(plan.operations)
+
+      schedule_tree:
+        normalizeJsonObject(
+          plan.schedule_tree
+        ),
+
+      operations:
+        normalizeJsonArray(
+          plan.operations
+        ),
+
+      manual_schedule_draft:
+        normalizeJsonObject(
+          plan.manual_schedule_draft
+        )
     };
     const pdf = await createPlanningPdf(normalizedPlan, days, normalizedPlan.schedule_tree, normalizedPlan.operations);
     res.setHeader('Content-Type', 'application/pdf');

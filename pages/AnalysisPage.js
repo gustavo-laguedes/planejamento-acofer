@@ -151,6 +151,46 @@ function formatPcpTargetQtyDetail(row) {
   return `<small>Inclui ${formatCeilQty(soldDuringProduction)} ${escapeHtml(unit)} de venda durante a produção</small>`;
 }
 
+function PcpActivePlanningPill(row = {}) {
+  const plannedRemainingQty =
+    Number(
+      row.plannedRemainingQty || 0
+    );
+
+  if (
+    !Number.isFinite(
+      plannedRemainingQty
+    )
+    ||
+    plannedRemainingQty <= 0
+  ) {
+    return '';
+  }
+
+  const unit =
+    row.plannedUnit
+    ||
+    row.productivity?.output_unit
+    ||
+    '';
+
+  const title =
+    `Já planejado e ainda pendente: ${
+      formatQty(
+        plannedRemainingQty
+      )
+    } ${unit}`.trim();
+
+  return `
+    <span
+      class="pcp-active-planning-pill"
+      title="${escapeHtml(title)}"
+    >
+      Planejamento ativo
+    </span>
+  `;
+}
+
 function formatNumber(value, maximumFractionDigits = 1, minimumFractionDigits = 1) {
   return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits, minimumFractionDigits });
 }
@@ -267,8 +307,18 @@ function writePcpIdealOverrides(overrides) {
 function currentStockDurationDays(row) {
   const salesPerDay = Number(row.salesPerDayQty);
   const balance = Number(row.totalLocationsQty);
-  if (!Number.isFinite(salesPerDay) || salesPerDay <= 0 || !Number.isFinite(balance)) return null;
-  return Math.max(balance, 0) / salesPerDay;
+
+  if (
+    !Number.isFinite(salesPerDay)
+    ||
+    salesPerDay <= 0
+    ||
+    !Number.isFinite(balance)
+  ) {
+    return null;
+  }
+
+  return balance / salesPerDay;
 }
 
 function pcpImportDateKey(value) {
@@ -453,10 +503,40 @@ function pcpStockRowsFromCurrent(context = {}) {
 
 function roundStockDurationForDisplay(value) {
   const days = Number(value);
-  if (!Number.isFinite(days)) return null;
-  const integer = Math.trunc(days);
-  const decimal = Math.round((days - integer) * 10);
-  return integer + (decimal >= 6 ? 1 : 0);
+
+  if (!Number.isFinite(days)) {
+    return null;
+  }
+
+  const sign =
+    days < 0
+      ? -1
+      : 1;
+
+  const absoluteDays =
+    Math.abs(days);
+
+  const integer =
+    Math.trunc(absoluteDays);
+
+  const decimal =
+    Math.round(
+      (absoluteDays - integer)
+      *
+      10
+    );
+
+  return sign
+    *
+    (
+      integer
+      +
+      (
+        decimal >= 6
+          ? 1
+          : 0
+      )
+    );
 }
 
 function formatStockDurationForDisplay(value) {
@@ -466,10 +546,31 @@ function formatStockDurationForDisplay(value) {
 }
 
 function futureStockDurationDays(row, plannedRemainingQty = 0) {
-  const salesPerDay = Number(row.salesPerDayQty);
-  const balance = Number(row.totalLocationsQty) + Number(plannedRemainingQty || 0);
-  if (!Number.isFinite(salesPerDay) || salesPerDay <= 0 || !Number.isFinite(balance)) return null;
-  return Math.max(balance, 0) / salesPerDay;
+  const salesPerDay =
+    Number(
+      row.salesPerDayQty
+    );
+
+  const balance =
+    Number(
+      row.totalLocationsQty
+    )
+    +
+    Number(
+      plannedRemainingQty || 0
+    );
+
+  if (
+    !Number.isFinite(salesPerDay)
+    ||
+    salesPerDay <= 0
+    ||
+    !Number.isFinite(balance)
+  ) {
+    return null;
+  }
+
+  return balance / salesPerDay;
 }
 
 function pcpStatusForDuration(durationDays) {
@@ -818,7 +919,9 @@ function buildPcpRows(stockRows = [], minimumDays, matrixRows = [], priorities =
         && plannedRemainingQty >= suggestion.grossTargetQty;
       const actionStatus = pcpStatusForIdealTarget(baseStatus, durationDays, rowIdealDays);
       const status =
-  actionStatus;
+  fullyPlanned
+    ? plannedPcpStatus()
+    : actionStatus;
       return {
         ...row,
         key,
@@ -867,7 +970,10 @@ function recalculatePcpRowsForIdealDays(rows = [], idealDays, idealOverrides = {
       baseTargetQty: suggestion.baseTargetQty,
       thresholdStatus: row.thresholdStatus || row.baseStatus,
       baseStatus: actionStatus,
-      status: actionStatus,
+      status:
+        fullyPlanned
+          ? plannedPcpStatus()
+          : actionStatus,
       targetQty: suggestion.targetQty,
       productionDays: suggestion.productionDays,
       salesDuringProductionQty: suggestion.salesDuringProductionQty,
@@ -931,15 +1037,116 @@ function addBusinessDays(value, days) {
   return current;
 }
 
+function subtractBusinessDays(value, days) {
+  let current =
+    dateKey(value);
+
+  let remaining =
+    Math.max(
+      Math.floor(
+        Number(days) || 0
+      ),
+      0
+    );
+
+  while (
+    remaining > 0
+  ) {
+    current =
+      addDays(
+        current,
+        -1
+      );
+
+    if (
+      isBusinessDate(current)
+    ) {
+      remaining -= 1;
+    }
+  }
+
+  return current;
+}
+
 function estimatedStockEndLabel(row) {
-  const salesPerDay = Number(row.salesPerDayQty);
-  const stockQty = Number(row.futureStockQty ?? row.totalLocationsQty);
-  if (!Number.isFinite(stockQty)) return 'Não estimado';
-  if (stockQty <= 0) return 'Hoje';
-  if (!Number.isFinite(salesPerDay) || salesPerDay <= 0) return 'Não estimado';
-  const businessDaysToEnd = Math.max(Math.ceil(stockQty / salesPerDay), 1);
-  const firstConsumptionDate = nextBusinessDate(localDateKey());
-  return formatDate(addBusinessDays(firstConsumptionDate, businessDaysToEnd - 1));
+  const salesPerDay =
+    Number(
+      row.salesPerDayQty
+    );
+
+  const stockQty =
+    Number(
+      row.futureStockQty
+      ??
+      row.totalLocationsQty
+    );
+
+  if (
+    !Number.isFinite(stockQty)
+  ) {
+    return 'Não estimado';
+  }
+
+  if (
+    !Number.isFinite(salesPerDay)
+    ||
+    salesPerDay <= 0
+  ) {
+    return 'Não estimado';
+  }
+
+  const today =
+    nextBusinessDate(
+      localDateKey()
+    );
+
+  if (
+    stockQty === 0
+  ) {
+    return 'Hoje';
+  }
+
+  const durationDays =
+    stockQty
+    /
+    salesPerDay;
+
+  const wholeBusinessDays =
+    Math.max(
+      Math.ceil(
+        Math.abs(
+          durationDays
+        )
+      ),
+      1
+    );
+
+  /*
+   * Ainda temos estoque:
+   * projeta para frente.
+   */
+  if (
+    durationDays > 0
+  ) {
+    return formatDate(
+      addBusinessDays(
+        today,
+        wholeBusinessDays - 1
+      )
+    );
+  }
+
+  /*
+   * Estoque negativo:
+   * estima quando teria zerado,
+   * voltando pelos dias úteis.
+   */
+  return formatDate(
+    subtractBusinessDays(
+      today,
+      wholeBusinessDays - 1
+    )
+  );
 }
 
 function parseOperationalHours(value) {
@@ -1614,12 +1821,13 @@ function timedLayout(events, startHour, pauseBands = []) {
 export function AnalysisPage(options = {}) {
   const mode = options.mode || 'analysis';
   const commercialMode = mode === 'commercial';
+  const calendarMode = mode === 'calendar';
   const canEditPlanning = !commercialMode && canAccess(getCurrentUser(), 'planning:write');
   const availableViews = commercialMode ? ['month', 'year'] : ['week', 'month', 'year'];
   const page = document.createElement('section');
-  page.className = `stack analysis-page${commercialMode ? ' commercial-calendar-page' : ''}`;
+  page.className = `stack analysis-page${commercialMode ? ' commercial-calendar-page' : ''}${calendarMode ? ' analysis-calendar-page' : ''}`;
   page.innerHTML = `
-    <div class="page-header"><div><h1>Análise / Assistente PCP</h1></div></div>
+    <div class="page-header"><div><h1>${calendarMode ? 'Calendário' : 'Análise / Assistente PCP'}</h1></div></div>
     <div class="panel analysis-panel">
       <div class="analysis-calendar-toolbar">
         <div class="analysis-navigation">
@@ -1653,7 +1861,7 @@ assistantPanel.className =
 assistantPanel.innerHTML =
   '<div class="analysis-assistant-target"></div>';
 
-if (!commercialMode) {
+if (!commercialMode && !calendarMode) {
   page.appendChild(
     assistantPanel
   );
@@ -1661,7 +1869,7 @@ if (!commercialMode) {
 
 
 const calculationsPanel =
-  !commercialMode
+  !commercialMode && !calendarMode
     ? AnalysisCalculationsPanel()
     : null;
 
@@ -1673,15 +1881,10 @@ if (calculationsPanel) {
 }
 
 
-const analysisTabs = [
+const analysisTabs = calendarMode ? [{ id: 'calendar', label: 'Calendário' }] : [
   {
     id: 'assistant',
     label: 'Assistente PCP'
-  },
-
-  {
-    id: 'calendar',
-    label: 'Calendário'
   },
 
   {
@@ -1689,7 +1892,7 @@ const analysisTabs = [
     label: 'Cálculos'
   }
 ];
-  let activeInternalTab = commercialMode ? 'calendar' : sessionStorage.getItem('planejamento_analysis_tab') || 'assistant';
+  let activeInternalTab = calendarMode || commercialMode ? 'calendar' : sessionStorage.getItem('planejamento_analysis_tab') || 'assistant';
   if (!analysisTabs.some(tab => tab.id === activeInternalTab)) activeInternalTab = 'assistant';
   const panel = page.querySelector('.analysis-panel');
   const target = page.querySelector('.analysis-calendar-target');
@@ -2116,12 +2319,9 @@ const result =
         '.page-header h1'
       )
       .textContent =
-        `Análise / ${tab.label}`;
+        calendarMode ? 'Calendário' : `Análise / ${tab.label}`;
 
-    sessionStorage.setItem(
-      'planejamento_analysis_tab',
-      activeInternalTab
-    );
+    if (!calendarMode) sessionStorage.setItem('planejamento_analysis_tab', activeInternalTab);
   }
 
 
@@ -2199,20 +2399,50 @@ const result =
 }
 
   function renderPcpAssistant(allRows, minimumDays) {
+    const radarRows =
+      sortPcpRows(
+        allRows.filter(
+          row =>
+            Number.isFinite(
+              row.durationDays
+            )
+            &&
+            Number.isFinite(
+              Number(row.idealDays)
+            )
+            &&
+            row.durationDays
+              < Number(row.idealDays)
+        )
+      );
+
+    /*
+     * Um material pertence ao bloco "Itens já planejados"
+     * sempre que existir quantidade ainda pendente em algum
+     * planejamento salvo/ativo.
+     *
+     * Ele NÃO precisa estar 100% coberto até a meta ideal.
+     *
+     * Se ainda faltar quantidade para atingir a meta,
+     * essa diferença será exibida como "Falta complementar".
+     */
+    const plannedRows =
+      radarRows.filter(
+        row =>
+          Number(
+            row.plannedRemainingQty
+          ) > 0
+      );
+
     const rows =
-  sortPcpRows(
-    allRows.filter(
-      row =>
-        Number.isFinite(
-          row.durationDays
-        ) &&
-        Number.isFinite(
-          Number(row.idealDays)
-        ) &&
-        row.durationDays <
-  Number(row.idealDays)
-    )
-  );
+      radarRows.filter(
+        row =>
+          !(
+            Number(
+              row.plannedRemainingQty
+            ) > 0
+          )
+      );
 
 const recommendationRows =
   rows
@@ -2380,7 +2610,12 @@ const counts =
                   <td><input class="pcp-priority-input" type="number" min="1" step="1" value="${escapeHtml(row.manualPriority)}" data-pcp-priority="${escapeHtml(row.key)}" aria-label="Prioridade manual de ${escapeHtml(row.material?.name || '')}" /></td>
                   <td><strong>${escapeHtml(row.material?.name || '')}</strong><small>${escapeHtml((row.codes || []).join(', '))}</small></td>
                   <td><strong>${formatStockDurationForDisplay(row.durationDays)}</strong>${Number.isFinite(row.adjustedDurationDays) && Number(row.plannedRemainingQty) > 0 ? `<small>Ajust.: ${formatNumber(row.adjustedDurationDays)} dias</small>` : ''}</td>
-                  <td>${PcpStatusPill(row.status)}</td>
+                  <td>
+  <div class="pcp-status-stack">
+    ${PcpStatusPill(row.status)}
+    ${PcpActivePlanningPill(row)}
+  </div>
+</td>
                   <td>${Number.isFinite(Number(row.salesPerDayQty)) && Number(row.salesPerDayQty) > 0 ? formatQty(row.salesPerDayQty) : 'Não estimado'}</td>
                   <td>${formatQty(row.totalLocationsQty)}</td>
                   <td class="pcp-date-cell">${escapeHtml(stockEndLabel)}</td>
@@ -2401,6 +2636,177 @@ const counts =
             }).join('') : '<tr><td colspan="15"><span class="muted-text">Nenhum material dentro da faixa de ação do PCP.</span></td></tr>'}</tbody>
           </table>
         </div>
+
+        <section
+          class="pcp-planned-section"
+          style="margin-top:24px"
+        >
+          <div class="pcp-recommendation-header">
+            <h3>Itens já planejados</h3>
+            <p>
+              Materiais que já possuem quantidade em planejamento
+              salvo e ainda pendente de produção. Se o planejamento
+              atual ainda não atingir a meta ideal, a necessidade
+              complementar continua indicada abaixo.
+            </p>
+          </div>
+
+          <div class="analysis-stock-table-wrap pcp-table-wrap">
+            <table class="analysis-stock-table">
+              <thead>
+                <tr>
+                  <th>Material</th>
+                  <th>Duração atual</th>
+                  <th>Status</th>
+                  <th>Venda/dia</th>
+                  <th>Estoque atual</th>
+                  <th>Já planejado</th>
+                  <th>Duração com planejado</th>
+                  <th>Falta complementar</th>
+                  <th>Meta ideal</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                ${
+                  plannedRows.length
+                    ? plannedRows.map(
+                        row => `
+                          <tr class="pcp-row-planned">
+                            <td>
+                              <strong>
+                                ${escapeHtml(
+                                  row.material?.name
+                                  || ''
+                                )}
+                              </strong>
+                              <small>
+                                ${escapeHtml(
+                                  (row.codes || []).join(', ')
+                                )}
+                              </small>
+                            </td>
+
+                            <td>
+                              <strong>
+                                ${formatStockDurationForDisplay(
+                                  row.durationDays
+                                )}
+                              </strong>
+                            </td>
+
+                            <td>
+                              <div class="pcp-status-stack">
+                                ${PcpStatusPill(
+                                  row.status
+                                )}
+
+                                ${PcpActivePlanningPill(
+                                  row
+                                )}
+                              </div>
+                            </td>
+
+                            <td>
+                              ${
+                                Number.isFinite(
+                                  Number(row.salesPerDayQty)
+                                )
+                                &&
+                                Number(row.salesPerDayQty) > 0
+
+                                  ? formatQty(
+                                      row.salesPerDayQty
+                                    )
+
+                                  : 'Não estimado'
+                              }
+                            </td>
+
+                            <td>
+                              ${formatQty(
+                                row.totalLocationsQty
+                              )}
+                            </td>
+
+                            <td>
+                              <strong>
+                                ${formatQty(
+                                  row.plannedRemainingQty
+                                )}
+                                ${escapeHtml(
+                                  row.plannedUnit
+                                  ||
+                                  row.productivity?.output_unit
+                                  ||
+                                  ''
+                                )}
+                              </strong>
+                            </td>
+
+                            <td>
+                              ${
+                                Number.isFinite(
+                                  row.adjustedDurationDays
+                                )
+                                  ? `${formatNumber(
+                                      row.adjustedDurationDays
+                                    )} dias`
+                                  : 'Não estimado'
+                              }
+                            </td>
+
+                            <td>
+                              ${
+                                Number(
+                                  row.targetQty
+                                ) > 0
+
+                                  ? `
+                                    <strong>
+                                      ${formatPcpTargetQty(
+                                        row
+                                      )}
+                                    </strong>
+
+                                    ${formatPcpTargetQtyDetail(
+                                      row
+                                    )}
+                                  `
+
+                                  : `
+                                    <span class="muted-text">
+                                      Nenhuma
+                                    </span>
+                                  `
+                              }
+                            </td>
+
+                            <td>
+                              ${formatNumber(
+                                row.idealDays,
+                                0,
+                                0
+                              )} dias
+                            </td>
+                          </tr>
+                        `
+                      ).join('')
+
+                    : `
+                      <tr>
+                        <td colspan="9">
+                          <span class="muted-text">
+                            Nenhum item possui planejamento ativo pendente.
+                          </span>
+                        </td>
+                      </tr>
+                    `
+                }
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
     `;
   }

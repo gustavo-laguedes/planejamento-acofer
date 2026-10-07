@@ -1,6 +1,6 @@
 .gantt-aps {
   --gantt-aps-table-width: 714px;
-  --gantt-aps-table-columns: 116px 92px 160px 154px 76px 116px;
+--gantt-aps-table-columns: 160px 250px 134px 72px 98px;
   background: #f8fafc;
   border: 1px solid #dbe3ef;
   border-radius: 10px;
@@ -198,11 +198,64 @@
   white-space: nowrap;
 }
 
-.gantt-aps__cell--2 {
-  background: var(--gantt-aps-production-background, #2563eb);
-  color: #fff;
-  justify-content: center;
+.gantt-aps__cell--machine-production {
+  background: #f8fafc;
   padding: 0;
+  overflow: hidden;
+}
+
+.gantt-aps__machine-production-segments {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+
+.gantt-aps__machine-production-segment {
+  align-items: center;
+  background: var(--gantt-aps-production-color, #64748b);
+  color: #ffffff;
+  display: flex;
+  flex: 1 1 0;
+  font-size: 10px;
+  font-weight: 900;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(15, 23, 42, .58);
+  white-space: nowrap;
+}
+
+.gantt-aps__machine-production-segment
++ .gantt-aps__machine-production-segment {
+  border-left: 1px solid rgba(255, 255, 255, .72);
+}
+
+.gantt-aps__machine-production-empty {
+  align-items: center;
+  color: #94a3b8;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  width: 100%;
+}
+
+.gantt-aps__cell--materials {
+  align-items: center;
+  padding: 0 9px;
+  white-space: normal;
+}
+
+.gantt-aps__lane-materials {
+  display: -webkit-box;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .gantt-aps__production-label {
@@ -466,6 +519,33 @@
   position: absolute;
   top: 0;
   z-index: 0;
+}
+
+.gantt-aps__utilization-tooltip {
+  align-items: center;
+  background: rgba(15, 23, 42, .92);
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .22);
+  color: #ffffff;
+  display: inline-flex;
+  font-size: 9px;
+  font-weight: 800;
+  height: 18px;
+  justify-content: center;
+  max-width: calc(var(--gantt-aps-day-width) - 8px);
+  opacity: 0;
+  padding: 0 7px;
+  pointer-events: none;
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  transition: opacity 80ms ease;
+  white-space: nowrap;
+  z-index: 8;
+}
+
+.gantt-aps__utilization-tooltip[data-visible="true"] {
+  opacity: 1;
 }
 
 .gantt-aps__drop-cell[data-drag-target="true"] {
@@ -773,7 +853,7 @@
 @media (max-width: 720px) {
   .gantt-aps {
     --gantt-aps-table-width: 576px;
-    --gantt-aps-table-columns: 92px 76px minmax(110px, 1fr) 130px 64px 104px;
+--gantt-aps-table-columns: 132px 178px 110px 64px 92px;
   }
 
   .gantt-aps__toolbar {

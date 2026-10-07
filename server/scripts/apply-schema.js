@@ -29,8 +29,14 @@ const files = [
   '021_manual_transport_status.sql',
 '022_stock_sales_history.sql',
 '023_production_location_consumption.sql',
-    '024_purchase_module.sql',
+        '024_purchase_module.sql',
   '025_material_stock_limits.sql',
+  '026_nasajon_stock_restructure.sql',
+  '027_planning_production_sequence.sql',
+  '028_productivity_revisions.sql',
+  '029_quality_norms.sql',
+  '030_material_types.sql',
+  '031_production_quality_snapshot.sql',
 '002_indexes.sql',
   '003_seed_optional.sql'
 ];
